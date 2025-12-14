@@ -16,7 +16,7 @@ const port = process.env.PORT || 4000;
 await connectDB();
 
 //Cloudinary config
-connectCloudinary();
+await connectCloudinary();
 
 
 //Middlewares
