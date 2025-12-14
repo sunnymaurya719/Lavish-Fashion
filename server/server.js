@@ -13,7 +13,7 @@ const app = express();
 const port = process.env.PORT || 4000;
 
 //DB config
-connectDB();
+await connectDB();
 
 //Cloudinary config
 connectCloudinary();
