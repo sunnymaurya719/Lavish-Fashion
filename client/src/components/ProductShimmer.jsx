@@ -5,7 +5,7 @@ const ProductShimmer = () => {
       <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent"></div>
 
       {/* Image placeholder */}
-      <div className="bg-gray-300/60 h-48 w-full rounded-md"></div>
+      <div className="bg-gray-300/60 h-60 w-full rounded-md"></div>
 
       {/* Text placeholders */}
       <div className="mt-3 space-y-2">
