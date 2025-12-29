@@ -174,7 +174,8 @@ const ShopContextProvider = (props) =>{
         getCartAmount,
         navigate,BACKEND_URL,
         setToken,token,toast,
-        getUserCart
+        getUserCart,
+        loadingProductsData
     }
 
     return(
