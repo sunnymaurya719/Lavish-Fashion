@@ -55,7 +55,6 @@ const PlaceOrder = () => {
   const onChangeHandler = (event) => {
     const name = event.target.name;
     const value = event.target.value;
-
     setFormData(data => ({ ...data, [name]: value }));
   }
 
@@ -103,9 +102,6 @@ const PlaceOrder = () => {
           ...buyNowProduct,
           quantity: 1,
         });
-        console.log("BUy Now product :", buyNowProduct);
-        console.log("orderItems :", orderItems);
-
         totalAmount = buyNowProduct.price + delivery_fee;
 
       } else {
@@ -120,13 +116,10 @@ const PlaceOrder = () => {
                 itemInfo.size = item;
                 itemInfo.quantity = cartItems[items][item];
                 orderItems.push(itemInfo);
-                console.log("Items info :", itemInfo);
               }
             }
           }
         }
-        console.log("Orders items :", orderItems)
-
         totalAmount = getCartAmount() + delivery_fee;
       }
 
