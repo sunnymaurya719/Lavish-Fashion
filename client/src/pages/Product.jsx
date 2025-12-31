@@ -5,16 +5,24 @@ import { assets } from '../assets/assets';
 import RelatedProducts from '../components/RelatedProducts';
 
 const Product = () => {
-  const {productId} = useParams();
-  const {products,currency,addToCart} = useContext(ShopContext);
-  const [productData,setProductData] = useState(false);
-  const [image,setImage] = useState('');
-  const [size,setSize] = useState('');
+  const { productId } = useParams();
+  const { products, currency, addToCart, navigate,toast } = useContext(ShopContext);
+  const [productData, setProductData] = useState(false);
+  const [image, setImage] = useState('');
+  const [size, setSize] = useState('');
 
-  const fetchProductData = async() => {
+  const buyNow = () => {
+    if (!size) {
+      toast.error('Please select a size');
+      return;
+    }
+    navigate('/place-order', { state: { buyNow: true, product: { ...productData, size } } })
+  }
+
+  const fetchProductData = async () => {
 
     products.map((item) => {
-      if(item._id === productId) {
+      if (item._id === productId) {
         setProductData(item);
         setImage(item.image[0]);
         return null;
@@ -25,24 +33,24 @@ const Product = () => {
 
   useEffect(() => {
     fetchProductData();
-  },[productId,products])
-  
+  }, [productId, products]);
+
   return productData ? (
     <div className='border-t-2 pt-10 transition-opacity ease-in duration-500 opacity-100'>
       <div className='flex gap-12 sm:gap-12 flex-col sm:flex-row'>
 
         {/*-----------product images -------------*/}
         <div className='flex-1 flex flex-col-reverse gap-3 sm:flex-row'>
-          
+
           <div className='flex sm:flex-col overflow-x-auto sm:overflow-y-scroll justify-between sm:justify-normal sm:w-[18.7%] w-full'>
-            {              
-              productData.image.map((item,index)=>(
-                <img onClick={() => setImage(item)} src={item} key={index} className='w-[24%] sm:w-full sm:mb-3 flex-shrink-0 cursor-pointer' alt=''/>
+            {
+              productData.image.map((item, index) => (
+                <img onClick={() => setImage(item)} src={item} key={index} className='w-[24%] sm:w-full sm:mb-3 flex-shrink-0 cursor-pointer' alt='' />
               ))
             }
           </div>
           <div className='w-full sm:w-[80%]'>
-            <img className='w-full h-auto' src={image} alt=''/>
+            <img className='w-full h-auto' src={image} alt='' />
           </div>
 
         </div>
@@ -63,15 +71,18 @@ const Product = () => {
           <div className='flex flex-col gap-4 my-8'>
             <p>Select Size</p>
             <div className='flex gap-2'>
-              {productData.sizes.map((item,index) => (
-                <button onClick={()=>setSize(item)} className={`border border-gray-100 py-2 px-4 bg-gray-100 ${item===size ? 'border-orange-500':''}`} key={index}>{item}</button>
+              {productData.sizes.map((item, index) => (
+                <button onClick={() => setSize(item)} className={`border border-gray-100 py-2 px-4 bg-gray-100 ${item === size ? 'border-orange-500' : ''}`} key={index}>{item}</button>
               ))}
             </div>
           </div>
           {/*Add to cart button*/}
+          <div className="flex gap-4 flex-wrap">
+            <button onClick={() => addToCart(productData._id, size)} className='bg-black text-white px-8 py-3 text-sm active:bg-gray-700 '>ADD TO CART</button>
+            <button onClick={() => buyNow()} className='bg-black text-white px-8 py-3 text-sm active:bg-gray-700 '>BUY NOW</button>
+          </div>
 
-          <button onClick={() => addToCart(productData._id,size)} className='bg-black text-white px-8 py-3 text-sm active:bg-gray-700 '>ADD TO CART</button>
-          <hr className='mt-8 sm:w-4/5'/>
+          <hr className='mt-8 sm:w-4/5' />
           <div className='text-sm text-gray-500 mt-5 flex flex-col gap-1'>
             <p>100% Original product.</p>
             <p>Cash on delivery is available on this product.</p>
@@ -89,10 +100,10 @@ const Product = () => {
         </div>
         <div className='flex flex-col gap-4 border px-6 py-6 text-sm text-gray-500'>
           <p>Lorem ipsum dolor, sit amet consectetur adipisicing elit. Animi eius amet
-             delectus architecto ex voluptates magni saepe adipisci
-              hic inventore debitis eligendi, nam nobis
-             laborum voluptate excepturi nulla? Culpa, neque?</p>
-             <p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Vel eveniet optio explicabo. Dignissimos suscipit accusamus libero praesentium cupiditate odit, possimus voluptates temporibus blanditiis iure repudiandae quasi optio architecto eligendi nemo.</p>
+            delectus architecto ex voluptates magni saepe adipisci
+            hic inventore debitis eligendi, nam nobis
+            laborum voluptate excepturi nulla? Culpa, neque?</p>
+          <p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Vel eveniet optio explicabo. Dignissimos suscipit accusamus libero praesentium cupiditate odit, possimus voluptates temporibus blanditiis iure repudiandae quasi optio architecto eligendi nemo.</p>
 
         </div>
       </div>
@@ -101,7 +112,7 @@ const Product = () => {
       <RelatedProducts category={productData.category} subCategory={productData.subCategory} />
 
     </div>
-  ):(
+  ) : (
     <div className='opacity-0'>
     </div>
   )

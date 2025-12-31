@@ -1,14 +1,44 @@
 import React, { useContext, useState } from 'react'
 import Title from '../components/Title'
-import CartTotal from '../components/CartTotal'
+import OrdersTotal from '../components/OrdersTotal'
 import { assets } from '../assets/assets'
 import { ShopContext } from '../context/ShopContext'
+import { useLocation } from 'react-router-dom';
 import axios from 'axios'
 
 const PlaceOrder = () => {
 
   const { navigate, toast, BACKEND_URL, token, cartItems, setCartItems, getCartAmount, delivery_fee, products } = useContext(ShopContext);
   const [method, setMethod] = useState('');
+
+  const location = useLocation();
+  const isBuyNow = location.state?.buyNow;
+  const buyNowProduct = location.state?.product;
+
+  //  User not logged in
+  if (!token) {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-4">
+
+        <h2 className="text-2xl font-semibold mb-2">
+          Login Required
+        </h2>
+
+        <p className="text-gray-600 mb-6">
+          Please login to continue and place your order
+        </p>
+
+        <button
+          onClick={() => navigate('/login')}
+          className="bg-black text-white px-8 py-3 text-sm rounded
+                   hover:bg-gray-800 transition"
+        >
+          LOGIN TO CONTINUE
+        </button>
+      </div>
+    );
+  }
+
 
   const [formData, setFormData] = useState({
     firstName: '',
@@ -31,21 +61,21 @@ const PlaceOrder = () => {
 
   const initPay = (order) => {
     const options = {
-      key:import.meta.env.VITE_RAZORPAY_KEY_ID,
-      amount:order.amount,
-      currency:order.currency,
-      name:'Order Payment',
-      description:'Order Payment',
-      order_id:order.id,
-      receipt:order.receipt,
-      handler:async(response)=>{
-        try{
-          const res = await axios.post(BACKEND_URL+'/api/order/verifyRazorpay',response,{headers:{token}});
-          if(res.data.success){
+      key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: order.currency,
+      name: 'Order Payment',
+      description: 'Order Payment',
+      order_id: order.id,
+      receipt: order.receipt,
+      handler: async (response) => {
+        try {
+          const res = await axios.post(BACKEND_URL + '/api/order/verifyRazorpay', response, { headers: { token } });
+          if (res.data.success) {
             navigate('/orders');
             setCartItems({});
           }
-        }catch(error){
+        } catch (error) {
           console.log(error.message);
           toast.error(error)
         }
@@ -57,32 +87,59 @@ const PlaceOrder = () => {
 
   const onSubmitHandler = async (event) => {
     event.preventDefault();
+    if (!method) {
+      toast.error('Please select a payment method');
+      return;
+    }
+
     try {
 
-      let orderItems = [];  // Ensure this is defined
-      for (const items in cartItems) {
-        for (const item in cartItems[items]) {
-          if (cartItems[items][item] > 0) {
-            const itemInfo = structuredClone(products.find(prod => prod._id === items));
-            if (itemInfo) {
-              itemInfo.size = item;
-              itemInfo.quantity = cartItems[items][item];
-              orderItems.push(itemInfo);
+      let orderItems = [];
+      let totalAmount = 0;
+
+      if (isBuyNow && buyNowProduct) {
+        //  BUY NOW FLOW
+        orderItems.push({
+          ...buyNowProduct,
+          quantity: 1,
+        });
+        console.log("BUy Now product :", buyNowProduct);
+        console.log("orderItems :", orderItems);
+
+        totalAmount = buyNowProduct.price + delivery_fee;
+
+      } else {
+        //  CART FLOW
+        for (const items in cartItems) {
+          for (const item in cartItems[items]) {
+            if (cartItems[items][item] > 0) {
+              const itemInfo = structuredClone(
+                products.find(prod => prod._id === items)
+              );
+              if (itemInfo) {
+                itemInfo.size = item;
+                itemInfo.quantity = cartItems[items][item];
+                orderItems.push(itemInfo);
+                console.log("Items info :", itemInfo);
+              }
             }
           }
         }
+        console.log("Orders items :", orderItems)
+
+        totalAmount = getCartAmount() + delivery_fee;
       }
 
       let orderData = {
         address: formData,
         items: orderItems,
-        amount: getCartAmount() + delivery_fee
+        amount: totalAmount
       }
 
       switch (method) {
 
         case 'stripe':
-          const stripeResponse = await axios.post(BACKEND_URL + '/api/order/stripe' , orderData, { headers: { token } });
+          const stripeResponse = await axios.post(BACKEND_URL + '/api/order/stripe', orderData, { headers: { token } });
           if (stripeResponse.data.success) {
             const { url } = stripeResponse.data.session
             window.location.replace(url);
@@ -93,17 +150,17 @@ const PlaceOrder = () => {
           break;
 
         case 'razorpay':
-          const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay',orderData,{headers:{token}});
-          if(razorpayResponse.data.success) {
+          const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay', orderData, { headers: { token } });
+          if (razorpayResponse.data.success) {
             initPay(razorpayResponse.data.order);
           }
-          else{
-            console.log("Razorpay error"+razorpayResponse.data.message);
+          else {
+            console.log("Razorpay error" + razorpayResponse.data.message);
           }
           break;
-        
+
         default:
-          break;  
+          break;
 
       }
 
@@ -143,7 +200,7 @@ const PlaceOrder = () => {
       <div className='mt-8'>
 
         <div className='mt-8 min-w-80'>
-          <CartTotal />
+          <OrdersTotal isBuyNow={isBuyNow} buyNowProduct={buyNowProduct} />
         </div>
 
         <div className='mt-12'>
