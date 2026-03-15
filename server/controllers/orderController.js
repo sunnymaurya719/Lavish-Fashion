@@ -154,6 +154,11 @@ const verifyStripe = async (req, res) => {
     const { orderId, success, session_id, userId } = req.body
     
     try {
+        const isValidOrderId = typeof orderId === 'string' && /^[a-f\d]{24}$/i.test(orderId);
+        if (!isValidOrderId) {
+            return res.json({ success: false, message: 'Invalid order id' });
+        }
+
         const order = await orderModel.findById(orderId);
         if (!order || order.userId !== userId) {
             return res.json({ success: false, message: 'Order not found' });
