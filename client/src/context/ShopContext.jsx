@@ -160,11 +160,11 @@ const ShopContextProvider = (props) =>{
     },[]);
 
     useEffect(() =>{
-        
+        if (token) {
             console.log("Token changed, fetching user cart data");
-            getUserCart(localStorage.getItem('token'));
-        
-    },[]);
+            getUserCart(token);
+        }
+    },[token]);
 
     const value ={
         products, currency, delivery_fee,

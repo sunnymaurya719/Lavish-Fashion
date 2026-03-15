@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import axios from 'axios';
 import { BACKEND_URL } from '../App';
 import { assets } from '../assets/assets';
+import { toast } from 'react-toastify';
 
 const Orders = ({ token }) => {
 
@@ -14,9 +15,13 @@ const Orders = ({ token }) => {
 
     try {
       const response = await axios.post(BACKEND_URL + '/api/order/list', {}, { headers: { token } });
-      setOrders(response.data.orders);
+      if (response.data.success) {
+        setOrders(response.data.orders || []);
+      } else {
+        toast.error(response.data.message || 'Failed to fetch orders');
+      }
     } catch (error) {
-      toast.error("Error fetching orders", error.message);
+      toast.error(error?.response?.data?.message || error.message);
     }
   }
 
@@ -28,7 +33,7 @@ const Orders = ({ token }) => {
       }
     }catch(error){
       console.log(error)
-      toast.error(response.data.message);
+      toast.error(error?.response?.data?.message || error.message);
     }
   }
 

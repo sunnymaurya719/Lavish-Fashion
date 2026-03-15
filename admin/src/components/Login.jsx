@@ -18,12 +18,12 @@ const Login = ({setToken}) => {
                 setToken(response.data.token);
             }
             else{
-                toast.error(response.data);
+                toast.error(response.data.message || 'Login failed');
             }
         }
         catch(error){
             console.log("Login Error: ", error);
-            toast.error(error.message);
+            toast.error(error?.response?.data?.message || error.message);
         }
        
     }

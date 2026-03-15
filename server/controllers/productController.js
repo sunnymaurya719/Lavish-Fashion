@@ -6,6 +6,10 @@ import productModel from '../models/productModel.js';
 const addProduct = async (req ,res) =>{
     try{
         const {name,description, price,category,subCategory,sizes} = req.body ;
+
+        if (!req.files || Object.keys(req.files).length === 0) {
+            return res.status(400).json({ success: false, message: 'At least one image is required' });
+        }
         
         const image1 = req.files.image1 && req.files.image1[0];
         const image2 = req.files.image2 && req.files.image2[0];
@@ -13,6 +17,10 @@ const addProduct = async (req ,res) =>{
         const image4 = req.files.image4 && req.files.image4[0];
 
         const images = [image1,image2,image3,image4].filter(img => img !== undefined);
+
+        if (images.length === 0) {
+            return res.status(400).json({ success: false, message: 'At least one image is required' });
+        }
 
         let imagesUrl = await Promise.all(
             images.map(async (img) => {
@@ -36,11 +44,11 @@ const addProduct = async (req ,res) =>{
         const product = new productModel(productData);
         await product.save();
         
-        res.json({success:true,message:"Product added successfully"});
+        res.status(201).json({success:true,message:"Product added successfully"});
     }
     catch(error){
         console.log("Error in adding product : ",error);
-        res.json({success:false,message:"Error in adding product"})
+        res.status(500).json({success:false,message:"Error in adding product"})
     }
 }
 
@@ -49,11 +57,11 @@ const addProduct = async (req ,res) =>{
 const listProducts = async (req , res) =>{
     try{
         const products = await productModel.find({});
-        res.json({success:true,products});
+        res.status(200).json({success:true,products});
     }
     catch(error){
         console.log("Error in fetching products : ",error);
-        res.json({success:false,message:"Error in fetching products"})
+        res.status(500).json({success:false,message:"Error in fetching products"})
     }
 }
 
@@ -62,12 +70,17 @@ const listProducts = async (req , res) =>{
 const removeProduct = async (req , res) =>{
       try{
         const {id} = req.body;
-        await productModel.findByIdAndDelete(id);
-        res.json({success:true,message:"Product removed successfully"});
+                const deleted = await productModel.findByIdAndDelete(id);
+
+                if (!deleted) {
+                        return res.status(404).json({ success: false, message: 'Product not found' });
+                }
+
+                res.status(200).json({success:true,message:"Product removed successfully"});
       }
       catch(error){
         console.log("Error in removing product : ",error);
-        res.json({success:false,message:"Error in removing product"})
+                res.status(500).json({success:false,message:"Error in removing product"})
       }
 }
 
@@ -78,11 +91,16 @@ const singleProduct = async (req,res) =>{
     try{
         const {id} = req.body;
         const product = await productModel.findById(id);
-        res.json({success:true,product});
+
+        if (!product) {
+            return res.status(404).json({ success: false, message: 'Product not found' });
+        }
+
+        res.status(200).json({success:true,product});
     }
     catch(error){
         console.log("Error in fetching single product : ",error);
-        res.json({success:false,message:"Error in fetching single product"})
+        res.status(500).json({success:false,message:"Error in fetching single product"})
     }
 
 }

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { ShopContext } from '../context/ShopContext'
 import { useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
+
 const Verify = () => {
 
     const {navigate,setCartItems,token,BACKEND_URL} = useContext(ShopContext);
@@ -14,20 +15,28 @@ const Verify = () => {
     const verifyPayment=async() => {
         try{
             if(!token){
-                return null;
+                navigate('/login');
+                return;
             }
+
+            if (!orderId) {
+                toast.error('Missing order id in verification link');
+                navigate('/cart');
+                return;
+            }
+
             const response = await axios.post(BACKEND_URL + '/api/order/verifyStripe',{success,orderId,session_id:sessionId},{headers:{token}});
-            console.log("response at verify Stripe:",response);
             if(response.data.success){
                 setCartItems({})
                 navigate('/orders');
             }
             else{
+                toast.error(response.data.message || 'Payment verification failed');
                 navigate('/cart');
             }
         }catch(error){
-            console.log(error);
-            toast.error(error.message);
+            toast.error(error?.response?.data?.message || error.message);
+            navigate('/cart');
         }
     }
 

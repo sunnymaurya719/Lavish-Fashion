@@ -83,6 +83,7 @@ const Add = ({token}) => {
     }
     catch(error){
       console.log("Error adding product:",error);
+      toast.error(error?.response?.data?.message || error.message);
     }
   }
   

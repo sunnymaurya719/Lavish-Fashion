@@ -25,7 +25,7 @@ const List = ({ token }) => {
     }
     catch (error) {
       console.error("Error fetching list:", error);
-      toast.error(error.message)
+      toast.error(error?.response?.data?.message || error.message)
     }
   }
 
@@ -42,7 +42,7 @@ const List = ({ token }) => {
     }
     catch(error){
       console.error("Error removing product :",error);
-      toast.error(error.message);
+      toast.error(error?.response?.data?.message || error.message);
     }
   }
 
