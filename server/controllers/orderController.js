@@ -341,7 +341,11 @@ const verifyStripe = async (req, res) => {
         }
 
         if (success === "false" && !session_id) {
-            return res.status(200).json({ success: false, message: 'Payment not completed. Awaiting webhook confirmation.' });
+            await orderModel.findByIdAndUpdate(orderId, {
+                paymentStatus: 'cancelled'
+            });
+
+            return res.status(200).json({ success: false, message: 'Payment cancelled.' });
         }
 
         if (!session_id) {
@@ -639,7 +643,7 @@ const allOrders = async (req, res) => {
 const userOrders = async (req, res) => {
     try {
         const userId = req.userId;
-        const orders = await orderModel.find({ userId });
+        const orders = await orderModel.find({ userId, payment: true });
         res.status(200).json({ success: true, orders });
 
     }
