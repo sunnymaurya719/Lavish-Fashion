@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react'
+import React, { useContext, useRef, useState } from 'react'
 import Title from '../components/Title'
 import OrdersTotal from '../components/OrdersTotal'
 import { assets } from '../assets/assets'
@@ -10,6 +10,8 @@ const PlaceOrder = () => {
 
   const { navigate, toast, BACKEND_URL, token, cartItems, setCartItems, getCartAmount, delivery_fee, products } = useContext(ShopContext);
   const [method, setMethod] = useState('');
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const idempotencyKeyRef = useRef('');
 
   const location = useLocation();
   const isBuyNow = location.state?.buyNow;
@@ -86,10 +88,17 @@ const PlaceOrder = () => {
 
   const onSubmitHandler = async (event) => {
     event.preventDefault();
+
+    if (isPlacingOrder) {
+      return;
+    }
+
     if (!method) {
       toast.error('Please select a payment method');
       return;
     }
+
+    setIsPlacingOrder(true);
 
     try {
 
@@ -129,7 +138,10 @@ const PlaceOrder = () => {
         amount: totalAmount
       }
 
-      const idempotencyKey = `order-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      if (!idempotencyKeyRef.current) {
+        idempotencyKeyRef.current = `order-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      }
+      const idempotencyKey = idempotencyKeyRef.current;
 
       switch (method) {
 
@@ -140,6 +152,7 @@ const PlaceOrder = () => {
           if (stripeResponse.data.success) {
             const { url } = stripeResponse.data.session
             window.location.replace(url);
+            return;
           }
           else {
             toast.error(stripeResponse.data.message);
@@ -156,6 +169,7 @@ const PlaceOrder = () => {
           }
           else {
             console.log("Razorpay error" + razorpayResponse.data.message);
+            toast.error(razorpayResponse.data.message || 'Failed to initialize Razorpay');
           }
           break;
         }
@@ -168,7 +182,11 @@ const PlaceOrder = () => {
     }
     catch (error) {
       console.log('Error placing order:', error);
-      toast.error('Failed to place order. Please try again.', error.message);
+      toast.error(error?.response?.data?.message || 'Failed to place order. Please try again.');
+      idempotencyKeyRef.current = '';
+    }
+    finally {
+      setIsPlacingOrder(false);
     }
   }
 
@@ -222,7 +240,13 @@ const PlaceOrder = () => {
           </div>
 
           <div className='w-full text-end mt-8'>
-            <button type='submit' className='bg-black text-white px-16 py-3 text-sm'>PLACE ORDER</button>
+            <button
+              type='submit'
+              disabled={isPlacingOrder}
+              className='bg-black text-white px-16 py-3 text-sm disabled:opacity-60 disabled:cursor-not-allowed'
+            >
+              {isPlacingOrder ? 'PLACING ORDER...' : 'PLACE ORDER'}
+            </button>
           </div>
 
         </div>
