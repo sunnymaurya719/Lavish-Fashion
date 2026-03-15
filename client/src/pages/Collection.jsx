@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
 import { ShopContext } from '../context/ShopContext'
 import { assets } from '../assets/assets';
 import Title from '../components/Title';
@@ -35,7 +35,7 @@ const Collection = () => {
 
   }
 
-  const applyFilter = () => {
+  const applyFilter = useCallback(() => {
     let productsCopy = products.slice();
 
     if (showSearch && search) {
@@ -49,7 +49,7 @@ const Collection = () => {
       productsCopy = productsCopy.filter(item => subCategory.includes(item.subCategory));
     }
     setFilterProducts(productsCopy);
-  }
+  }, [products, showSearch, search, category, subCategory])
 
 
 
@@ -59,7 +59,7 @@ const Collection = () => {
 
   useEffect(() => {
     applyFilter();
-  }, [category, subCategory, search, showSearch]);
+  }, [applyFilter]);
 
 
 

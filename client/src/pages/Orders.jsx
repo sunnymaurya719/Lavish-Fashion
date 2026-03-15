@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
 import { ShopContext } from '../context/ShopContext'
 import Title from '../components/Title';
 import axios from 'axios';
@@ -8,7 +8,7 @@ const Orders = () => {
   const {BACKEND_URL,token,currency} = useContext(ShopContext);
 
   const [orderData,setOrderData] = useState([]);
-  const fetchOrders = async() =>{
+  const fetchOrders = useCallback(async() => {
     try{
       if(!token){
         return null;
@@ -18,8 +18,8 @@ const Orders = () => {
       console.log("Order response",response);
       if(response.data.success){
         let allOrdersItem = [];
-        response.data.orders.map((order) => {
-          order.items.map((item) => {
+        response.data.orders.forEach((order) => {
+          order.items.forEach((item) => {
             item['status'] = order.status;
             item['payment'] = order.payment;
             item['paymentMethod'] = order.paymentMethod;
@@ -33,11 +33,11 @@ const Orders = () => {
     }catch(error){
       console.log("Error while fetching orders",error);
     }
-  }
+  }, [BACKEND_URL, token])
 
   useEffect(() =>{
     fetchOrders();
-  },[token]);
+  },[fetchOrders]);
 
   return (
     <div className='border-t pt-16'>

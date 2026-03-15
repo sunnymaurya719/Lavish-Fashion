@@ -19,20 +19,14 @@ const Product = () => {
     navigate('/place-order', { state: { buyNow: true, product: { ...productData, size } } })
   }
 
-  const fetchProductData = async () => {
-
-    products.map((item) => {
-      if (item._id === productId) {
-        setProductData(item);
-        setImage(item.image[0]);
-        return null;
-      }
-    })
-
-  }
-
   useEffect(() => {
-    fetchProductData();
+    const matchedProduct = products.find((item) => item._id === productId);
+    if (!matchedProduct) {
+      return;
+    }
+
+    setProductData(matchedProduct);
+    setImage(matchedProduct.image[0]);
   }, [productId, products]);
 
   return productData ? (

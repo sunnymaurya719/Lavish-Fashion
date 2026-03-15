@@ -15,6 +15,18 @@ const PlaceOrder = () => {
   const isBuyNow = location.state?.buyNow;
   const buyNowProduct = location.state?.product;
 
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    street: '',
+    city: '',
+    state: '',
+    pincode: '',
+    country: '',
+    phone: ''
+
+  });
+
   //  User not logged in
   if (!token) {
     return (
@@ -39,18 +51,6 @@ const PlaceOrder = () => {
     );
   }
 
-
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    street: '',
-    city: '',
-    state: '',
-    pincode: '',
-    country: '',
-    phone: ''
-
-  });
 
   const onChangeHandler = (event) => {
     const name = event.target.name;
@@ -129,10 +129,14 @@ const PlaceOrder = () => {
         amount: totalAmount
       }
 
+      const idempotencyKey = `order-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
       switch (method) {
 
-        case 'stripe':
-          const stripeResponse = await axios.post(BACKEND_URL + '/api/order/stripe', orderData, { headers: { token } });
+        case 'stripe': {
+          const stripeResponse = await axios.post(BACKEND_URL + '/api/order/stripe', orderData, {
+            headers: { token, 'idempotency-key': idempotencyKey }
+          });
           if (stripeResponse.data.success) {
             const { url } = stripeResponse.data.session
             window.location.replace(url);
@@ -141,9 +145,12 @@ const PlaceOrder = () => {
             toast.error(stripeResponse.data.message);
           }
           break;
+        }
 
-        case 'razorpay':
-          const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay', orderData, { headers: { token } });
+        case 'razorpay': {
+          const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay', orderData, {
+            headers: { token, 'idempotency-key': idempotencyKey }
+          });
           if (razorpayResponse.data.success) {
             initPay(razorpayResponse.data.order);
           }
@@ -151,6 +158,7 @@ const PlaceOrder = () => {
             console.log("Razorpay error" + razorpayResponse.data.message);
           }
           break;
+        }
 
         default:
           break;

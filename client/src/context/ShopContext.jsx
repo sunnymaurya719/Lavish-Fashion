@@ -1,10 +1,9 @@
-import { createContext, useEffect } from "react";
-import { useState } from "react";
-import { products } from "../assets/assets";
+import { createContext, useCallback, useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { useNavigate } from "react-router-dom";
 import axios from 'axios';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ShopContext= createContext();
 
 
@@ -66,8 +65,8 @@ const ShopContextProvider = (props) =>{
                         totalCount += cartItems[items][item];
 
                     }
-                }catch (error) {
-
+                }catch {
+                    // Ignore malformed cart entries and continue counting valid ones.
                 }
                 
             }
@@ -113,13 +112,12 @@ const ShopContextProvider = (props) =>{
 
     }
 
-    const getProductsData = async() =>{
+    const getProductsData = useCallback(async() => {
         setLoadingProductsData(true);
         try{
             const response = await axios.get(BACKEND_URL + '/api/product/list');
             if(response.data.success){
                 setProducts(response.data.products);
-                setLoadingProductsData(false);
             }
             else{
                 toast.error(response.data.message);
@@ -129,12 +127,15 @@ const ShopContextProvider = (props) =>{
             console.error("Error fetching products data:", error);
             toast.error("Failed to fetch products data.");
         }
-    }
+        finally {
+            setLoadingProductsData(false);
+        }
+    }, [BACKEND_URL])
 
-    const getUserCart = async(token) =>{
+    const getUserCart = useCallback(async(tokenValue) => {
         try{
-            console.log("Fetching user cart data with token:", token);
-            const response = await axios.post(BACKEND_URL + '/api/cart/get',{},{headers:{token}});
+            console.log("Fetching user cart data with token:", tokenValue);
+            const response = await axios.post(BACKEND_URL + '/api/cart/get',{},{headers:{token: tokenValue}});
             if(response.data.success){
                 console.log("User cart data fetched:", response.data.cartData);
                 setCartItems(response.data.cartData);
@@ -144,11 +145,11 @@ const ShopContextProvider = (props) =>{
             console.error("Error fetching user cart data:", error);
             toast.error("Failed to fetch cart data.");
         }
-    }
+    }, [BACKEND_URL])
 
     useEffect(()=>{
         getProductsData();
-    },[])
+    },[getProductsData])
 
     useEffect(() => {
         if(!token && localStorage.getItem('token')){
@@ -157,14 +158,14 @@ const ShopContextProvider = (props) =>{
             
             
         }
-    },[]);
+    },[token]);
 
     useEffect(() =>{
         if (token) {
             console.log("Token changed, fetching user cart data");
             getUserCart(token);
         }
-    },[token]);
+    },[token, getUserCart]);
 
     const value ={
         products, currency, delivery_fee,
