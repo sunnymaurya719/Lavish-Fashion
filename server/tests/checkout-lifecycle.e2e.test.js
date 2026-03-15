@@ -162,9 +162,9 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(verifyResponse.status).toBe(200);
         expect(verifyResponse.body.success).toBe(true);
 
-        const preWebhookStripeOrder = await orderModel.findById(orderId).lean();
-        expect(preWebhookStripeOrder.payment).toBe(false);
-        expect(preWebhookStripeOrder.paymentStatus).toBe('pending');
+        const postVerifyStripeOrder = await orderModel.findById(orderId).lean();
+        expect(postVerifyStripeOrder.payment).toBe(true);
+        expect(postVerifyStripeOrder.paymentStatus).toBe('paid');
 
         const webhookPayload = {
             id: 'evt_checkout_complete_1',
@@ -255,9 +255,9 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(verifyResponse.status).toBe(200);
         expect(verifyResponse.body.success).toBe(true);
 
-    const preWebhookRazorpayOrder = await orderModel.findOne({ razorpayOrderId }).lean();
-    expect(preWebhookRazorpayOrder.payment).toBe(false);
-    expect(preWebhookRazorpayOrder.paymentStatus).toBe('pending');
+    const postVerifyRazorpayOrder = await orderModel.findOne({ razorpayOrderId }).lean();
+    expect(postVerifyRazorpayOrder.payment).toBe(true);
+    expect(postVerifyRazorpayOrder.paymentStatus).toBe('paid');
 
         const webhookPayload = {
             event: 'payment.captured',

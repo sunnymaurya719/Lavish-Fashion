@@ -366,12 +366,16 @@ const verifyStripe = async (req, res) => {
             return res.status(402).json({ success: false, message: 'Payment not completed' });
         }
 
-        await orderModel.findByIdAndUpdate(orderId, {
-            stripeSessionId: session.id,
-            stripePaymentIntentId: session.payment_intent ? String(session.payment_intent) : null
+        await markOrderAsPaid({
+            order,
+            gatewayEventId: session.id,
+            paymentFields: {
+                stripeSessionId: session.id,
+                stripePaymentIntentId: session.payment_intent ? String(session.payment_intent) : null
+            }
         });
 
-        res.status(200).json({ success: true, message: 'Payment accepted. Awaiting secure webhook confirmation.' });
+        res.status(200).json({ success: true, message: 'Payment verified successfully.' });
     }
     catch (error) {
         req.log?.error({ err: error }, 'Failed to verify Stripe payment');
@@ -489,11 +493,16 @@ const verifyRazorpay = async(req,res) =>{
             return res.status(200).json({success:true,message:'Payment already confirmed via webhook.'});
         }
 
-        await orderModel.findByIdAndUpdate(localOrder._id, {
-            razorpayPaymentId: razorpay_payment_id
+        await markOrderAsPaid({
+            order: localOrder,
+            gatewayEventId: razorpay_payment_id,
+            paymentFields: {
+                razorpayOrderId: razorpay_order_id,
+                razorpayPaymentId: razorpay_payment_id
+            }
         });
 
-        res.status(200).json({success:true,message:'Payment accepted. Awaiting secure webhook confirmation.'});
+        res.status(200).json({success:true,message:'Payment verified successfully.'});
     }catch(error){
         req.log?.error({ err: error }, 'Failed to verify Razorpay payment');
         res.status(500).json({success:false,message:'Failed to verify Razorpay payment'});
