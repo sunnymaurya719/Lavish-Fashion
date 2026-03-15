@@ -7,7 +7,10 @@ const adminAuth = (req,res,next) =>{
             return res.json({success:false,message:"Not authorized"});
         }
         const token_decode = jwt.verify(token,process.env.JWT_SECRET);
-        if(token_decode !== process.env.ADMIN_EMAIL + process.env.ADMIN_PASSWORD ){
+        const isAdminToken = token_decode?.role === 'admin';
+        const isExpectedAdmin = token_decode?.email === process.env.ADMIN_EMAIL;
+
+        if(!isAdminToken || !isExpectedAdmin){
             return res.json({success:false,message:"Not authorized"});
         }
         next();

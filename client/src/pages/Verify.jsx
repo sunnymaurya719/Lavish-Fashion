@@ -9,13 +9,14 @@ const Verify = () => {
     const [searchParams,setSearchParams] = useSearchParams();
     const success = searchParams.get('success');
     const orderId = searchParams.get('orderId');
+    const sessionId = searchParams.get('session_id');
 
     const verifyPayment=async() => {
         try{
             if(!token){
                 return null;
             }
-            const response = await axios.post(BACKEND_URL + '/api/order/verifyStripe',{success,orderId},{headers:{token}});
+            const response = await axios.post(BACKEND_URL + '/api/order/verifyStripe',{success,orderId,session_id:sessionId},{headers:{token}});
             console.log("response at verify Stripe:",response);
             if(response.data.success){
                 setCartItems({})
