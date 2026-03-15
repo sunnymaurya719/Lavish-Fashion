@@ -2,8 +2,10 @@ import crypto from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'rzp_whsec_test';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_key_secret_test';
+process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
 
 const stripeRetrieveMock = vi.fn();
 const stripeConstructEventMock = vi.fn();

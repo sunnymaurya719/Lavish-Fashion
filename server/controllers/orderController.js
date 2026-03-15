@@ -11,12 +11,35 @@ import crypto from 'crypto';
 const currency = 'inr';
 const deliveryCharge = 10;
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+let stripeClient;
+let razorpayClient;
 
-const razorpayInstance = new razorpay({
-    key_id:process.env.RAZORPAY_KEY_ID,
-    key_secret:process.env.RAZORPAY_KEY_SECRET
-})
+const getStripeClient = () => {
+    if (!process.env.STRIPE_SECRET_KEY) {
+        return null;
+    }
+
+    if (!stripeClient) {
+        stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
+    }
+
+    return stripeClient;
+};
+
+const getRazorpayClient = () => {
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+        return null;
+    }
+
+    if (!razorpayClient) {
+        razorpayClient = new razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_KEY_SECRET
+        });
+    }
+
+    return razorpayClient;
+};
 
 const markOrderAsPaid = async ({ order, gatewayEventId, paymentFields }) => {
     if (!order || order.payment) {
@@ -177,6 +200,11 @@ const placeOrderStripe = async (req, res) => {
     let idempotencyRecordId;
 
     try {
+        const stripe = getStripeClient();
+        if (!stripe) {
+            return res.status(503).json({ success: false, message: 'Stripe is not configured on server' });
+        }
+
         const userId = req.userId;
         const { items, address } = req.body;
         const idempotencyKey = getIdempotencyKey(req);
@@ -294,6 +322,11 @@ const verifyStripe = async (req, res) => {
     const userId = req.userId;
     
     try {
+        const stripe = getStripeClient();
+        if (!stripe) {
+            return res.status(503).json({ success: false, message: 'Stripe is not configured on server' });
+        }
+
         if (!isValidObjectId(orderId)) {
             return res.status(400).json({ success: false, message: 'Invalid order id' });
         }
@@ -348,6 +381,11 @@ const placeOrderRazorpay = async (req, res) => {
     let idempotencyRecordId;
 
     try{
+        const razorpayInstance = getRazorpayClient();
+        if (!razorpayInstance) {
+            return res.status(503).json({ success: false, message: 'Razorpay is not configured on server' });
+        }
+
         const userId = req.userId;
         const { items,address} = req.body;
         const idempotencyKey = getIdempotencyKey(req);
@@ -460,9 +498,14 @@ const verifyRazorpay = async(req,res) =>{
 
 const handleStripeWebhook = async (req, res) => {
     const signature = req.headers['stripe-signature'];
+    const stripe = getStripeClient();
 
     if (!signature) {
         return res.status(400).send('Missing Stripe signature');
+    }
+
+    if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
+        return res.status(503).send('Stripe webhook is not configured');
     }
 
     try {
@@ -518,6 +561,10 @@ const handleRazorpayWebhook = async (req, res) => {
 
     if (!signature) {
         return res.status(400).send('Missing Razorpay signature');
+    }
+
+    if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+        return res.status(503).send('Razorpay webhook is not configured');
     }
 
     try {
