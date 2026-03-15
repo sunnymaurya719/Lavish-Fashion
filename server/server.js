@@ -12,21 +12,34 @@ import orderRouter from './routes/orderRoute.js';
 const app = express();
 const port = process.env.PORT || 4000;
 
-const allowedOrigins = [
+const normalizeOrigin = (value) => String(value || '').trim().replace(/\/$/, '');
+
+const envOrigins = [
     process.env.CLIENT_URL,
     process.env.ADMIN_URL,
-    ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : []),
+    process.env.FRONTEND_URL,
+    ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : [])
+];
+
+const allowedOrigins = [
     'http://localhost:5173',
-    'http://localhost:5174'
-].filter(Boolean);
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+    ...envOrigins
+]
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+const allowedOriginSet = new Set(allowedOrigins);
 
 const corsOptions = {
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (!origin || allowedOriginSet.has(normalizeOrigin(origin))) {
             return callback(null, true);
         }
 
-        return callback(new Error('Not allowed by CORS'));
+        return callback(null, false);
     }
 };
 
