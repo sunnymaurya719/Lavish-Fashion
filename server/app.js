@@ -46,6 +46,7 @@ const buildCorsOptions = () => {
         allowedHeaders: [
             'Content-Type',
             'Authorization',
+            'X-Requested-With',
             'token',
             'stripe-signature',
             'x-razorpay-signature',
@@ -59,6 +60,7 @@ const buildCorsOptions = () => {
 
 const createApp = () => {
     const app = express();
+    const corsOptions = buildCorsOptions();
 
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
@@ -66,6 +68,8 @@ const createApp = () => {
     app.use(helmet());
     app.use(compression());
     app.use(requestLogger);
+    app.use(cors(corsOptions));
+    app.options(/.*/, cors(corsOptions));
 
     app.use('/api/webhooks', webhookRouter);
 
@@ -82,7 +86,6 @@ const createApp = () => {
 
     app.use('/api', apiRateLimiter);
     app.use(express.json({ limit: '1mb' }));
-    app.use(cors(buildCorsOptions()));
 
     app.use('/api/user',userRouter);
     app.use('/api/product',productRouter);

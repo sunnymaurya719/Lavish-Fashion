@@ -6,7 +6,6 @@ import App from './App.jsx'
 import ShopContextProvider from './context/ShopContext.jsx'
 
 axios.defaults.timeout = 15000;
-axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 
 createRoot(document.getElementById('root')).render(
   
