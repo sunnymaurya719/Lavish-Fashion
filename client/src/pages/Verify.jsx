@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useEffect } from 'react';
 import axios from 'axios';
 import { useSearchParams } from 'react-router-dom';
-import { toast } from 'react-toastify';
+import { notify as toast } from '../utils/notify';
 import { ShopContext } from '../context/ShopContext';
 
 const Verify = () => {

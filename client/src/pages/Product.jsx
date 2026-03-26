@@ -180,7 +180,7 @@ const Product = () => {
 
   const buyNow = () => {
     if (!size) {
-      toast.error('Please select a size');
+      toast.sizeRequired();
       return;
     }
 

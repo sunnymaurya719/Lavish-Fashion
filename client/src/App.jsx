@@ -15,14 +15,14 @@ import Orders from './pages/Orders'
 import Wishlist from './pages/Wishlist'
 import Footer from './components/Footer'
 import SearchBar from './components/SearchBar'
-import {ToastContainer} from 'react-toastify';
 import Verify from './pages/Verify'
+import MobileToastContainer from './components/MobileToastContainer'
 
 
 const App = () => {
   return (
     <div className='px-4 sm:px-[5vw] md:px-[7vw] lg:px-[9vw]'>
-      <ToastContainer />
+      <MobileToastContainer />
       <Navbar />
       <SearchBar />
       <Routes>

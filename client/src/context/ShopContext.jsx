@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { toast } from 'react-toastify';
+import { notify as toast } from '../utils/notify';
 import { useNavigate } from 'react-router-dom';
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -119,7 +119,7 @@ const ShopContextProvider = (props) => {
 
   const addToCart = async (itemId, size) => {
     if (!size) {
-      toast.error('Please select a size');
+      toast.sizeRequired();
       return;
     }
 
@@ -284,7 +284,11 @@ const ShopContextProvider = (props) => {
       }
 
       setWishlistItems(response.data.wishlist || []);
-      toast.success(response.data.message || 'Wishlist updated');
+      if (response.data.message) {
+        toast.success(response.data.message, { showCloseButton: false });
+      } else {
+        toast.wishlistAdded();
+      }
       return true;
     } catch (error) {
       const statusCode = Number(error?.response?.status || 0);
