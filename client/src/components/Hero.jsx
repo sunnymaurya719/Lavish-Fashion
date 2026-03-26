@@ -8,7 +8,7 @@ const SWIPE_THRESHOLD = 45
 const PARALLAX_INTENSITY = 0.8
 
 const Hero = () => {
-    const { products, currency } = useContext(ShopContext)
+    const { products, currency, loadingProductsData } = useContext(ShopContext)
     const featuredProducts = useMemo(
         () => products.filter((item) => Array.isArray(item?.image) && item.image[0]).slice(0, 5),
         [products]
@@ -71,6 +71,7 @@ const Hero = () => {
 
     const activeProduct = featuredProducts[activeIndex]
     const activeImage = activeProduct?.image?.[0] || assets.hero_img
+    const showHeroSkeleton = loadingProductsData && products.length === 0
     const arcParallax = Math.min(scrollOffset * 0.05 * PARALLAX_INTENSITY, 18)
     const primaryBlobParallax = Math.min(scrollOffset * 0.08 * PARALLAX_INTENSITY, 26)
     const secondaryBlobParallax = Math.min(scrollOffset * 0.12 * PARALLAX_INTENSITY, 42)
@@ -110,6 +111,50 @@ const Hero = () => {
         touchStartXRef.current = null
         touchDeltaXRef.current = 0
         setIsPaused(false)
+    }
+
+    if (showHeroSkeleton) {
+        return (
+            <section
+                className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-[460px]'
+                aria-label='Loading featured products'
+                aria-busy='true'
+            >
+                <div className='hidden lg:flex relative w-full lg:w-[48%] px-7 sm:px-12 lg:px-16 xl:px-20 py-12 sm:py-14 lg:py-0 items-center min-h-[440px]'>
+                    <div className='relative z-10 w-full max-w-[39rem]'>
+                        <div className='hero-skeleton-line h-3 w-44'></div>
+                        <div className='mt-6 space-y-3'>
+                            <div className='hero-skeleton-line h-14 w-[86%]'></div>
+                            <div className='hero-skeleton-line h-14 w-[74%]'></div>
+                        </div>
+                        <div className='mt-6 space-y-3'>
+                            <div className='hero-skeleton-line h-4 w-[92%]'></div>
+                            <div className='hero-skeleton-line h-4 w-[78%]'></div>
+                        </div>
+                        <div className='hero-skeleton-line mt-6 h-3 w-[68%]'></div>
+                        <div className='mt-9 flex items-end gap-8'>
+                            <div className='space-y-2'>
+                                <div className='hero-skeleton-line h-10 w-24'></div>
+                                <div className='hero-skeleton-line h-3 w-28'></div>
+                            </div>
+                            <div className='space-y-3'>
+                                <div className='hero-skeleton-line h-4 w-44'></div>
+                                <div className='hero-skeleton-line h-4 w-40'></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className='relative w-full lg:w-[52%] min-h-[360px] sm:min-h-[420px] lg:min-h-[440px] rounded-xl overflow-hidden'>
+                    <div className='hero-skeleton-image absolute inset-0'></div>
+                    <div className='absolute left-4 right-4 sm:left-7 sm:right-7 bottom-5 sm:bottom-7 z-10 space-y-3'>
+                        <div className='hero-skeleton-line h-3 w-28'></div>
+                        <div className='hero-skeleton-line h-6 w-56'></div>
+                        <div className='hero-skeleton-line h-5 w-24'></div>
+                    </div>
+                </div>
+            </section>
+        )
     }
 
     return (
