@@ -149,6 +149,22 @@ a.active hr{
   animation-delay: 0.36s;
 }
 
+.wishlist-shell .wishlist-entrance {
+  animation: wishlistFadeUp 0.48s ease-out both;
+}
+
+.wishlist-shell .wishlist-delay-0 {
+  animation-delay: 0.02s;
+}
+
+.wishlist-shell .wishlist-delay-1 {
+  animation-delay: 0.1s;
+}
+
+.wishlist-shell .wishlist-delay-2 {
+  animation-delay: 0.18s;
+}
+
 .rewards-shell .rewards-hover-lift {
   transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
 }
@@ -265,6 +281,17 @@ a.active hr{
   }
 }
 
+@keyframes wishlistFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 ::-webkit-scrollbar{
   display: none;
 }
@@ -283,7 +310,8 @@ a.active hr{
   .lf-shimmer::after,
   .profile-shell .profile-entrance,
   .orders-shell .orders-entrance,
-  .rewards-shell .rewards-entrance {
+  .rewards-shell .rewards-entrance,
+  .wishlist-shell .wishlist-entrance {
     animation: none !important;
   }
 
