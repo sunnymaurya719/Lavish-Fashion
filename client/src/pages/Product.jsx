@@ -494,7 +494,7 @@ const Product = () => {
           </div>
 
           {imageList.length > 1 ? (
-            <div className='flex gap-2 overflow-x-auto pb-1'>
+            <div className='flex snap-x snap-mandatory gap-2 overflow-x-auto py-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:snap-none'>
               {imageList.map((item, index) => (
                 <button
                   key={`${item}-thumb-${index}`}
@@ -503,16 +503,16 @@ const Product = () => {
                     setShowSwipeHint(false);
                     selectImageByIndex(index);
                   }}
-                  className={`shrink-0 overflow-hidden rounded-2xl transition-all ${
+                  className={`h-auto w-[calc((100%-1.5rem)/4)] shrink-0 snap-start overflow-hidden rounded-2xl border-2 transition-all sm:h-20 sm:w-20 ${
                     index === activeImageIndex
-                      ? 'ring-2 ring-[#111] ring-offset-2 ring-offset-[#f5f5f5]'
-                      : 'opacity-80 hover:opacity-100'
+                      ? 'border-[#111] opacity-100'
+                      : 'border-transparent opacity-80 hover:opacity-100'
                   }`}
                 >
                   <img
                     src={item}
                     alt={`${productData.name} thumbnail ${index + 1}`}
-                    className='h-20 w-20 object-cover bg-[#f5f5f5]'
+                    className='aspect-square h-full w-full object-cover bg-[#f5f5f5]'
                   />
                 </button>
               ))}
