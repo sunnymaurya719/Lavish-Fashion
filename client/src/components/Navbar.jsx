@@ -140,8 +140,13 @@ const Navbar = () => {
 
   const drawerNavItemClass = ({ isActive }) =>
     `group flex items-center justify-between rounded-xl px-4 py-3.5 text-[17px] font-medium tracking-[0.02em] transition-colors ${
-      isActive ? 'bg-slate-100 text-slate-900' : 'text-slate-700 hover:bg-slate-50 active:bg-slate-100'
+      isActive
+        ? 'bg-[#f8f3ee] text-slate-900 ring-1 ring-[#eadccc]'
+        : 'text-slate-700 hover:bg-slate-50 active:bg-slate-100'
     }`;
+
+  const drawerChevronClass = (isActive) =>
+    `h-4 w-4 transition-colors ${isActive ? 'text-[#c9ab8b]' : 'text-slate-400/80'}`;
 
   const serverBadge =
     serverStatus === 'online'
@@ -288,8 +293,13 @@ const Navbar = () => {
           }`}
           aria-hidden={!visible}
         >
+          <span className='pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-[#f2e9df] via-[#dcc4ad] to-[#f3ece3]'></span>
+
           <div className='flex items-center justify-between px-5 py-5 border-b border-slate-100'>
-            <p className='text-[18px] font-semibold tracking-[0.04em] text-slate-900'>Menu</p>
+            <p className='inline-flex items-center gap-2 text-[18px] font-semibold tracking-[0.04em] text-slate-900'>
+              <span className='h-1.5 w-1.5 rounded-full bg-[#d8bea5]'></span>
+              Menu
+            </p>
             <button
               type='button'
               onClick={() => setVisible(false)}
@@ -301,7 +311,10 @@ const Navbar = () => {
           </div>
 
           <div className='h-full overflow-y-auto px-3 py-4'>
-            <p className='px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400'>Main</p>
+            <p className='px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400 inline-flex items-center gap-2'>
+              <span className='h-1.5 w-1.5 rounded-full bg-[#d8bea5]/90'></span>
+              Main
+            </p>
 
             <div className='space-y-1'>
               {mainMenuItems.map((item) => {
@@ -314,11 +327,15 @@ const Navbar = () => {
                     onClick={() => setVisible(false)}
                     className={drawerNavItemClass}
                   >
-                    <span className='flex items-center gap-3'>
-                      <Icon className='h-[18px] w-[18px]' />
-                      <span>{item.label}</span>
-                    </span>
-                    <ChevronRightIcon className='h-4 w-4 opacity-55' />
+                    {({ isActive }) => (
+                      <>
+                        <span className='flex items-center gap-3'>
+                          <Icon className='h-[18px] w-[18px]' />
+                          <span>{item.label}</span>
+                        </span>
+                        <ChevronRightIcon className={drawerChevronClass(isActive)} />
+                      </>
+                    )}
                   </NavLink>
                 );
               })}
@@ -326,7 +343,10 @@ const Navbar = () => {
 
             <div className='mx-3 my-4 h-px bg-slate-100'></div>
 
-            <p className='px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400'>Account</p>
+            <p className='px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.24em] text-slate-400 inline-flex items-center gap-2'>
+              <span className='h-1.5 w-1.5 rounded-full bg-[#d8bea5]/90'></span>
+              Account
+            </p>
 
             {token ? (
               <div className='space-y-1'>
@@ -340,11 +360,15 @@ const Navbar = () => {
                       onClick={() => setVisible(false)}
                       className={drawerNavItemClass}
                     >
-                      <span className='flex items-center gap-3'>
-                        <Icon className='h-[18px] w-[18px]' />
-                        <span>{item.label}</span>
-                      </span>
-                      <ChevronRightIcon className='h-4 w-4 opacity-55' />
+                      {({ isActive }) => (
+                        <>
+                          <span className='flex items-center gap-3'>
+                            <Icon className='h-[18px] w-[18px]' />
+                            <span>{item.label}</span>
+                          </span>
+                          <ChevronRightIcon className={drawerChevronClass(isActive)} />
+                        </>
+                      )}
                     </NavLink>
                   );
                 })}
@@ -366,11 +390,15 @@ const Navbar = () => {
               </div>
             ) : (
               <NavLink to='/login' onClick={() => setVisible(false)} className={drawerNavItemClass}>
-                <span className='flex items-center gap-3'>
-                  <ProfileMenuIcon className='h-[18px] w-[18px]' />
-                  <span>Login</span>
-                </span>
-                <ChevronRightIcon className='h-4 w-4 opacity-55' />
+                {({ isActive }) => (
+                  <>
+                    <span className='flex items-center gap-3'>
+                      <ProfileMenuIcon className='h-[18px] w-[18px]' />
+                      <span>Login</span>
+                    </span>
+                    <ChevronRightIcon className={drawerChevronClass(isActive)} />
+                  </>
+                )}
               </NavLink>
             )}
           </div>
