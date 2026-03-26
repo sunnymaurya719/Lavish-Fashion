@@ -1,6 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { ShopContext } from '../context/ShopContext';
-import Title from './Title';
 import ProductItem from './ProductItem';
 import ProductShimmer from './ProductShimmer';
 
@@ -13,13 +12,21 @@ const LatestCollection = () => {
   }, [products]);
 
   return (
-    <div className='mt-0 mb-16 sm:my-20'>
-      <div className='text-center pt-0 pb-4 sm:py-8 text-[2rem] leading-[0.95] sm:text-3xl'>
-        <Title text1='LATEST' text2='COLLECTIONS' />
-        <p className='hidden sm:block w-3/4 m-auto text-sm md:text-base text-gray-600'>
-          Explore the newest additions to Lavish Fashion, from everyday essentials to standout seasonal
-          layers selected for quick, confident shopping.
+    <section className='mt-2 mb-14 sm:my-16 bg-white'>
+      <div className='text-center py-5 sm:py-6 px-3'>
+        <p className='text-[11px] sm:text-xs font-light tracking-[0.28em] uppercase text-[#777]'>
+          New Arrivals
         </p>
+
+        <h2 className='mt-2 text-[2rem] sm:text-[2.45rem] font-semibold tracking-[-0.015em] text-[#111] leading-[0.95]'>
+          Latest Collections
+        </h2>
+
+        <p className='mt-3 text-sm sm:text-[15px] font-light text-[#777] max-w-[30rem] mx-auto'>
+          Discover fresh styles curated for you.
+        </p>
+
+        <span className='block w-10 h-px bg-[#111]/65 mx-auto mt-4'></span>
       </div>
 
       <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 gap-y-6'>
@@ -37,7 +44,7 @@ const LatestCollection = () => {
               />
             ))}
       </div>
-    </div>
+    </section>
   );
 };
 
