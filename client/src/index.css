@@ -219,43 +219,124 @@ a.active hr{
 
 .lf-toast-container {
   pointer-events: none;
-  width: calc(100% - 1.25rem);
+  width: calc(100% - 1.5rem);
   max-width: 420px;
-  margin: 0 auto;
+  margin: 0;
   padding: 0;
+}
+
+.lf-toast-container.Toastify__toast-container--bottom-center {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .lf-toast {
   pointer-events: auto;
-  min-height: 52px;
-  margin: 0 0 0.7rem;
-  border-radius: 12px;
-  background: #111;
+  display: flex;
+  align-items: center;
+  min-height: 54px;
+  margin: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(17, 17, 17, 0.95);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   color: #fff;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.28);
-  padding: 0.7rem 0.72rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  padding: 0.75rem 0.82rem;
 }
 
 .lf-toast-body {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   padding: 0;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.68rem;
   font-size: 0.92rem;
   font-weight: 500;
+  letter-spacing: -0.01em;
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.lf-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.lf-toast-icon-success {
+  animation: lfToastIconPop 0.34s cubic-bezier(0.2, 0.9, 0.2, 1.1);
+}
+
+.lf-toast-close {
+  margin-left: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.78);
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.lf-toast-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.lf-toast-close:active {
+  transform: scale(0.95);
+}
+
+.lf-toast-content {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.58rem;
+}
+
+.lf-toast-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lf-toast-action {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 0.22rem 0.58rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+.lf-toast-action:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.lf-toast-action:active {
+  transform: scale(0.97);
+}
+
 .lf-toast-enter {
-  animation: lfToastEnter 0.3s ease both;
+  animation: lfToastEnter 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .lf-toast-exit {
-  animation: lfToastExit 0.22s ease both;
+  animation: lfToastExit 0.22s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -395,7 +476,7 @@ a.active hr{
 @keyframes lfToastEnter {
   from {
     opacity: 0;
-    transform: translateY(16px) scale(0.98);
+    transform: translateY(20px) scale(0.95);
   }
   to {
     opacity: 1;
@@ -410,7 +491,19 @@ a.active hr{
   }
   to {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+@keyframes lfToastIconPop {
+  0% {
+    transform: scale(0.82);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -448,7 +541,8 @@ a.active hr{
   .cart-shell .cart-entrance,
   .checkout-shell .checkout-entrance,
   .lf-toast-enter,
-  .lf-toast-exit {
+  .lf-toast-exit,
+  .lf-toast-icon-success {
     animation: none !important;
   }
 

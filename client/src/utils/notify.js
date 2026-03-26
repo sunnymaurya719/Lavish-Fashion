@@ -1,4 +1,5 @@
 import { toast as baseToast } from 'react-toastify';
+import React from 'react';
 
 const SINGLE_TOAST_ID = 'lf-single-toast';
 
@@ -30,11 +31,44 @@ const triggerHapticFeedback = (type) => {
   }
 };
 
+const createToastContent = ({ message, actionLabel, onAction, actionAriaLabel }) => {
+  if (!actionLabel || typeof onAction !== 'function') {
+    return message;
+  }
+
+  const handleAction = () => {
+    try {
+      onAction();
+    } finally {
+      baseToast.dismiss(SINGLE_TOAST_ID);
+    }
+  };
+
+  return React.createElement(
+    'div',
+    { className: 'lf-toast-content' },
+    React.createElement('span', { className: 'lf-toast-message', title: message }, message),
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: handleAction,
+        className: 'lf-toast-action',
+        'aria-label': actionAriaLabel || actionLabel,
+      },
+      actionLabel
+    )
+  );
+};
+
 const show = (type, message, options = {}) => {
   const {
     showCloseButton = true,
     haptic = true,
     autoClose,
+    actionLabel = '',
+    onAction = null,
+    actionAriaLabel = '',
     ...toastOptions
   } = options;
 
@@ -53,8 +87,14 @@ const show = (type, message, options = {}) => {
   }
 
   const emitter = typeof baseToast[type] === 'function' ? baseToast[type] : baseToast;
+  const content = createToastContent({
+    message: text,
+    actionLabel,
+    onAction,
+    actionAriaLabel,
+  });
 
-  return emitter(text, {
+  return emitter(content, {
     toastId: SINGLE_TOAST_ID,
     autoClose: typeof autoClose === 'number' ? autoClose : TOAST_DURATION[type] || 2500,
     closeButton: showCloseButton ? undefined : false,
