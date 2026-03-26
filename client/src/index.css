@@ -78,6 +78,33 @@ a.active hr{
   transform: scaleX(0.78);
 }
 
+.lf-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: #e9edf1;
+}
+
+.lf-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.72) 50%, transparent 80%);
+  animation: lfShimmer 1.2s linear infinite;
+}
+
+.profile-shell .profile-entrance {
+  animation: profileFadeUp 0.55s ease-out both;
+}
+
+.profile-shell .profile-delay-1 {
+  animation-delay: 0.08s;
+}
+
+.profile-shell .profile-delay-2 {
+  animation-delay: 0.16s;
+}
+
 .hero-shell .hero-skeleton-line,
 .hero-shell .hero-skeleton-image {
   position: relative;
@@ -143,6 +170,23 @@ a.active hr{
   }
 }
 
+@keyframes lfShimmer {
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes profileFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 ::-webkit-scrollbar{
   display: none;
 }
@@ -157,7 +201,9 @@ a.active hr{
   .hero-shell .hero-image,
   .hero-shell .hero-track,
   .hero-shell .hero-skeleton-line::after,
-  .hero-shell .hero-skeleton-image::after {
+  .hero-shell .hero-skeleton-image::after,
+  .lf-shimmer::after,
+  .profile-shell .profile-entrance {
     animation: none !important;
   }
 }

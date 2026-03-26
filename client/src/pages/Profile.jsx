@@ -255,20 +255,66 @@ const Profile = () => {
 
   if (isLoading) {
     return (
-      <div className='pt-12'>
-        <p className='text-sm text-gray-500'>Loading your profile...</p>
+      <div className='profile-shell pt-6 sm:pt-8 space-y-4 sm:space-y-6'>
+        <div className='profile-entrance flex items-center gap-4 px-1'>
+          <div className='lf-shimmer h-14 w-14 rounded-full'></div>
+          <div className='space-y-2'>
+            <div className='lf-shimmer h-9 w-40 rounded-xl'></div>
+            <div className='lf-shimmer h-4 w-32 rounded-full'></div>
+            <div className='lf-shimmer h-3 w-44 rounded-full'></div>
+          </div>
+        </div>
+
+        <div className='profile-entrance profile-delay-1 grid gap-4 xl:grid-cols-[1.05fr_0.95fr]'>
+          <div className='rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] space-y-4'>
+            <div className='lf-shimmer h-8 w-48 rounded-xl'></div>
+            <div className='lf-shimmer h-4 w-64 rounded-full'></div>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <div className='lf-shimmer h-14 rounded-xl'></div>
+              <div className='lf-shimmer h-14 rounded-xl'></div>
+            </div>
+            <div className='lf-shimmer h-14 rounded-xl'></div>
+            <div className='lf-shimmer h-12 rounded-full'></div>
+          </div>
+
+          <div className='space-y-4'>
+            <div className='rounded-[28px] bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] space-y-4'>
+              <div className='lf-shimmer h-4 w-36 rounded-full'></div>
+              <div className='lf-shimmer h-10 w-40 rounded-xl'></div>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='lf-shimmer h-20 rounded-2xl'></div>
+                <div className='lf-shimmer h-20 rounded-2xl'></div>
+                <div className='lf-shimmer h-20 rounded-2xl'></div>
+                <div className='lf-shimmer h-20 rounded-2xl'></div>
+              </div>
+            </div>
+
+            <div className='rounded-[28px] bg-white p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
+              <div className='lf-shimmer h-4 w-28 rounded-full'></div>
+              <div className='lf-shimmer mt-3 h-16 rounded-2xl'></div>
+            </div>
+          </div>
+        </div>
+
+        <div className='profile-entrance profile-delay-2 rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] space-y-4'>
+          <div className='lf-shimmer h-8 w-72 rounded-xl'></div>
+          <div className='lf-shimmer h-4 w-56 rounded-full'></div>
+          <div className='lf-shimmer h-16 rounded-2xl'></div>
+          <div className='lf-shimmer h-16 rounded-2xl'></div>
+          <div className='lf-shimmer h-12 rounded-full'></div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className='pt-6 sm:pt-8 space-y-4 sm:space-y-6'>
-      <header className='flex items-center gap-4 px-1'>
+    <div className='profile-shell pt-6 sm:pt-8 space-y-4 sm:space-y-6'>
+      <header className='profile-entrance flex items-center gap-4 px-1'>
         <div className='flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xl font-semibold text-white'>
           {avatarInitial}
         </div>
         <div>
-          <h1 className='text-[2rem] sm:text-[2.3rem] font-semibold tracking-[-0.015em] text-[#111] leading-none'>
+          <h1 className='text-[1.9rem] max-[380px]:text-[1.65rem] sm:text-[2.3rem] font-semibold tracking-[-0.015em] text-[#111] leading-none'>
             Profile
           </h1>
           <p className='mt-1 text-sm text-[#777]'>Manage your account</p>
@@ -276,10 +322,10 @@ const Profile = () => {
         </div>
       </header>
 
-      <section className='grid gap-4 xl:grid-cols-[1.05fr_0.95fr]'>
+      <section className='profile-entrance profile-delay-1 grid gap-4 xl:grid-cols-[1.05fr_0.95fr]'>
         <form onSubmit={saveProfile} className='rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
           <div>
-            <p className='text-2xl font-semibold text-slate-900'>Account details</p>
+            <p className='text-[1.45rem] max-[380px]:text-[1.3rem] sm:text-2xl font-semibold text-slate-900'>Account details</p>
             <p className='mt-2 text-sm text-slate-500'>Keep your personal and contact information current.</p>
           </div>
 
@@ -331,7 +377,7 @@ const Profile = () => {
         <div className='space-y-4'>
           <div className='rounded-[28px] bg-gradient-to-br from-[#020617] via-[#0f172a] to-[#1e293b] p-5 text-white shadow-[0_14px_36px_rgba(2,6,23,0.25)]'>
             <p className='text-[11px] uppercase tracking-[0.24em] text-slate-300'>Account summary</p>
-            <p className='mt-3 text-3xl font-semibold'>{formData.name || 'Lavish member'}</p>
+            <p className='mt-3 text-[2rem] max-[380px]:text-[1.75rem] sm:text-3xl font-semibold'>{formData.name || 'Lavish member'}</p>
             <p className='mt-2 text-sm text-slate-300'>Member since {formatDate(profileMeta.createdAt)}</p>
 
             <div className='mt-4 grid grid-cols-2 gap-3'>
@@ -389,9 +435,9 @@ const Profile = () => {
         </div>
       </section>
 
-      <section className='rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
+      <section className='profile-entrance profile-delay-2 rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
         <div>
-          <p className='text-2xl font-semibold text-slate-900'>Email and automation preferences</p>
+          <p className='text-[1.45rem] max-[380px]:text-[1.3rem] sm:text-2xl font-semibold text-slate-900'>Email and automation preferences</p>
           <p className='mt-2 text-sm text-slate-500'>Control campaign, rewards, and review update notifications.</p>
         </div>
 
@@ -402,7 +448,7 @@ const Profile = () => {
             return (
               <div key={preference.key} className='py-4 flex items-center justify-between gap-4'>
                 <div>
-                  <p className='text-lg font-semibold text-slate-900'>{preference.title}</p>
+                  <p className='text-base sm:text-lg font-semibold text-slate-900'>{preference.title}</p>
                   <p className='mt-1 text-sm text-slate-500'>{preference.description}</p>
                 </div>
 
