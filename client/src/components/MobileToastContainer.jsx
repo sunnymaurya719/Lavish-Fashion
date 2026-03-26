@@ -1,14 +1,6 @@
-import React from 'react';
-import { ToastContainer, cssTransition } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
-
-const mobileToastTransition = cssTransition({
-  enter: 'lf-toast-enter',
-  exit: 'lf-toast-exit',
-  duration: [280, 220],
-  collapse: true,
-  appendPosition: false,
-});
+import React, { useCallback, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
+import { dismissToast, getToastSnapshot, subscribeToToast } from '../utils/notify';
 
 const ToastIcon = ({ type }) => {
   const iconClassName = `lf-toast-icon ${type === 'success' ? 'lf-toast-icon-success' : ''}`;
@@ -42,52 +34,86 @@ const ToastIcon = ({ type }) => {
   );
 };
 
-const ToastCloseButton = ({ closeToast }) => (
-  <button
-    type='button'
-    onClick={closeToast}
-    className='lf-toast-close'
-    aria-label='Close notification'
-  >
-    <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.8' className='h-4 w-4'>
-      <path d='M6 6 18 18M18 6 6 18' strokeLinecap='round' />
-    </svg>
-  </button>
-);
+const MobileToastContainer = () => {
+  const toast = useSyncExternalStore(subscribeToToast, getToastSnapshot, getToastSnapshot);
 
-const MobileToastContainer = () => (
-  <ToastContainer
-    position='bottom-center'
-    theme='dark'
-    autoClose={2500}
-    closeOnClick={false}
-    draggable
-    draggableDirection='x'
-    draggablePercent={30}
-    pauseOnHover={false}
-    pauseOnFocusLoss={false}
-    newestOnTop
-    limit={1}
-    hideProgressBar
-    role='status'
-    icon={ToastIcon}
-    closeButton={ToastCloseButton}
-    transition={mobileToastTransition}
-    containerClassName={() => 'lf-toast-container'}
-    toastClassName={() => 'lf-toast'}
-    bodyClassName={() => 'lf-toast-body'}
-    toastStyle={{
-      background: 'rgba(17, 17, 17, 0.95)',
-      color: '#fff',
-      borderRadius: '14px',
-      boxShadow: '0 10px 30px rgba(0, 0, 0, 0.25)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-      backdropFilter: 'blur(12px)',
-      WebkitBackdropFilter: 'blur(12px)',
-      padding: '0.75rem 0.82rem',
-      minHeight: '54px',
-    }}
-  />
-);
+  const handleClose = useCallback(() => {
+    dismissToast();
+  }, []);
+
+  const handleAction = useCallback(() => {
+    if (!toast || typeof toast.onAction !== 'function') {
+      return;
+    }
+
+    try {
+      toast.onAction();
+    } finally {
+      dismissToast();
+    }
+  }, [toast]);
+
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className='lf-toast-container'
+      aria-live={toast?.type === 'error' || toast?.type === 'warning' ? 'assertive' : 'polite'}
+      aria-atomic='true'
+    >
+      {toast ? (
+        <div className='lf-toast-stack'>
+          <article
+            key={toast.id}
+            className={`lf-toast lf-toast-${toast.type} ${toast.visible ? 'lf-toast-enter' : 'lf-toast-exit'}`}
+            role={toast.role}
+          >
+            <ToastIcon type={toast.type} />
+
+            <div className='lf-toast-body'>
+              {toast.actionLabel && typeof toast.onAction === 'function' ? (
+                <div className='lf-toast-content'>
+                  <span className='lf-toast-message' title={toast.message}>
+                    {toast.message}
+                  </span>
+                  <button
+                    type='button'
+                    onClick={handleAction}
+                    className='lf-toast-action'
+                    aria-label={toast.actionAriaLabel || toast.actionLabel}
+                  >
+                    {toast.actionLabel}
+                  </button>
+                </div>
+              ) : (
+                <span className='lf-toast-message' title={toast.message}>
+                  {toast.message}
+                </span>
+              )}
+            </div>
+
+            {toast.showCloseButton ? (
+              <button type='button' onClick={handleClose} className='lf-toast-close' aria-label='Close notification'>
+                <svg
+                  xmlns='http://www.w3.org/2000/svg'
+                  viewBox='0 0 24 24'
+                  fill='none'
+                  stroke='currentColor'
+                  strokeWidth='1.8'
+                  className='h-4 w-4'
+                >
+                  <path d='M6 6 18 18M18 6 6 18' strokeLinecap='round' />
+                </svg>
+              </button>
+            ) : null}
+          </article>
+        </div>
+      ) : null}
+    </div>,
+    document.body
+  );
+};
 
 export default MobileToastContainer;
