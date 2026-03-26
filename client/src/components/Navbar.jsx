@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { assets } from '../assets/assets';
 import { ShopContext } from '../context/ShopContext';
@@ -30,6 +30,22 @@ const Navbar = () => {
   const logOutHandler = () => {
     clearSession({ message: 'Logged out successfully' });
   };
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+
+    if (visible) {
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [visible]);
 
   const serverBadge =
     serverStatus === 'online'
@@ -160,38 +176,38 @@ const Navbar = () => {
       </div>
 
       <div
-        className={`absolute top-0 right-0 bottom-0 overflow-hidden bg-white transition-all ${
-          visible ? 'w-full' : 'w-0'
+        className={`sm:hidden fixed inset-0 z-[120] bg-white transition-transform duration-300 ${
+          visible ? 'translate-x-0' : 'translate-x-full pointer-events-none'
         }`}
       >
-        <div className='flex flex-col text-gray-600'>
+        <div className='flex flex-col h-full overflow-y-auto text-gray-700'>
           <div
             onClick={() => setVisible(false)}
-            className='flex items-center gap-4 p-3 cursor-pointer hover:bg-gray-200'
+            className='flex items-center gap-4 p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50'
           >
             <img src={assets.dropdown_icon} alt='' className='h-4 rotate-180' />
-            <p>Back</p>
+            <p className='text-2xl font-medium'>Back</p>
           </div>
-          <NavLink onClick={() => setVisible(false)} className='py-2 pl-6 hover:bg-gray-200' to='/'>
+          <NavLink onClick={() => setVisible(false)} className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50' to='/'>
             HOME
           </NavLink>
           <NavLink
             onClick={() => setVisible(false)}
-            className='py-2 pl-6 hover:bg-gray-200'
+            className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
             to='/collection'
           >
             COLLECTION
           </NavLink>
           <NavLink
             onClick={() => setVisible(false)}
-            className='py-2 pl-6 hover:bg-gray-200'
+            className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
             to='/about'
           >
             ABOUT
           </NavLink>
           <NavLink
             onClick={() => setVisible(false)}
-            className='py-2 pl-6 hover:bg-gray-200'
+            className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
             to='/contact'
           >
             CONTACT
@@ -200,28 +216,28 @@ const Navbar = () => {
             <>
               <NavLink
                 onClick={() => setVisible(false)}
-                className='py-2 pl-6 hover:bg-gray-200'
+                className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
                 to='/profile'
               >
                 PROFILE
               </NavLink>
               <NavLink
                 onClick={() => setVisible(false)}
-                className='py-2 pl-6 hover:bg-gray-200'
+                className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
                 to='/orders'
               >
                 ORDERS
               </NavLink>
               <NavLink
                 onClick={() => setVisible(false)}
-                className='py-2 pl-6 hover:bg-gray-200'
+                className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
                 to='/rewards'
               >
                 REWARDS
               </NavLink>
               <NavLink
                 onClick={() => setVisible(false)}
-                className='py-2 pl-6 hover:bg-gray-200'
+                className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
                 to='/wishlist'
               >
                 WISHLIST
@@ -232,7 +248,7 @@ const Navbar = () => {
                   setVisible(false);
                   logOutHandler();
                 }}
-                className='py-2 pl-6 text-left hover:bg-gray-200'
+                className='py-3 pl-8 text-left text-3xl font-medium hover:bg-gray-50'
               >
                 LOGOUT
               </button>
@@ -240,7 +256,7 @@ const Navbar = () => {
           ) : (
             <NavLink
               onClick={() => setVisible(false)}
-              className='py-2 pl-6 hover:bg-gray-200'
+              className='py-3 pl-8 text-3xl font-medium hover:bg-gray-50'
               to='/login'
             >
               LOGIN
