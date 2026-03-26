@@ -6,18 +6,32 @@ const NewsletterBox = () => {
   };
 
   return (
-    <div className='text-center mt-20'>
-      <p className='text-2xl font-medium text-gray-800'>Stay close to every new drop</p>
-      <p className='text-gray-400 mt-3'>
+    <section className='mt-14 rounded-[28px] bg-[#f5f5f5] px-6 py-7 text-center sm:mt-16 sm:px-10 sm:py-10'>
+      <h2 className='text-[1.4rem] sm:text-[1.55rem] font-semibold text-[#111] leading-tight'>
+        Stay close to every new drop
+      </h2>
+
+      <p className='mt-3 text-sm text-[#777]'>
         Join the Lavish Fashion mailing list for launch updates, style highlights, and seasonal edits.
       </p>
-      <form onSubmit={onSubmitHandler} className='w-full sm:w-1/2 flex items-center gap-3 mx-auto my-6 border pl-3'>
-        <input type='email' placeholder='Enter your email' className='w-full sm:flex:1 outline-none' required />
-        <button type='submit' className='bg-black text-white text-xs px-10 py-4'>
-          SUBSCRIBE
-        </button>
+
+      <form onSubmit={onSubmitHandler} className='mt-6 mx-auto w-full max-w-[640px]'>
+        <div className='flex items-center rounded-full bg-white p-1 shadow-[0_6px_18px_rgba(15,23,42,0.06)]'>
+          <input
+            type='email'
+            placeholder='Enter your email'
+            className='flex-1 bg-transparent px-4 py-3 text-sm text-[#111] placeholder:text-[#8f8f8f] outline-none'
+            required
+          />
+          <button
+            type='submit'
+            className='shrink-0 rounded-full bg-black px-5 py-3 text-[11px] font-medium uppercase tracking-[0.18em] text-white sm:px-7'
+          >
+            Subscribe
+          </button>
+        </div>
       </form>
-    </div>
+    </section>
   );
 };
 

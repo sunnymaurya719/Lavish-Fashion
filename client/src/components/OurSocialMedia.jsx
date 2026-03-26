@@ -3,21 +3,19 @@ import { assets } from '../assets/assets'
 
 const OurSocialMedia = () => {
   return (
-    <div className='flex flex-col items-center justify-center py-20 text-xs sm:text-sm md:text-base'>
-
-      <div className='flex flex-col items-center justify-center gap-1'>
-
-        <div className='flex flex-row items-center gap-12'>
-          <img src={assets.facebook} alt='Facebook' className='w-5 h-5 m-auto mb-5' />
-          <img src={assets.youtube} alt='Youtube' className='w-5 m-auto mb-5' />
-          <img src={assets.instagram} alt='Instgram' className='w-5 h-5 m-auto mb-5' />
-        </div>
-
-        <p className='font-semibold'>Connect With Us</p>
-        <p className='text-gray-400'>For Latest Fashions.</p>
+    <section className='mt-8 border-t border-slate-200/80 px-6 py-8'>
+      <div className='flex items-center justify-center gap-5 sm:gap-6'>
+        <a href='#' aria-label='Facebook' className='rounded-full bg-[#f5f5f5] p-3 transition hover:bg-[#ececec] active:bg-[#e4e4e4]'>
+          <img src={assets.facebook} alt='Facebook' className='h-5 w-5' />
+        </a>
+        <a href='#' aria-label='Instagram' className='rounded-full bg-[#f5f5f5] p-3 transition hover:bg-[#ececec] active:bg-[#e4e4e4]'>
+          <img src={assets.instagram} alt='Instagram' className='h-5 w-5' />
+        </a>
+        <a href='#' aria-label='YouTube' className='rounded-full bg-[#f5f5f5] p-3 transition hover:bg-[#ececec] active:bg-[#e4e4e4]'>
+          <img src={assets.youtube} alt='YouTube' className='h-5 w-5' />
+        </a>
       </div>
-
-    </div>
+    </section>
   )
 }
 

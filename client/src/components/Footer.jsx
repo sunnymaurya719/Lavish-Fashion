@@ -4,47 +4,44 @@ import { assets } from '../assets/assets';
 
 const Footer = () => {
   return (
-    <div>
-      <div className='flex flex-col sm:grid grid-cols-[3fr_1fr_1fr] gap-14 my-10 mt-5 text-sm'>
+    <footer className='border-t border-slate-200/80 pt-8'>
+      <div className='grid gap-8 sm:grid-cols-[2.2fr_1fr_1fr] text-sm'>
         <div>
-          <img src={assets.Lavishlogo} alt='' className='mb-5 w-32' />
-          <p className='w-full md:w-2/3 text-gray-600'>
-            Lavish Fashion is a modern fashion storefront focused on clean design, reliable checkout,
-            and an easy post-purchase experience for customers.
-          </p>
+          <img src={assets.Lavishlogo} alt='Lavish Fashion Logo' className='mb-4 w-32' />
+          <p className='text-[#777]'>Clean silhouettes, elevated essentials.</p>
         </div>
+
         <div>
-          <p className='text-xl font-medium mb-5'>COMPANY</p>
-          <ul className='flex flex-col gap-1 text-gray-600'>
+          <p className='text-[11px] uppercase tracking-[0.22em] text-[#111] mb-4'>Company</p>
+          <ul className='flex flex-col gap-2 text-[#777]'>
             <li>
-              <Link to='/'>Home</Link>
+              <Link to='/' className='hover:text-[#111] transition-colors'>Home</Link>
             </li>
             <li>
-              <Link to='/about'>About us</Link>
+              <Link to='/about' className='hover:text-[#111] transition-colors'>About</Link>
             </li>
             <li>
-              <Link to='/collection'>Collections</Link>
+              <Link to='/collection' className='hover:text-[#111] transition-colors'>Collections</Link>
             </li>
             <li>
-              <Link to='/contact'>Contact</Link>
+              <Link to='/contact' className='hover:text-[#111] transition-colors'>Contact</Link>
             </li>
           </ul>
         </div>
 
         <div>
-          <p className='text-xl font-medium mb-5'>GET IN TOUCH</p>
-          <ul className='flex flex-col gap-1 text-gray-600'>
+          <p className='text-[11px] uppercase tracking-[0.22em] text-[#111] mb-4'>Get In Touch</p>
+          <ul className='flex flex-col gap-2 text-[#777]'>
             <li>support@lavishfashion.com</li>
             <li>Mon-Sat | 10:00 AM - 6:00 PM IST</li>
           </ul>
         </div>
       </div>
 
-      <div>
-        <hr />
-        <p className='py-5 text-sm text-center'>Copyright 2026 LavishFashion.com - All Rights Reserved</p>
+      <div className='mt-8 border-t border-slate-200/80'>
+        <p className='py-5 text-sm text-center text-[#777]'>Copyright 2026 LavishFashion.com - All Rights Reserved</p>
       </div>
-    </div>
+    </footer>
   );
 };
 
