@@ -1,150 +1,181 @@
-# 🛍️ Lavish Fashion – Full Stack E-Commerce Platform
+# Lavish Fashion
 
-Lavish Fashion is a modern and scalable **full-stack e-commerce web application** built using **React**, **Node.js**, **Express**, and **MongoDB**.  
-It delivers a complete online shopping experience with authentication, admin management, cloud-based image uploads, and secure online payments.
+Lavish Fashion is a full-stack ecommerce project with three separate apps:
 
----
+- `client` for the customer storefront
+- `admin` for product and order management
+- `server` for the API, auth, cart, checkout, and payment workflows
 
-## 🌐 Live Demo
+The project uses React on the frontend, Express on the backend, MongoDB for persistence, Cloudinary for media uploads, and Stripe/Razorpay for online payments.
 
-- 🔗 **User Website**: https://lavishfashion.vercel.app  
-- 🛠 **Admin Panel**: Available with role-based access
+## Current Features
 
----
+### Storefront
+- Product listing and single product pages
+- Category and subcategory filtering
+- Cart management
+- User signup and login
+- Customer profile page with editable name and phone
+- Checkout with Stripe, Razorpay, and Cash on Delivery
+- Buy now flow
+- Order history page
 
-## ✨ Features
+### Admin
+- Admin login
+- Add product
+- Edit product
+- Delete product
+- Product list
+- Order list with status updates
 
-### 👤 User Features
-- 🔐 User Authentication & Authorization (JWT)
-- 🛍️ Browse products by category
-- 🛒 Add to Cart & manage quantities
-- ❤️ Wishlist functionality
-- 💳 Secure payments using Razorpay
-- 📦 Place & track orders
-- 📱 Fully responsive UI
+### Backend
+- JWT auth for users and admin
+- Request validation with Zod
+- Cart APIs
+- Product add, update, remove, list, and single-item APIs
+- Order creation for Stripe, Razorpay, and Cash on Delivery
+- Stripe and Razorpay payment verification
+- Stripe and Razorpay webhook handling
+- Rate limiting, structured logging, and idempotent checkout requests
+- Automated server tests for core auth, cart, order, checkout, and webhook flows
 
-### 🛠 Admin Features
-- 📊 Admin Dashboard
-- ➕ Add / Update / Delete products
-- 🖼 Upload product images via Cloudinary
-- 📦 Manage orders & users
-- 🔒 Protected admin routes
-
----
-
-## 🛠 Tech Stack
+## Tech Stack
 
 ### Frontend
-- React.js
-- Redux Toolkit
-- React Router DOM
+- React
+- React Router
 - Tailwind CSS
+- Axios
 - Vite
 
 ### Backend
 - Node.js
-- Express.js
-- MongoDB & Mongoose
-- JWT Authentication
-- Cloudinary (Image Storage)
-- Razorpay (Payment Gateway)
+- Express
+- MongoDB with Mongoose
+- JWT
+- Zod
+- Cloudinary
+- Stripe
+- Razorpay
 
-### Deployment
-- Frontend: Vercel
-- Backend: Vercel
-- Database: MongoDB Atlas
+## Project Structure
 
----
-
-## 🚀 Getting Started
-
-### 🔧 Prerequisites
-- Node.js (v16+)
-- npm or yarn
-- MongoDB Atlas account
-- Cloudinary account
-- Razorpay account
-
----
-
-## 📥 Installation
-
-### 1️⃣ Clone the repository
-```bash
-git clone https://github.com/sunnymaurya719/Lavish-Fashion.git
-cd Lavish-Fashion
- ```
-
-2️⃣ **Install dependencies:**
-
-   ```bash
-   npm install
-   # or
-   yarn install
-   ```
-
-3️⃣ **Environment Variables:**
-
-Create a .env file inside the server folder:
-   ```bash
-   PORT=5000
-MONGO_URI=your_mongodb_connection_string
-JWT_SECRET=your_jwt_secret
-
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-
-RAZORPAY_KEY_ID=your_key_id
-RAZORPAY_KEY_SECRET=your_key_secret
-   ```
-
-4️⃣ **Run the application:**
-```bash
-For server : 
-   npm run server
-and
-For client :
-   npm run client
-   ```
-
-## 🗂️ Project Structure
-
-```bash
-Lavish-Fashion/
-│
-├── client/                       # React frontend (User Panel)
-│   ├── components/               # Reusable UI components
-│   ├── pages/                    # Pages (Home, Cart, Login, Orders, etc.)
-│   ├── context/                  # Context API (Global state)
-│   └── main.jsx
-│
-├── admin/                        # React Admin Panel
-│   ├── components/               # Admin UI components
-│   ├── pages/                    # Admin pages (Dashboard, Products, Orders)
-│   └── main.jsx
-│
-├── server/                       # Node.js backend
-│   ├── controllers/              # Business logic
-│   ├── models/                   # MongoDB schemas
-│   ├── routes/                   # API routes
-│   ├── middleware/               # Auth, admin & error handling
-│   └── index.js
-│
+```text
+Lavish Fashion/
+├── admin/
+├── client/
+├── server/
+├── ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md
 └── README.md
 ```
-## 📦 Development Notes
 
-⚡ Built with Vite for fast development
+## Environment Variables
 
-🔐 Secure REST APIs with JWT authentication
+### Server
 
-🧠 Global state managed using React Context API
+Create `server/.env` with values like:
 
-👨‍💼 Separate Admin Panel with protected routes
+```env
+PORT=4000
+MONGODB_URI=your_mongodb_connection_string
+JWT_SECRET=your_jwt_secret
 
-☁️ Cloudinary for image uploads
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=your_admin_password
 
-💳 Razorpay integration for payments
+CLOUDINARY_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_SECRET_KEY=your_cloudinary_secret
 
-🧩 Clean, scalable folder structure
+CLIENT_URL=http://localhost:5173
+ADMIN_URL=http://localhost:5174
+FRONTEND_URL=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173,http://localhost:5174
+
+STRIPE_SECRET_KEY=your_stripe_secret
+STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
+
+RAZORPAY_KEY_ID=your_razorpay_key
+RAZORPAY_KEY_SECRET=your_razorpay_secret
+RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret
+
+# Realtime (Admin Instant Order Updates)
+REALTIME_ENABLED=true
+REALTIME_PROVIDER=ably
+ABLY_API_KEY=your_ably_api_key
+REALTIME_TOKEN_TTL_MS=600000
+```
+
+### Client
+
+Create `client/.env` with:
+
+```env
+VITE_BACKEND_URL=http://localhost:4000
+VITE_RAZORPAY_KEY_ID=your_razorpay_public_key
+```
+
+### Admin
+
+Create `admin/.env` with:
+
+```env
+VITE_BACKEND_URL=http://localhost:4000
+VITE_REALTIME_ENABLED=true
+```
+
+## Local Development
+
+Install dependencies inside each app:
+
+```bash
+cd server && npm install
+cd client && npm install
+cd admin && npm install
+```
+
+Run the apps in separate terminals:
+
+```bash
+cd server && npm run server
+cd client && npm run client
+cd admin && npm run admin
+```
+
+Default local ports:
+
+- `client`: `5173`
+- `admin`: `5174`
+- `server`: `4000`
+
+## Useful Commands
+
+### Server
+
+```bash
+npm run server
+npm run test
+npm run build
+```
+
+### Client
+
+```bash
+npm run client
+npm run build
+```
+
+### Admin
+
+```bash
+npm run admin
+npm run build
+```
+
+## Roadmap
+
+The next major upgrade plan is documented in:
+
+- [ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md](./ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md)
+
+That document lists the missing launch-level features for catalog management, customer accounts, promotions, analytics, operations, SEO, and deployment readiness.

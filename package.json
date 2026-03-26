@@ -1,0 +1,13 @@
+{
+  "name": "lavish-fashion-platform",
+  "private": true,
+  "scripts": {
+    "lint": "npm --prefix server run lint && npm --prefix client run lint && npm --prefix admin run lint",
+    "build": "npm --prefix server run build && npm --prefix client run build && npm --prefix admin run build",
+    "test": "npm --prefix server run test",
+    "verify": "npm run lint && npm run build && npm run test",
+    "dev:server": "npm --prefix server run server",
+    "dev:client": "npm --prefix client run client",
+    "dev:admin": "npm --prefix admin run admin"
+  }
+}

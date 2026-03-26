@@ -1,9 +1,25 @@
 import express from 'express';
-import {placeOrderStripe,placeOrderRazorpay,allOrders,userOrders,updateOrderStatus,verifyStripe, verifyRazorpay } from '../controllers/orderController.js';
+import {
+    allOrders,
+    placeOrderCOD,
+    placeOrderRazorpay,
+    placeOrderStripe,
+    previewCheckoutPricing,
+    updateOrderStatus,
+    userOrders,
+    verifyRazorpay,
+    verifyStripe
+} from '../controllers/orderController.js';
 import adminAuth from '../middleware/adminAuth.js';
 import authUser from '../middleware/auth.js';
 import validateRequest from '../middleware/validateRequest.js';
-import { orderCreateSchema, orderStatusSchema, razorpayVerifySchema, stripeVerifySchema } from '../validation/schemas.js';
+import {
+    orderCreateSchema,
+    orderPricingPreviewSchema,
+    orderStatusSchema,
+    razorpayVerifySchema,
+    stripeVerifySchema
+} from '../validation/schemas.js';
 
 const orderRouter = express.Router();
 
@@ -15,7 +31,8 @@ orderRouter.post('/status',adminAuth,validateRequest(orderStatusSchema),updateOr
 
 //Payment Features
 
-//orderRouter.post('/place',authUser,placeOrder);
+orderRouter.post('/preview',authUser,validateRequest(orderPricingPreviewSchema),previewCheckoutPricing);
+orderRouter.post('/place',authUser,validateRequest(orderCreateSchema),placeOrderCOD);
 orderRouter.post('/stripe',authUser,validateRequest(orderCreateSchema),placeOrderStripe);
 orderRouter.post('/razorpay',authUser,validateRequest(orderCreateSchema),placeOrderRazorpay);
 

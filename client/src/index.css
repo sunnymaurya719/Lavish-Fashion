@@ -15,8 +15,91 @@ a.active hr{
   font-style: normal;
 }
 
+.hero-shell .hero-copy {
+  animation: heroFadeUp 0.75s ease-out both;
+}
+
+.hero-shell .hero-line {
+  animation: heroFadeUp 0.75s ease-out 0.06s both;
+}
+
+.hero-shell .hero-title {
+  animation: heroFadeUp 0.8s ease-out 0.12s both;
+}
+
+.hero-shell .hero-subtitle {
+  animation: heroFadeUp 0.85s ease-out 0.18s both;
+}
+
+.hero-shell .hero-actions {
+  animation: heroFadeUp 0.9s ease-out 0.24s both;
+}
+
+.hero-shell .hero-image {
+  animation: heroImageReveal 1s ease-out both;
+}
+
+.hero-shell .hero-track {
+  animation: heroTrackingIn 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.hero-shell .hero-kicker {
+  --track-end: 0.28em;
+  animation-delay: 0.1s;
+}
+
+.hero-shell .hero-lookbook {
+  --track-end: 0.18em;
+  animation-delay: 0.24s;
+}
+
+@keyframes heroFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes heroImageReveal {
+  from {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes heroTrackingIn {
+  from {
+    opacity: 0;
+    letter-spacing: calc(var(--track-end, 0.2em) + 0.16em);
+  }
+  to {
+    opacity: 1;
+    letter-spacing: var(--track-end, 0.2em);
+  }
+}
+
 ::-webkit-scrollbar{
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-shell .hero-copy,
+  .hero-shell .hero-line,
+  .hero-shell .hero-title,
+  .hero-shell .hero-subtitle,
+  .hero-shell .hero-actions,
+  .hero-shell .hero-image,
+  .hero-shell .hero-track {
+    animation: none !important;
+  }
 }
 
 @media (max-width:640px) {

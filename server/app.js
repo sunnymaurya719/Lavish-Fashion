@@ -7,11 +7,20 @@ import userRouter from './routes/userRoute.js';
 import productRouter from './routes/productRoute.js';
 import cartRouter from './routes/cartRoute.js';
 import orderRouter from './routes/orderRoute.js';
+import couponRouter from './routes/couponRoute.js';
+import customerRouter from './routes/customerRoute.js';
+import dashboardRouter from './routes/dashboardRoute.js';
+import loyaltyRouter from './routes/loyaltyRoute.js';
+import marketingRouter from './routes/marketingRoute.js';
+import reviewRouter from './routes/reviewRoute.js';
+import realtimeRouter from './routes/realtimeRoute.js';
+import systemRouter from './routes/systemRoute.js';
 import webhookRouter from './routes/webhookRoute.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import requestLogger from './middleware/requestLogger.js';
 
 const normalizeOrigin = (value) => String(value || '').trim().replace(/\/$/, '');
+const isValidWebUrl = (value) => /^https?:\/\/.+/i.test(normalizeOrigin(value));
 
 const buildCorsOptions = () => {
     const envOrigins = [
@@ -27,10 +36,11 @@ const buildCorsOptions = () => {
         'http://localhost:5174',
         'http://127.0.0.1:5174',
         'https://lavishfashion.vercel.app',
+        'https://lavishfashionadmin.vercel.app',
         ...envOrigins
     ]
         .map(normalizeOrigin)
-        .filter(Boolean);
+        .filter(isValidWebUrl);
 
     const allowedOriginSet = new Set(allowedOrigins);
 
@@ -87,8 +97,16 @@ const createApp = () => {
     app.use('/api', apiRateLimiter);
     app.use(express.json({ limit: '1mb' }));
 
+    app.use('/api/system', systemRouter);
+    app.use('/api/realtime', realtimeRouter);
     app.use('/api/user',userRouter);
+    app.use('/api/admin/dashboard', dashboardRouter);
+    app.use('/api/customers', customerRouter);
+    app.use('/api/coupon', couponRouter);
+    app.use('/api/loyalty', loyaltyRouter);
+    app.use('/api/marketing', marketingRouter);
     app.use('/api/product',productRouter);
+    app.use('/api/review', reviewRouter);
     app.use('/api/cart',cartRouter);
     app.use('/api/order',orderRouter);
 

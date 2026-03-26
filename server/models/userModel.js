@@ -29,11 +29,56 @@ const isValidCartData = (cartData) => {
     return true;
 };
 
+const isValidWishlist = (wishlist) =>
+    Array.isArray(wishlist) && wishlist.every((itemId) => objectIdStringRegex.test(String(itemId || '')));
+
+const referralCodeRegex = /^[A-Z0-9]{6,12}$/;
+
 const userSchema = new mongoose.Schema({
 
     name: {type:String, required:true, trim:true, minlength:2, maxlength:60},
     email: {type:String, required:true, unique:true, lowercase:true, trim:true},
+    phone: {type:String, default:'', trim:true, maxlength:20},
     password: {type:String, required:true, minlength:8, maxlength:128},
+    wishlist: {
+        type: [String],
+        default: [],
+        validate: {
+            validator: isValidWishlist,
+            message: 'Invalid wishlist data structure'
+        }
+    },
+    referralCode: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        unique: true,
+        sparse: true,
+        validate: {
+            validator: (value) => !value || referralCodeRegex.test(String(value || '')),
+            message: 'Invalid referral code format'
+        }
+    },
+    referredBy: {
+        type: String,
+        default: '',
+        validate: {
+            validator: (value) => !value || objectIdStringRegex.test(String(value || '')),
+            message: 'Invalid referrer id format'
+        }
+    },
+    successfulReferralCount: { type: Number, default: 0, min: 0 },
+    referralRewardUnlocked: { type: Boolean, default: false },
+    loyaltyPoints: { type: Number, default: 0 },
+    reservedLoyaltyPoints: { type: Number, default: 0, min: 0 },
+    lifetimeLoyaltyPoints: { type: Number, default: 0, min: 0 },
+    marketingPreferences: {
+        emailSubscribed: { type: Boolean, default: true },
+        promotionalCampaigns: { type: Boolean, default: true },
+        loyaltyUpdates: { type: Boolean, default: true },
+        reviewReminders: { type: Boolean, default: true }
+    },
+    adminNotes: { type: String, default: '', trim: true, maxlength: 1000 },
     cartData: {
         type: Object,
         default: {},
@@ -42,7 +87,7 @@ const userSchema = new mongoose.Schema({
             message: 'Invalid cart data structure'
         }
     }
-},{minimize: false, strict: true})
+},{minimize: false, strict: true, timestamps: true})
 
 const userModel = mongoose.models.user || mongoose.model("user",userSchema);
 

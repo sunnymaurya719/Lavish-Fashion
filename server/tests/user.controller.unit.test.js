@@ -1,17 +1,42 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const findOneMock = vi.fn();
+const findByIdMock = vi.fn();
+const findByIdAndUpdateMock = vi.fn();
 const saveMock = vi.fn();
 const userModelConstructorMock = vi.fn(() => ({ save: saveMock }));
+const productFindByIdMock = vi.fn();
 
 userModelConstructorMock.findOne = findOneMock;
+userModelConstructorMock.findById = findByIdMock;
+userModelConstructorMock.findByIdAndUpdate = findByIdAndUpdateMock;
 
 vi.mock('../models/userModel.js', () => ({
     default: userModelConstructorMock
 }));
 
+vi.mock('../models/productModel.js', () => ({
+    default: {
+        findById: productFindByIdMock
+    }
+}));
+
 const compareMock = vi.fn();
 const hashMock = vi.fn();
+const determineLoyaltyTierMock = vi.fn(() => ({ currentTier: 'Bronze' }));
+const ensureUserReferralCodeMock = vi.fn(async (user) => user?.referralCode || 'LAVI1234');
+const generateUniqueReferralCodeMock = vi.fn(async () => 'LAVI1234');
+const getUserAvailableLoyaltyPointsMock = vi.fn((user = {}) =>
+    Math.max(0, Number(user.loyaltyPoints || 0) - Number(user.reservedLoyaltyPoints || 0))
+);
+const getUserMarketingPreferencesMock = vi.fn((user = {}) => ({
+    emailSubscribed: true,
+    promotionalCampaigns: true,
+    loyaltyUpdates: true,
+    reviewReminders: true,
+    ...(user.marketingPreferences || {})
+}));
+const queueAutomationEmailMock = vi.fn();
 
 vi.mock('bcrypt', () => ({
     default: {
@@ -28,7 +53,28 @@ vi.mock('jsonwebtoken', () => ({
     }
 }));
 
-const { loginUser, registerUser, adminLogin } = await import('../controllers/userController.js');
+vi.mock('../services/loyaltyService.js', () => ({
+    determineLoyaltyTier: determineLoyaltyTierMock,
+    ensureUserReferralCode: ensureUserReferralCodeMock,
+    generateUniqueReferralCode: generateUniqueReferralCodeMock,
+    getUserAvailableLoyaltyPoints: getUserAvailableLoyaltyPointsMock
+}));
+
+vi.mock('../services/marketingAutomationService.js', () => ({
+    getUserMarketingPreferences: getUserMarketingPreferencesMock,
+    queueAutomationEmail: queueAutomationEmailMock
+}));
+
+const {
+    adminLogin,
+    getUserProfile,
+    getUserWishlist,
+    loginUser,
+    registerUser,
+    toggleUserWishlist,
+    updateMarketingPreferences,
+    updateUserProfile
+} = await import('../controllers/userController.js');
 
 const createRes = () => {
     const res = {};
@@ -43,6 +89,19 @@ describe('userController unit tests', () => {
         process.env.ADMIN_EMAIL = 'admin@example.com';
         process.env.ADMIN_PASSWORD = 'StrongAdminPass123';
         process.env.JWT_SECRET = 'test_secret';
+        determineLoyaltyTierMock.mockReturnValue({ currentTier: 'Bronze' });
+        ensureUserReferralCodeMock.mockImplementation(async (user) => user?.referralCode || 'LAVI1234');
+        generateUniqueReferralCodeMock.mockResolvedValue('LAVI1234');
+        getUserAvailableLoyaltyPointsMock.mockImplementation((user = {}) =>
+            Math.max(0, Number(user.loyaltyPoints || 0) - Number(user.reservedLoyaltyPoints || 0))
+        );
+        getUserMarketingPreferencesMock.mockImplementation((user = {}) => ({
+            emailSubscribed: true,
+            promotionalCampaigns: true,
+            loyaltyUpdates: true,
+            reviewReminders: true,
+            ...(user.marketingPreferences || {})
+        }));
     });
 
     it('returns 400 for missing login credentials', async () => {
@@ -120,5 +179,329 @@ describe('userController unit tests', () => {
 
         expect(res.status).toHaveBeenCalledWith(401);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('returns 404 when profile user is missing', async () => {
+        findByIdMock.mockResolvedValueOnce(null);
+
+        const req = {
+            userId: 'missing_user',
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await getUserProfile(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('updates the user profile successfully', async () => {
+        findByIdMock.mockResolvedValueOnce({
+            _id: 'user_1',
+            marketingPreferences: {
+                promotionalCampaigns: false
+            }
+        });
+        findByIdAndUpdateMock.mockResolvedValueOnce({
+            _id: 'user_1',
+            name: 'Updated User',
+            email: 'user@example.com',
+            phone: '+911234567890',
+            referralCode: 'LAVI1234',
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+            toObject: () => ({
+                _id: 'user_1',
+                name: 'Updated User',
+                email: 'user@example.com',
+                phone: '+911234567890',
+                referralCode: 'LAVI1234',
+                createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                updatedAt: new Date('2026-01-02T00:00:00.000Z')
+            })
+        });
+
+        const req = {
+            userId: 'user_1',
+            body: { name: 'Updated User', phone: '+911234567890' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await updateUserProfile(req, res);
+
+        expect(findByIdAndUpdateMock).toHaveBeenCalledWith(
+            'user_1',
+            { name: 'Updated User', phone: '+911234567890' },
+            { new: true, runValidators: true }
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                profile: expect.objectContaining({
+                    name: 'Updated User',
+                    email: 'user@example.com',
+                    phone: '+911234567890'
+                })
+            })
+        );
+    });
+
+    it('returns the user profile with available and reserved loyalty balances', async () => {
+        findByIdMock.mockResolvedValueOnce({
+            _id: 'user_1',
+            name: 'Profile User',
+            email: 'profile@example.com',
+            phone: '+911111111111',
+            wishlist: ['507f1f77bcf86cd799439011'],
+            referralCode: 'LAVI1234',
+            successfulReferralCount: 2,
+            loyaltyPoints: 220,
+            reservedLoyaltyPoints: 40,
+            lifetimeLoyaltyPoints: 400,
+            marketingPreferences: {
+                emailSubscribed: true,
+                promotionalCampaigns: false,
+                loyaltyUpdates: true,
+                reviewReminders: true
+            },
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+            toObject() {
+                return {
+                    _id: 'user_1',
+                    name: 'Profile User',
+                    email: 'profile@example.com',
+                    phone: '+911111111111',
+                    wishlist: ['507f1f77bcf86cd799439011'],
+                    referralCode: 'LAVI1234',
+                    successfulReferralCount: 2,
+                    loyaltyPoints: 220,
+                    reservedLoyaltyPoints: 40,
+                    lifetimeLoyaltyPoints: 400,
+                    marketingPreferences: {
+                        emailSubscribed: true,
+                        promotionalCampaigns: false,
+                        loyaltyUpdates: true,
+                        reviewReminders: true
+                    },
+                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                    updatedAt: new Date('2026-01-02T00:00:00.000Z')
+                };
+            }
+        });
+
+        const req = {
+            userId: 'user_1',
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await getUserProfile(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                profile: expect.objectContaining({
+                    loyaltyPoints: 220,
+                    reservedLoyaltyPoints: 40,
+                    availableLoyaltyPoints: 180,
+                    wishlistCount: 1
+                })
+            })
+        );
+    });
+
+    it('registers a user with a referral code and queues welcome automation', async () => {
+        findOneMock
+            .mockResolvedValueOnce(null)
+            .mockReturnValueOnce({
+                select: vi.fn().mockReturnValue({
+                    lean: vi.fn().mockResolvedValueOnce({
+                        _id: 'referrer_1',
+                        email: 'referrer@example.com'
+                    })
+                })
+            });
+        hashMock.mockResolvedValueOnce('hashed_password');
+        saveMock.mockResolvedValueOnce({ _id: 'user_1', referralCode: 'LAVI1234' });
+
+        const req = {
+            body: {
+                name: 'User',
+                email: 'user@example.com',
+                password: 'SecurePass123',
+                referralCode: 'share10'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await registerUser(req, res);
+
+        expect(generateUniqueReferralCodeMock).toHaveBeenCalledWith('User');
+        expect(userModelConstructorMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                referredBy: 'referrer_1',
+                referralCode: 'LAVI1234'
+            })
+        );
+        expect(queueAutomationEmailMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                automationKey: 'welcome_signup',
+                context: { referralCode: 'LAVI1234' }
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    it('retries registration when generated referral code conflicts', async () => {
+        findOneMock.mockResolvedValueOnce(null);
+        hashMock.mockResolvedValueOnce('hashed_password');
+        generateUniqueReferralCodeMock
+            .mockResolvedValueOnce('LAVI1234')
+            .mockResolvedValueOnce('LAVI5678');
+        saveMock
+            .mockRejectedValueOnce({ code: 11000, keyPattern: { referralCode: 1 } })
+            .mockResolvedValueOnce({ _id: 'user_2', referralCode: 'LAVI5678' });
+
+        const req = {
+            body: {
+                name: 'Retry User',
+                email: 'retry@example.com',
+                password: 'SecurePass123'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await registerUser(req, res);
+
+        expect(generateUniqueReferralCodeMock).toHaveBeenCalledTimes(2);
+        expect(userModelConstructorMock).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ referralCode: 'LAVI5678' })
+        );
+        expect(queueAutomationEmailMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                context: { referralCode: 'LAVI5678' }
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    it('returns the user wishlist successfully', async () => {
+        findByIdMock.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce({
+                wishlist: ['507f1f77bcf86cd799439011']
+            })
+        });
+
+        const req = {
+            userId: 'user_1',
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await getUserWishlist(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith({
+            success: true,
+            wishlist: ['507f1f77bcf86cd799439011']
+        });
+    });
+
+    it('adds a product to the wishlist successfully', async () => {
+        productFindByIdMock.mockReturnValueOnce({
+            select: vi.fn().mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011' })
+        });
+        findByIdMock.mockResolvedValueOnce({
+            wishlist: []
+        });
+        findByIdAndUpdateMock.mockResolvedValueOnce({
+            wishlist: ['507f1f77bcf86cd799439011']
+        });
+
+        const req = {
+            userId: 'user_1',
+            body: { itemId: '507f1f77bcf86cd799439011' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await toggleUserWishlist(req, res);
+
+        expect(findByIdAndUpdateMock).toHaveBeenCalledWith(
+            'user_1',
+            { wishlist: ['507f1f77bcf86cd799439011'] },
+            { new: true, runValidators: true }
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                message: 'Added to wishlist',
+                wishlist: ['507f1f77bcf86cd799439011']
+            })
+        );
+    });
+
+    it('updates marketing preferences successfully', async () => {
+        findByIdMock.mockResolvedValueOnce({
+            _id: 'user_1',
+            marketingPreferences: {
+                emailSubscribed: true,
+                promotionalCampaigns: true,
+                loyaltyUpdates: true,
+                reviewReminders: true
+            }
+        });
+        findByIdAndUpdateMock.mockResolvedValueOnce({
+            marketingPreferences: {
+                emailSubscribed: true,
+                promotionalCampaigns: false,
+                loyaltyUpdates: true,
+                reviewReminders: false
+            }
+        });
+
+        const req = {
+            userId: 'user_1',
+            body: {
+                promotionalCampaigns: false,
+                reviewReminders: false
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await updateMarketingPreferences(req, res);
+
+        expect(findByIdAndUpdateMock).toHaveBeenCalledWith(
+            'user_1',
+            {
+                marketingPreferences: {
+                    emailSubscribed: true,
+                    promotionalCampaigns: false,
+                    loyaltyUpdates: true,
+                    reviewReminders: false
+                }
+            },
+            { new: true, runValidators: true }
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                marketingPreferences: expect.objectContaining({
+                    promotionalCampaigns: false,
+                    reviewReminders: false
+                })
+            })
+        );
     });
 });

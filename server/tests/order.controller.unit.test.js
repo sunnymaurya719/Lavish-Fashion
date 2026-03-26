@@ -37,12 +37,21 @@ vi.mock('razorpay', () => ({
 }));
 
 const orderModelMock = {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findOne: vi.fn(),
+    findByIdAndUpdate: vi.fn()
+};
+
+const paymentAttemptModelMock = {
+    create: vi.fn(),
     findById: vi.fn(),
     findOne: vi.fn(),
     findByIdAndUpdate: vi.fn()
 };
 
 const userModelMock = {
+    findById: vi.fn(),
     findByIdAndUpdate: vi.fn()
 };
 
@@ -52,9 +61,71 @@ const productModelMock = {
 
 const beginIdempotentRequestMock = vi.fn();
 const completeIdempotentRequestMock = vi.fn();
+const backfillMissingProductInventoryMock = vi.fn();
+const releaseInventoryForItemsMock = vi.fn();
+const reserveInventoryForItemsMock = vi.fn();
+const awardOrderDeliveryRewardsMock = vi.fn();
+const calculateLoyaltyRedemptionMock = vi.fn(({ user, requestedPoints, orderBaseAmount, maxRedeemPointsCap = Number.POSITIVE_INFINITY }) => {
+    const availablePoints = Math.max(0, Number(user?.loyaltyPoints || 0) - Number(user?.reservedLoyaltyPoints || 0));
+    const rules = {
+        pointValue: 1,
+        minRedeemPoints: 50,
+        maxRedeemShare: 0.5,
+        maxRedeemPointsPerOrder: 500,
+        maxRedeemPointsPerProduct: 30
+    };
+    const normalizedMaxRedeemPointsCap = Number(maxRedeemPointsCap);
+    const safeMaxRedeemPointsCap = Number.isFinite(normalizedMaxRedeemPointsCap)
+        ? Math.max(0, Math.floor(normalizedMaxRedeemPointsCap))
+        : Number.POSITIVE_INFINITY;
+    const maxRedeemablePoints = Math.max(
+        0,
+        Math.min(
+            availablePoints,
+            rules.maxRedeemPointsPerOrder,
+            safeMaxRedeemPointsCap,
+            Math.floor(Number(orderBaseAmount || 0) * rules.maxRedeemShare)
+        )
+    );
+
+    const effectiveMinRedeemPoints = Math.min(rules.minRedeemPoints, maxRedeemablePoints);
+
+    if (requestedPoints < effectiveMinRedeemPoints) {
+        throw new Error(`A minimum of ${effectiveMinRedeemPoints} points is required for redemption`);
+    }
+
+    if (requestedPoints > maxRedeemablePoints) {
+        throw new Error(`You can redeem up to ${maxRedeemablePoints} points on this order`);
+    }
+
+    return {
+        pointsRedeemed: requestedPoints,
+        discountAmount: requestedPoints,
+        rules
+    };
+});
+const finalizeReservedLoyaltyRedemptionMock = vi.fn();
+const getLoyaltyRedemptionRulesMock = vi.fn(() => ({
+    pointValue: 1,
+    minRedeemPoints: 50,
+    maxRedeemShare: 0.5,
+    maxRedeemPointsPerOrder: 500,
+    maxRedeemPointsPerProduct: 30
+}));
+const getUserAvailableLoyaltyPointsMock = vi.fn((user = {}) =>
+    Math.max(0, Number(user.loyaltyPoints || 0) - Number(user.reservedLoyaltyPoints || 0))
+);
+const releaseReservedLoyaltyRedemptionMock = vi.fn();
+const releaseUserReservedLoyaltyPointsMock = vi.fn();
+const reserveLoyaltyRedemptionMock = vi.fn();
+const queueAutomationEmailMock = vi.fn();
 
 vi.mock('../models/orderModel.js', () => ({
     default: orderModelMock
+}));
+
+vi.mock('../models/paymentAttemptModel.js', () => ({
+    default: paymentAttemptModelMock
 }));
 
 vi.mock('../models/userModel.js', () => ({
@@ -70,14 +141,38 @@ vi.mock('../services/idempotencyService.js', () => ({
     completeIdempotentRequest: completeIdempotentRequestMock
 }));
 
+vi.mock('../services/productInventoryService.js', () => ({
+    backfillMissingProductInventory: backfillMissingProductInventoryMock,
+    releaseInventoryForItems: releaseInventoryForItemsMock,
+    reserveInventoryForItems: reserveInventoryForItemsMock
+}));
+
+vi.mock('../services/loyaltyService.js', () => ({
+    awardOrderDeliveryRewards: awardOrderDeliveryRewardsMock,
+    calculateLoyaltyRedemption: calculateLoyaltyRedemptionMock,
+    finalizeReservedLoyaltyRedemption: finalizeReservedLoyaltyRedemptionMock,
+    getLoyaltyRedemptionRules: getLoyaltyRedemptionRulesMock,
+    getUserAvailableLoyaltyPoints: getUserAvailableLoyaltyPointsMock,
+    releaseReservedLoyaltyRedemption: releaseReservedLoyaltyRedemptionMock,
+    releaseUserReservedLoyaltyPoints: releaseUserReservedLoyaltyPointsMock,
+    reserveLoyaltyRedemption: reserveLoyaltyRedemptionMock
+}));
+
+vi.mock('../services/marketingAutomationService.js', () => ({
+    queueAutomationEmail: queueAutomationEmailMock
+}));
+
 const {
     placeOrderStripe,
     placeOrderRazorpay,
     verifyStripe,
     verifyRazorpay,
     handleStripeWebhook,
-    handleRazorpayWebhook
+    handleRazorpayWebhook,
+    placeOrderCOD,
+    updateOrderStatus
 } = await import('../controllers/orderController.js');
+const { previewCheckoutPricing } = await import('../controllers/orderController.js');
 
 const createRes = () => {
     const res = {};
@@ -148,6 +243,184 @@ describe('orderController unit tests', () => {
         expect(res.status).toHaveBeenCalledWith(409);
         expect(res.json).toHaveBeenCalledWith(
             expect.objectContaining({ success: false, message: expect.stringContaining('Idempotency key already used') })
+        );
+    });
+
+    it('places a COD order and clears the cart for cart checkout', async () => {
+        beginIdempotentRequestMock.mockResolvedValueOnce({
+            action: 'proceed',
+            recordId: 'idem_record_1'
+        });
+
+        productModelMock.find.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce([
+                {
+                    _id: '507f1f77bcf86cd799439011',
+                    name: 'Test Tee',
+                    price: 299,
+                    image: ['https://example.com/product.jpg'],
+                    stock: 10,
+                    status: 'active'
+                }
+            ])
+        });
+        userModelMock.findById.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce({
+                _id: 'user_1',
+                loyaltyPoints: 0,
+                reservedLoyaltyPoints: 0
+            })
+        });
+
+        orderModelMock.create.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439012',
+            userId: 'user_1',
+            checkoutSource: 'cart'
+        });
+
+        const req = {
+            headers: { 'idempotency-key': 'idem_cod_1' },
+            userId: 'user_1',
+            body: {
+                items: [{ _id: '507f1f77bcf86cd799439011', quantity: 1, size: 'M' }],
+                address: {
+                    firstName: 'A',
+                    lastName: 'B',
+                    street: 'S',
+                    city: 'C',
+                    state: 'ST',
+                    pincode: '123456',
+                    country: 'IN',
+                    phone: '9999999999'
+                },
+                checkoutSource: 'cart'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await placeOrderCOD(req, res);
+
+        expect(orderModelMock.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userId: 'user_1',
+                inventoryReserved: true,
+                paymentMethod: 'COD',
+                payment: false,
+                paymentStatus: 'pending',
+                checkoutSource: 'cart'
+            })
+        );
+        expect(reserveInventoryForItemsMock).toHaveBeenCalledWith(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    _id: '507f1f77bcf86cd799439011',
+                    quantity: 1
+                })
+            ])
+        );
+        expect(userModelMock.findByIdAndUpdate).toHaveBeenCalledWith('user_1', { cartData: {} });
+        expect(completeIdempotentRequestMock).toHaveBeenCalledWith(
+            expect.objectContaining({ recordId: 'idem_record_1', statusCode: 201 })
+        );
+        expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    it('previews loyalty redemption pricing for authenticated checkout', async () => {
+        productModelMock.find.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce([
+                {
+                    _id: '507f1f77bcf86cd799439011',
+                    name: 'Preview Tee',
+                    price: 299,
+                    image: ['https://example.com/product.jpg'],
+                    stock: 10,
+                    status: 'active'
+                }
+            ])
+        });
+        userModelMock.findById.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce({
+                _id: 'user_1',
+                loyaltyPoints: 180,
+                reservedLoyaltyPoints: 20
+            })
+        });
+
+        const req = {
+            userId: 'user_1',
+            body: {
+                items: [{ _id: '507f1f77bcf86cd799439011', quantity: 1, size: 'M' }],
+                pointsToRedeem: 30
+            },
+            log: { warn: vi.fn() }
+        };
+        const res = createRes();
+
+        await previewCheckoutPricing(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                pricing: expect.objectContaining({
+                    subtotal: 299,
+                    deliveryFee: 10,
+                    loyaltyDiscountAmount: 30,
+                    loyaltyPointsRedeemed: 30,
+                    total: 279,
+                    availableLoyaltyPoints: 160
+                })
+            })
+        );
+    });
+
+    it('allows redeeming 60 points when checkout has quantity two', async () => {
+        productModelMock.find.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce([
+                {
+                    _id: '507f1f77bcf86cd799439011',
+                    name: 'Preview Tee',
+                    price: 299,
+                    image: ['https://example.com/product.jpg'],
+                    stock: 10,
+                    status: 'active'
+                }
+            ])
+        });
+        userModelMock.findById.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce({
+                _id: 'user_1',
+                loyaltyPoints: 200,
+                reservedLoyaltyPoints: 20
+            })
+        });
+
+        const req = {
+            userId: 'user_1',
+            body: {
+                items: [{ _id: '507f1f77bcf86cd799439011', quantity: 2, size: 'M' }],
+                pointsToRedeem: 60
+            },
+            log: { warn: vi.fn() }
+        };
+        const res = createRes();
+
+        await previewCheckoutPricing(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                pricing: expect.objectContaining({
+                    subtotal: 598,
+                    deliveryFee: 10,
+                    loyaltyDiscountAmount: 60,
+                    loyaltyPointsRedeemed: 60,
+                    total: 548,
+                    availableLoyaltyPoints: 180
+                })
+            })
         );
     });
 
@@ -260,6 +533,7 @@ describe('orderController unit tests', () => {
             .update('order_1|pay_1')
             .digest('hex');
 
+        paymentAttemptModelMock.findOne.mockResolvedValueOnce(null);
         orderModelMock.findOne.mockResolvedValueOnce({ _id: 'order_local_1', userId: 'different_user', payment: false });
 
         const req = {
@@ -309,6 +583,8 @@ describe('orderController unit tests', () => {
     });
 
     it('marks order as paid for valid checkout.session.completed webhook', async () => {
+        paymentAttemptModelMock.findById.mockResolvedValueOnce(null);
+
         stripeConstructEventMock.mockReturnValueOnce({
             id: 'evt_paid_1',
             type: 'checkout.session.completed',
@@ -350,10 +626,18 @@ describe('orderController unit tests', () => {
             expect.objectContaining({
                 payment: true,
                 paymentStatus: 'paid',
+                inventoryReserved: true,
                 stripeSessionId: 'cs_test_1',
                 stripePaymentIntentId: 'pi_1'
             }),
             { new: true }
+        );
+        expect(finalizeReservedLoyaltyRedemptionMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                order: expect.objectContaining({
+                    _id: '507f1f77bcf86cd799439011'
+                })
+            })
         );
         expect(userModelMock.findByIdAndUpdate).toHaveBeenCalledWith('user_1', { cartData: {} });
         expect(res.status).toHaveBeenCalledWith(200);
@@ -422,6 +706,7 @@ describe('orderController unit tests', () => {
             .update(body)
             .digest('hex');
 
+        paymentAttemptModelMock.findOne.mockResolvedValueOnce(null);
         orderModelMock.findOne.mockResolvedValueOnce({
             _id: 'order_local_1',
             userId: 'user_1',
@@ -447,7 +732,110 @@ describe('orderController unit tests', () => {
             }),
             { new: true }
         );
+        expect(releaseReservedLoyaltyRedemptionMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                order: expect.objectContaining({
+                    _id: 'order_local_1'
+                })
+            })
+        );
         expect(res.status).toHaveBeenCalledWith(200);
         expect(res.json).toHaveBeenCalledWith({ received: true });
+    });
+
+    it('updates a COD order to delivered and triggers loyalty automations', async () => {
+        orderModelMock.findById.mockReset();
+        orderModelMock.findByIdAndUpdate.mockReset();
+        userModelMock.findById.mockReset();
+
+        orderModelMock.findById
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Shipped',
+                paymentMethod: 'COD',
+                payment: false,
+                deliveredAt: null
+            })
+            .mockReturnValueOnce({
+                lean: vi.fn().mockResolvedValueOnce({
+                    _id: '507f1f77bcf86cd799439011',
+                    reviewReminderQueuedAt: null
+                })
+            });
+        orderModelMock.findByIdAndUpdate
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Delivered',
+                paymentMethod: 'COD',
+                payment: true
+            })
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                reviewReminderQueuedAt: Date.now()
+            });
+        userModelMock.findById.mockReturnValueOnce({
+            lean: vi.fn().mockResolvedValueOnce({
+                _id: 'user_1',
+                name: 'Customer One',
+                loyaltyPoints: 120,
+                referredBy: ''
+            })
+        });
+        awardOrderDeliveryRewardsMock.mockResolvedValueOnce({
+            awardedOrderPoints: 20,
+            referralRewards: {
+                referrerPoints: 0,
+                newCustomerPoints: 0
+            }
+        });
+
+        const req = {
+            body: {
+                orderId: '507f1f77bcf86cd799439011',
+                status: 'Delivered'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await updateOrderStatus(req, res);
+
+        expect(orderModelMock.findByIdAndUpdate).toHaveBeenNthCalledWith(
+            1,
+            '507f1f77bcf86cd799439011',
+            expect.objectContaining({
+                status: 'Delivered',
+                payment: true,
+                paymentStatus: 'paid',
+                paymentVerifiedAt: expect.any(Number),
+                deliveredAt: expect.any(Number)
+            }),
+            { new: true }
+        );
+        expect(finalizeReservedLoyaltyRedemptionMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                order: expect.objectContaining({
+                    _id: '507f1f77bcf86cd799439011',
+                    status: 'Delivered'
+                })
+            })
+        );
+        expect(awardOrderDeliveryRewardsMock).toHaveBeenCalled();
+        expect(queueAutomationEmailMock).toHaveBeenCalledTimes(2);
+        expect(queueAutomationEmailMock).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({
+                automationKey: 'order_delivered'
+            })
+        );
+        expect(queueAutomationEmailMock).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({
+                automationKey: 'review_request'
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
     });
 });

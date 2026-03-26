@@ -30,6 +30,9 @@ const authUser = async(req,res,next) =>{
         }
 
         req.userId = token_decode.id;
+        if (!req.body || typeof req.body !== 'object') {
+            req.body = {};
+        }
         req.body.userId = token_decode.id;
         next();
     }

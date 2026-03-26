@@ -79,8 +79,11 @@ vi.mock('razorpay', () => {
 describe('checkout and order lifecycle e2e api tests', () => {
     let mongoServer;
     let app;
+    let couponModel;
     let orderModel;
+    let paymentAttemptModel;
     let productModel;
+    let userModel;
 
     const address = {
         firstName: 'A',
@@ -98,12 +101,18 @@ describe('checkout and order lifecycle e2e api tests', () => {
         await mongoose.connect(mongoServer.getUri(), { dbName: 'lavish-fashion-e2e' });
 
         const appModule = await import('../app.js');
+        const couponModule = await import('../models/couponModel.js');
         const productModule = await import('../models/productModel.js');
         const orderModule = await import('../models/orderModel.js');
+        const paymentAttemptModule = await import('../models/paymentAttemptModel.js');
+        const userModule = await import('../models/userModel.js');
 
         app = appModule.default();
+        couponModel = couponModule.default;
         productModel = productModule.default;
         orderModel = orderModule.default;
+        paymentAttemptModel = paymentAttemptModule.default;
+        userModel = userModule.default;
     }, 1200000);
 
     afterAll(async () => {
@@ -115,8 +124,36 @@ describe('checkout and order lifecycle e2e api tests', () => {
 
     beforeEach(async () => {
         stripeSessions.clear();
+        await couponModel.deleteMany({});
         await productModel.deleteMany({});
         await orderModel.deleteMany({});
+        await paymentAttemptModel.deleteMany({});
+        await userModel.deleteMany({});
+    });
+
+    it('returns public bootstrap data for client and admin integration', async () => {
+        const response = await request(app).get('/api/system/bootstrap');
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.bootstrap).toEqual(
+            expect.objectContaining({
+                runtime: expect.objectContaining({
+                    environment: expect.any(String),
+                    timestamp: expect.any(String)
+                }),
+                payments: expect.objectContaining({
+                    stripeEnabled: true,
+                    razorpayEnabled: true,
+                    razorpayKeyId: process.env.RAZORPAY_KEY_ID
+                }),
+                features: expect.objectContaining({
+                    dashboardEnabled: true,
+                    loyaltyEnabled: true,
+                    reviewMediaEnabled: false
+                })
+            })
+        );
     });
 
     it('completes stripe checkout lifecycle with webhook as source of truth', async () => {
@@ -128,6 +165,8 @@ describe('checkout and order lifecycle e2e api tests', () => {
             category: 'Men',
             subCategory: 'Topwear',
             sizes: ['M'],
+            stock: 5,
+            lowStockThreshold: 2,
             date: Date.now()
         });
 
@@ -151,20 +190,32 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(orderResponse.status).toBe(200);
         expect(orderResponse.body.success).toBe(true);
 
-        const orderId = orderResponse.body.session.client_reference_id;
+        const paymentAttemptId = orderResponse.body.session.client_reference_id;
         const sessionId = orderResponse.body.session.id;
+        const pendingStripeAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
+        const reservedStripeProduct = await productModel.findById(product._id).lean();
+
+        expect(pendingStripeAttempt.inventoryReserved).toBe(true);
+        expect(pendingStripeAttempt.status).toBe('pending');
+        expect(reservedStripeProduct.stock).toBe(4);
 
         const verifyResponse = await request(app)
             .post('/api/order/verifyStripe')
             .set('token', token)
-            .send({ orderId, success: 'true', session_id: sessionId });
+            .send({ orderId: paymentAttemptId, success: 'true', session_id: sessionId });
 
         expect(verifyResponse.status).toBe(200);
         expect(verifyResponse.body.success).toBe(true);
 
-        const postVerifyStripeOrder = await orderModel.findById(orderId).lean();
-        expect(postVerifyStripeOrder.payment).toBe(true);
-        expect(postVerifyStripeOrder.paymentStatus).toBe('paid');
+        const postVerifyStripeAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
+        const createdStripeOrder = await orderModel.findOne({ userId: pendingStripeAttempt.userId }).lean();
+        const postVerifyStripeProduct = await productModel.findById(product._id).lean();
+        expect(postVerifyStripeAttempt.status).toBe('order_created');
+        expect(createdStripeOrder).toBeTruthy();
+        expect(createdStripeOrder.payment).toBe(true);
+        expect(createdStripeOrder.paymentStatus).toBe('paid');
+        expect(createdStripeOrder.inventoryReserved).toBe(true);
+        expect(postVerifyStripeProduct.stock).toBe(4);
 
         const webhookPayload = {
             id: 'evt_checkout_complete_1',
@@ -172,17 +223,21 @@ describe('checkout and order lifecycle e2e api tests', () => {
             data: {
                 object: {
                     id: sessionId,
-                    client_reference_id: orderId,
+                    client_reference_id: paymentAttemptId,
                     payment_intent: `pi_${sessionId}`,
                     metadata: {
-                        orderId,
-                        userId: mongoose.Types.ObjectId.isValid(orderId) ? undefined : undefined
+                        orderId: paymentAttemptId,
+                        paymentAttemptId
                     }
                 }
             }
         };
 
-        webhookPayload.data.object.metadata = { orderId, userId: String((await orderModel.findById(orderId)).userId) };
+        webhookPayload.data.object.metadata = {
+            orderId: paymentAttemptId,
+            paymentAttemptId,
+            userId: String(pendingStripeAttempt.userId)
+        };
 
         const webhookResponse = await request(app)
             .post('/api/webhooks/stripe')
@@ -212,6 +267,8 @@ describe('checkout and order lifecycle e2e api tests', () => {
             category: 'Men',
             subCategory: 'Topwear',
             sizes: ['L'],
+            stock: 5,
+            lowStockThreshold: 2,
             date: Date.now()
         });
 
@@ -236,6 +293,12 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(orderResponse.body.success).toBe(true);
 
         const razorpayOrderId = orderResponse.body.order.id;
+        const pendingRazorpayAttempt = await paymentAttemptModel.findOne({ razorpayOrderId }).lean();
+        const reservedRazorpayProduct = await productModel.findById(product._id).lean();
+
+        expect(pendingRazorpayAttempt.inventoryReserved).toBe(true);
+        expect(pendingRazorpayAttempt.status).toBe('pending');
+        expect(reservedRazorpayProduct.stock).toBe(4);
 
         const paymentId = 'pay_test_e2e_1';
         const verifySignature = crypto
@@ -255,9 +318,14 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(verifyResponse.status).toBe(200);
         expect(verifyResponse.body.success).toBe(true);
 
-    const postVerifyRazorpayOrder = await orderModel.findOne({ razorpayOrderId }).lean();
-    expect(postVerifyRazorpayOrder.payment).toBe(true);
-    expect(postVerifyRazorpayOrder.paymentStatus).toBe('paid');
+        const postVerifyRazorpayAttempt = await paymentAttemptModel.findOne({ razorpayOrderId }).lean();
+        const postVerifyRazorpayOrder = await orderModel.findOne({ razorpayOrderId }).lean();
+        const postVerifyRazorpayProduct = await productModel.findById(product._id).lean();
+        expect(postVerifyRazorpayAttempt.status).toBe('order_created');
+        expect(postVerifyRazorpayOrder.payment).toBe(true);
+        expect(postVerifyRazorpayOrder.paymentStatus).toBe('paid');
+        expect(postVerifyRazorpayOrder.inventoryReserved).toBe(true);
+        expect(postVerifyRazorpayProduct.stock).toBe(4);
 
         const webhookPayload = {
             event: 'payment.captured',
@@ -295,5 +363,342 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(ordersResponse.body.orders.length).toBe(1);
         expect(ordersResponse.body.orders[0].payment).toBe(true);
         expect(ordersResponse.body.orders[0].paymentStatus).toBe('paid');
+    });
+
+    it('places a COD order and exposes it in user order history', async () => {
+        const product = await productModel.create({
+            name: 'COD Tee',
+            description: 'A premium cash on delivery test product',
+            price: 249,
+            image: ['https://example.com/image3.jpg'],
+            category: 'Men',
+            subCategory: 'Topwear',
+            sizes: ['S'],
+            stock: 5,
+            lowStockThreshold: 2,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'COD User', email: 'coduser@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `cod_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'S' }],
+                amount: 1,
+                address,
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+        expect(orderResponse.body.success).toBe(true);
+
+        const createdOrder = await orderModel.findById(orderResponse.body.orderId).lean();
+        const reservedCodProduct = await productModel.findById(product._id).lean();
+        expect(createdOrder.paymentMethod).toBe('COD');
+        expect(createdOrder.payment).toBe(false);
+        expect(createdOrder.paymentStatus).toBe('pending');
+        expect(createdOrder.inventoryReserved).toBe(true);
+        expect(reservedCodProduct.stock).toBe(4);
+
+        const ordersResponse = await request(app)
+            .post('/api/order/userorders')
+            .set('token', token)
+            .send({});
+
+        expect(ordersResponse.status).toBe(200);
+        expect(ordersResponse.body.orders.length).toBe(1);
+        expect(ordersResponse.body.orders[0].paymentMethod).toBe('COD');
+    });
+
+    it('releases reserved inventory when Stripe checkout is cancelled', async () => {
+        const product = await productModel.create({
+            name: 'Stripe Cancel Tee',
+            description: 'A product used to verify inventory release on payment cancellation',
+            price: 399,
+            image: ['https://example.com/image4.jpg'],
+            category: 'Men',
+            subCategory: 'Topwear',
+            sizes: ['M'],
+            stock: 2,
+            lowStockThreshold: 1,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Cancel User', email: 'canceluser@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const orderResponse = await request(app)
+            .post('/api/order/stripe')
+            .set('token', token)
+            .set('idempotency-key', `stripe_cancel_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                amount: 1,
+                address
+            });
+
+        expect(orderResponse.status).toBe(200);
+        expect(orderResponse.body.success).toBe(true);
+
+        const paymentAttemptId = orderResponse.body.session.client_reference_id;
+        const stockAfterReserve = await productModel.findById(product._id).lean();
+        expect(stockAfterReserve.stock).toBe(1);
+
+        const cancelResponse = await request(app)
+            .post('/api/order/verifyStripe')
+            .set('token', token)
+            .send({ orderId: paymentAttemptId, success: 'false' });
+
+        expect(cancelResponse.status).toBe(200);
+        expect(cancelResponse.body.success).toBe(false);
+
+        const cancelledAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
+        const userOrdersAfterCancel = await orderModel.find({ userId: cancelledAttempt.userId }).lean();
+        const restoredProduct = await productModel.findById(product._id).lean();
+
+        expect(cancelledAttempt.status).toBe('cancelled');
+        expect(cancelledAttempt.inventoryReserved).toBe(false);
+        expect(userOrdersAfterCancel.length).toBe(0);
+        expect(restoredProduct.stock).toBe(2);
+    });
+
+    it('applies coupon pricing during validation and COD checkout', async () => {
+        const product = await productModel.create({
+            name: 'Coupon Tee',
+            description: 'A product used to validate coupon calculations',
+            price: 1000,
+            image: ['https://example.com/image5.jpg'],
+            category: 'Women',
+            subCategory: 'Topwear',
+            sizes: ['M'],
+            stock: 5,
+            lowStockThreshold: 2,
+            date: Date.now()
+        });
+
+        const coupon = await couponModel.create({
+            code: 'LAUNCH20',
+            description: 'Launch campaign discount',
+            discountType: 'percentage',
+            discountValue: 20,
+            minOrderAmount: 500,
+            perUserLimit: 1,
+            isActive: true
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Coupon User', email: 'couponuser@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const validationResponse = await request(app)
+            .post('/api/coupon/validate')
+            .set('token', token)
+            .send({
+                couponCode: 'launch20',
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }]
+            });
+
+        expect(validationResponse.status).toBe(200);
+        expect(validationResponse.body.pricing.subtotal).toBe(1000);
+        expect(validationResponse.body.pricing.discountAmount).toBe(200);
+        expect(validationResponse.body.pricing.total).toBe(810);
+        expect(validationResponse.body.pricing.appliedCoupon.code).toBe('LAUNCH20');
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `coupon_cod_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                address,
+                couponCode: 'launch20',
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+        expect(orderResponse.body.success).toBe(true);
+
+        const createdOrder = await orderModel.findById(orderResponse.body.orderId).lean();
+        expect(createdOrder.subtotal).toBe(1000);
+        expect(createdOrder.deliveryFee).toBe(10);
+        expect(createdOrder.discountAmount).toBe(200);
+        expect(createdOrder.amount).toBe(810);
+        expect(createdOrder.couponCode).toBe('LAUNCH20');
+        expect(createdOrder.couponId).toBe(String(coupon._id));
+
+        const exhaustedValidationResponse = await request(app)
+            .post('/api/coupon/validate')
+            .set('token', token)
+            .send({
+                couponCode: 'LAUNCH20',
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }]
+            });
+
+        expect(exhaustedValidationResponse.status).toBe(400);
+        expect(exhaustedValidationResponse.body.message).toContain('maximum number of times');
+    });
+
+    it('reserves and settles loyalty point redemption across preview, COD placement, and delivery', async () => {
+        const product = await productModel.create({
+            name: 'Rewards Tee',
+            description: 'A product used to validate loyalty point redemption lifecycle',
+            price: 500,
+            image: ['https://example.com/image7.jpg'],
+            category: 'Women',
+            subCategory: 'Topwear',
+            sizes: ['M'],
+            stock: 5,
+            lowStockThreshold: 2,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Rewards User', email: 'rewardsuser@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const rewardsUser = await userModel.findOneAndUpdate(
+            { email: 'rewardsuser@example.com' },
+            {
+                loyaltyPoints: 200,
+                lifetimeLoyaltyPoints: 200
+            },
+            { new: true }
+        );
+
+        const previewResponse = await request(app)
+            .post('/api/order/preview')
+            .set('token', token)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                pointsToRedeem: 100
+            });
+
+        expect(previewResponse.status).toBe(200);
+        expect(previewResponse.body.pricing.subtotal).toBe(500);
+        expect(previewResponse.body.pricing.loyaltyDiscountAmount).toBe(100);
+        expect(previewResponse.body.pricing.loyaltyPointsRedeemed).toBe(100);
+        expect(previewResponse.body.pricing.availableLoyaltyPoints).toBe(200);
+        expect(previewResponse.body.pricing.total).toBe(410);
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `rewards_cod_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                address,
+                pointsToRedeem: 100,
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+        expect(orderResponse.body.success).toBe(true);
+
+        const reservedOrder = await orderModel.findById(orderResponse.body.orderId).lean();
+        const reservedUser = await userModel.findById(rewardsUser._id).lean();
+
+        expect(reservedOrder.loyaltyDiscountAmount).toBe(100);
+        expect(reservedOrder.loyaltyPointsRedeemed).toBe(100);
+        expect(reservedOrder.loyaltyRedemptionStatus).toBe('reserved');
+        expect(reservedOrder.amount).toBe(410);
+        expect(reservedUser.loyaltyPoints).toBe(200);
+        expect(reservedUser.reservedLoyaltyPoints).toBe(100);
+
+        const adminLoginResponse = await request(app)
+            .post('/api/user/admin')
+            .send({
+                email: process.env.ADMIN_EMAIL,
+                password: process.env.ADMIN_PASSWORD
+            });
+
+        expect(adminLoginResponse.status).toBe(200);
+        const adminToken = adminLoginResponse.body.token;
+
+        const deliveredResponse = await request(app)
+            .post('/api/order/status')
+            .set('token', adminToken)
+            .send({
+                orderId: String(reservedOrder._id),
+                status: 'Delivered'
+            });
+
+        expect(deliveredResponse.status).toBe(200);
+
+        const settledOrder = await orderModel.findById(reservedOrder._id).lean();
+        const settledUser = await userModel.findById(rewardsUser._id).lean();
+
+        expect(settledOrder.loyaltyRedemptionStatus).toBe('redeemed');
+        expect(settledUser.reservedLoyaltyPoints).toBe(0);
+        expect(settledUser.loyaltyPoints).toBe(110);
+    });
+
+    it('supports wishlist add and remove flows for authenticated users', async () => {
+        const product = await productModel.create({
+            name: 'Wishlist Tee',
+            description: 'A product used to validate wishlist endpoints',
+            price: 499,
+            image: ['https://example.com/image6.jpg'],
+            category: 'Men',
+            subCategory: 'Topwear',
+            sizes: ['L'],
+            stock: 4,
+            lowStockThreshold: 1,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Wishlist User', email: 'wishlistuser@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const initialWishlistResponse = await request(app)
+            .get('/api/user/wishlist')
+            .set('token', token);
+
+        expect(initialWishlistResponse.status).toBe(200);
+        expect(initialWishlistResponse.body.wishlist).toEqual([]);
+
+        const addWishlistResponse = await request(app)
+            .post('/api/user/wishlist/toggle')
+            .set('token', token)
+            .send({ itemId: String(product._id) });
+
+        expect(addWishlistResponse.status).toBe(200);
+        expect(addWishlistResponse.body.wishlist).toEqual([String(product._id)]);
+
+        const persistedWishlistResponse = await request(app)
+            .get('/api/user/wishlist')
+            .set('token', token);
+
+        expect(persistedWishlistResponse.status).toBe(200);
+        expect(persistedWishlistResponse.body.wishlist).toEqual([String(product._id)]);
+
+        const removeWishlistResponse = await request(app)
+            .post('/api/user/wishlist/toggle')
+            .set('token', token)
+            .send({ itemId: String(product._id) });
+
+        expect(removeWishlistResponse.status).toBe(200);
+        expect(removeWishlistResponse.body.wishlist).toEqual([]);
     });
 });

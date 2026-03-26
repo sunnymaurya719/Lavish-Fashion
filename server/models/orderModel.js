@@ -53,9 +53,25 @@ const orderSchema = new mongoose.Schema({
             message: 'Order must include at least one item'
         }
     },
+    subtotal : {type:Number,default:0,min:0},
+    deliveryFee : {type:Number,default:10,min:0},
+    discountAmount : {type:Number,default:0,min:0},
+    couponDiscountAmount: { type: Number, default: 0, min: 0 },
+    loyaltyDiscountAmount: { type: Number, default: 0, min: 0 },
+    couponCode: { type: String, default: '', trim: true, uppercase: true, maxlength: 30 },
+    couponId: {
+        type: String,
+        default: '',
+        validate: {
+            validator: (value) => !value || objectIdStringRegex.test(String(value || '')),
+            message: 'Invalid coupon id format'
+        }
+    },
     amount : {type:Number,required:true,min:0},
     address : {type:orderAddressSchema, required:true},
     status : {type:String, required:true,default:'Order Placed'},
+    checkoutSource: { type: String, enum: ['cart', 'buy_now'], default: 'cart' },
+    inventoryReserved: { type: Boolean, default: false },
     paymentMethod : {type:String, required:true, enum: ['COD', 'Stripe', 'Razorpay']},
     payment : {type:Boolean,required:true , default:false},
     paymentStatus: { type: String, enum: ['pending', 'paid', 'failed', 'cancelled'], default: 'pending' },
@@ -65,6 +81,14 @@ const orderSchema = new mongoose.Schema({
     razorpayOrderId: { type: String, default: null, index: true },
     razorpayPaymentId: { type: String, default: null },
     gatewayEventId: { type: String, default: null },
+    deliveredAt: { type: Number, default: null },
+    loyaltyPointsAwarded: { type: Number, default: 0 },
+    loyaltyAwardedAt: { type: Number, default: null },
+    loyaltyPointsRedeemed: { type: Number, default: 0, min: 0 },
+    loyaltyRedemptionStatus: { type: String, enum: ['none', 'reserved', 'redeemed', 'released'], default: 'none' },
+    loyaltyRedemptionAppliedAt: { type: Number, default: null },
+    loyaltyRedemptionReleasedAt: { type: Number, default: null },
+    reviewReminderQueuedAt: { type: Number, default: null },
     date : {type:Number , required : true}
 
 })
