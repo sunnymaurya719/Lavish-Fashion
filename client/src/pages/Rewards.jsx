@@ -218,7 +218,7 @@ const Rewards = () => {
 
   if (!token) {
     return (
-      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4 border-t'>
+      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
         <h2 className='text-3xl font-semibold text-slate-900'>Rewards</h2>
         <p className='mt-2 text-base text-slate-600'>Earn & redeem points</p>
         <p className='mt-4 max-w-md text-sm text-slate-500'>Please login to unlock your rewards balance, referral code, and activity history.</p>
@@ -234,7 +234,7 @@ const Rewards = () => {
 
   if (isLoading) {
     return (
-      <div className='border-t pt-8 sm:pt-10 pb-14 space-y-4'>
+      <div className='pt-8 sm:pt-10 pb-14 space-y-4'>
         <div className='lf-shimmer h-8 w-40 rounded-full'></div>
         <div className='lf-shimmer h-5 w-52 rounded-full'></div>
         <div className='rounded-[28px] bg-slate-900 p-5 sm:p-6'>
@@ -253,7 +253,7 @@ const Rewards = () => {
   }
 
   return (
-    <div className='rewards-shell border-t pt-8 sm:pt-10 pb-14'>
+    <div className='rewards-shell pt-8 sm:pt-10 pb-14'>
       <div className='rewards-entrance rewards-delay-0 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
         <div>
           <h1 className='text-[2rem] sm:text-[2.35rem] font-semibold tracking-[-0.015em] text-[#111] leading-none'>Rewards</h1>
