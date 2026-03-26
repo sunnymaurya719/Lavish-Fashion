@@ -1,6 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import Title from '../components/Title';
 import { ShopContext } from '../context/ShopContext';
 
 const defaultMarketingPreferences = {
@@ -21,6 +20,29 @@ const formatDate = (value) => {
     year: 'numeric',
   });
 };
+
+const preferenceItems = [
+  {
+    key: 'emailSubscribed',
+    title: 'Email subscription',
+    description: 'Master switch for account email communication.',
+  },
+  {
+    key: 'promotionalCampaigns',
+    title: 'Promotional campaigns',
+    description: 'Launch offers, seasonal drops, and promotion broadcasts.',
+  },
+  {
+    key: 'loyaltyUpdates',
+    title: 'Loyalty updates',
+    description: 'Rewards balance changes, referral unlocks, and milestone emails.',
+  },
+  {
+    key: 'reviewReminders',
+    title: 'Review reminders',
+    description: 'Post-delivery reminders to leave verified product reviews.',
+  },
+];
 
 const Profile = () => {
   const { BACKEND_URL, getWishlistCount, navigate, toast, token } = useContext(ShopContext);
@@ -106,12 +128,13 @@ const Profile = () => {
         value: profileMeta.reservedLoyaltyPoints,
       },
       {
-        label: 'Successful referrals',
-        value: profileMeta.successfulReferralCount,
+        label: 'Lifetime points',
+        value: profileMeta.lifetimeLoyaltyPoints,
       },
     ],
     [profileMeta]
   );
+  const avatarInitial = (formData.name || 'L').trim().charAt(0).toUpperCase();
 
   const onChangeHandler = (event) => {
     const { name, value } = event.target;
@@ -217,7 +240,7 @@ const Profile = () => {
 
   if (!token) {
     return (
-      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4 border-t'>
+      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
         <h2 className='text-2xl font-semibold mb-2'>Login Required</h2>
         <p className='text-gray-600 mb-6'>Please login to view and update your profile.</p>
         <button
@@ -232,42 +255,42 @@ const Profile = () => {
 
   if (isLoading) {
     return (
-      <div className='border-t pt-16'>
+      <div className='pt-12'>
         <p className='text-sm text-gray-500'>Loading your profile...</p>
       </div>
     );
   }
 
   return (
-    <div className='border-t pt-12'>
-      <div className='mb-8'>
-        <Title text1='MY' text2='PROFILE' />
-      </div>
+    <div className='pt-6 sm:pt-8 space-y-4 sm:space-y-6'>
+      <header className='flex items-center gap-4 px-1'>
+        <div className='flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xl font-semibold text-white'>
+          {avatarInitial}
+        </div>
+        <div>
+          <h1 className='text-[2rem] sm:text-[2.3rem] font-semibold tracking-[-0.015em] text-[#111] leading-none'>
+            Profile
+          </h1>
+          <p className='mt-1 text-sm text-[#777]'>Manage your account</p>
+          <p className='mt-1 text-xs text-slate-500'>{formData.email}</p>
+        </div>
+      </header>
 
-      <section className='grid gap-6 xl:grid-cols-[1.1fr_0.9fr]'>
-        <form onSubmit={saveProfile} className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='flex items-start justify-between gap-4'>
-            <div>
-              <p className='text-lg font-semibold text-slate-900'>Account details</p>
-              <p className='text-sm text-slate-500'>Keep your personal information and contact details current.</p>
-            </div>
-            <button
-              type='submit'
-              disabled={isSavingProfile}
-              className='rounded-2xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:opacity-60'
-            >
-              {isSavingProfile ? 'Saving...' : 'Save profile'}
-            </button>
+      <section className='grid gap-4 xl:grid-cols-[1.05fr_0.95fr]'>
+        <form onSubmit={saveProfile} className='rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
+          <div>
+            <p className='text-2xl font-semibold text-slate-900'>Account details</p>
+            <p className='mt-2 text-sm text-slate-500'>Keep your personal and contact information current.</p>
           </div>
 
-          <div className='mt-6 grid gap-4 sm:grid-cols-2'>
+          <div className='mt-5 grid gap-4 sm:grid-cols-2'>
             <div>
               <p className='mb-2 text-sm text-slate-600'>Full name</p>
               <input
                 name='name'
                 value={formData.name}
                 onChange={onChangeHandler}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
+                className='w-full rounded-xl bg-[#f5f5f5] px-4 py-3 text-[#111] outline-none'
                 type='text'
                 required
               />
@@ -278,7 +301,7 @@ const Profile = () => {
                 name='phone'
                 value={formData.phone}
                 onChange={onChangeHandler}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
+                className='w-full rounded-xl bg-[#f5f5f5] px-4 py-3 text-[#111] outline-none'
                 type='tel'
                 placeholder='Optional'
               />
@@ -289,77 +312,76 @@ const Profile = () => {
             <p className='mb-2 text-sm text-slate-600'>Email address</p>
             <input
               value={formData.email}
-              className='w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500'
+              className='w-full rounded-xl bg-slate-100 px-4 py-3 text-slate-500'
               type='email'
               disabled
             />
             <p className='mt-2 text-xs text-slate-500'>Email changes are disabled in this version.</p>
           </div>
+
+          <button
+            type='submit'
+            disabled={isSavingProfile}
+            className='mt-5 w-full rounded-full bg-slate-950 px-5 py-3 text-sm font-medium uppercase tracking-[0.14em] text-white disabled:opacity-60'
+          >
+            {isSavingProfile ? 'Saving...' : 'Save profile'}
+          </button>
         </form>
 
-        <div className='space-y-6'>
-          <div className='rounded-[32px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-6 text-white shadow-lg'>
-            <p className='text-xs uppercase tracking-[0.3em] text-slate-300'>Account summary</p>
-            <p className='mt-3 text-2xl font-semibold'>{formData.name || 'Lavish member'}</p>
+        <div className='space-y-4'>
+          <div className='rounded-[28px] bg-gradient-to-br from-[#020617] via-[#0f172a] to-[#1e293b] p-5 text-white shadow-[0_14px_36px_rgba(2,6,23,0.25)]'>
+            <p className='text-[11px] uppercase tracking-[0.24em] text-slate-300'>Account summary</p>
+            <p className='mt-3 text-3xl font-semibold'>{formData.name || 'Lavish member'}</p>
             <p className='mt-2 text-sm text-slate-300'>Member since {formatDate(profileMeta.createdAt)}</p>
-            <p className='mt-2 text-sm text-slate-300'>
-              {profileMeta.availableLoyaltyPoints} points are ready to redeem and {profileMeta.reservedLoyaltyPoints} are
-              currently tied to open checkouts.
-            </p>
 
-            <div className='mt-6 grid grid-cols-2 gap-3'>
+            <div className='mt-4 grid grid-cols-2 gap-3'>
               {summaryCards.map((card) => (
-                <div key={card.label} className='rounded-2xl bg-white/8 px-4 py-4'>
-                  <p className='text-xs uppercase tracking-[0.2em] text-slate-300'>{card.label}</p>
-                  <p className='mt-2 text-2xl font-semibold text-white'>{card.value}</p>
+                <div key={card.label} className='rounded-2xl bg-white/10 px-3 py-3'>
+                  <p className='text-[10px] uppercase tracking-[0.18em] text-slate-300'>{card.label}</p>
+                  <p className='mt-1 text-2xl font-semibold text-white'>{card.value}</p>
                 </div>
               ))}
             </div>
 
-            <div className='mt-4 rounded-2xl bg-white/8 px-4 py-4'>
-              <p className='text-xs uppercase tracking-[0.2em] text-slate-300'>Lifetime points</p>
-              <p className='mt-2 text-2xl font-semibold text-white'>{profileMeta.lifetimeLoyaltyPoints}</p>
-            </div>
-
-            <div className='mt-5 grid gap-3 sm:grid-cols-2'>
+            <div className='mt-4 grid grid-cols-2 gap-3'>
               <button
                 type='button'
                 onClick={() => navigate('/orders')}
-                className='rounded-2xl bg-white px-4 py-3 text-sm font-medium text-slate-950'
+                className='rounded-full bg-white px-4 py-3 text-sm font-medium text-slate-950'
               >
                 View orders
               </button>
               <button
                 type='button'
                 onClick={() => navigate('/rewards')}
-                className='rounded-2xl border border-white/15 px-4 py-3 text-sm font-medium text-white'
+                className='rounded-full border border-white/35 px-4 py-3 text-sm font-medium text-white'
               >
-                Open rewards hub
+                Rewards Hub
               </button>
             </div>
           </div>
 
-          <div className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-            <div className='flex items-start justify-between gap-4'>
+          <div className='rounded-[28px] bg-white p-4 sm:p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
+            <div className='flex items-start justify-between gap-3'>
               <div>
-                <p className='text-lg font-semibold text-slate-900'>Referral code</p>
-                <p className='text-sm text-slate-500'>Share this code with new shoppers to unlock referral rewards.</p>
+                <p className='text-xl font-semibold text-slate-900'>Referral code</p>
+                <p className='mt-1 text-sm text-slate-500'>Share with new shoppers to unlock rewards.</p>
               </div>
               <button
                 type='button'
                 onClick={copyReferralCode}
-                className='rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
+                className='rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700'
               >
                 Copy
               </button>
             </div>
 
-            <div className='mt-5 rounded-[28px] bg-slate-950 px-5 py-5 text-white'>
-              <p className='text-xs uppercase tracking-[0.3em] text-slate-300'>Your code</p>
-              <p className='mt-3 text-3xl font-semibold tracking-[0.22em]'>{profileMeta.referralCode || 'PREPARING'}</p>
+            <div className='mt-4 rounded-2xl bg-slate-950 px-4 py-4 text-white'>
+              <p className='text-[10px] uppercase tracking-[0.22em] text-slate-300'>Your code</p>
+              <p className='mt-2 text-4xl font-semibold tracking-[0.18em]'>{profileMeta.referralCode || 'PREPARING'}</p>
             </div>
 
-            <div className='mt-5 flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600'>
+            <div className='mt-3 flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600'>
               <span>Wishlist items</span>
               <span className='font-semibold text-slate-900'>{getWishlistCount()}</span>
             </div>
@@ -367,75 +389,56 @@ const Profile = () => {
         </div>
       </section>
 
-      <section className='mt-8 rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-        <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
-          <div>
-            <p className='text-lg font-semibold text-slate-900'>Email and automation preferences</p>
-            <p className='text-sm text-slate-500'>
-              Control which updates you receive for campaigns, rewards, and review follow-ups.
-            </p>
-          </div>
-          <button
-            type='button'
-            onClick={saveMarketingPreferences}
-            disabled={isSavingPreferences}
-            className='rounded-2xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:opacity-60'
-          >
-            {isSavingPreferences ? 'Saving...' : 'Save preferences'}
-          </button>
+      <section className='rounded-[28px] bg-white p-4 sm:p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'>
+        <div>
+          <p className='text-2xl font-semibold text-slate-900'>Email and automation preferences</p>
+          <p className='mt-2 text-sm text-slate-500'>Control campaign, rewards, and review update notifications.</p>
         </div>
 
-        <div className='mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
-          {[
-            {
-              key: 'emailSubscribed',
-              title: 'Email subscription',
-              description: 'Master switch for account email communication.',
-            },
-            {
-              key: 'promotionalCampaigns',
-              title: 'Promotional campaigns',
-              description: 'Launch offers, seasonal drops, and promotion broadcasts.',
-            },
-            {
-              key: 'loyaltyUpdates',
-              title: 'Loyalty updates',
-              description: 'Rewards balance changes, referral unlocks, and milestone emails.',
-            },
-            {
-              key: 'reviewReminders',
-              title: 'Review reminders',
-              description: 'Post-delivery reminders to leave verified product reviews.',
-            },
-          ].map((preference) => (
-            <label
-              key={preference.key}
-              className='flex cursor-pointer flex-col justify-between rounded-[28px] border border-slate-200 bg-slate-50 p-5'
-            >
-              <div>
-                <p className='text-base font-semibold text-slate-900'>{preference.title}</p>
-                <p className='mt-2 text-sm text-slate-500'>{preference.description}</p>
-              </div>
+        <div className='mt-4 divide-y divide-slate-100'>
+          {preferenceItems.map((preference) => {
+            const enabled = Boolean(marketingPreferences[preference.key]);
 
-              <div className='mt-5 flex items-center justify-between'>
-                <span className='text-sm font-medium text-slate-600'>
-                  {marketingPreferences[preference.key] ? 'Enabled' : 'Disabled'}
-                </span>
-                <input
-                  checked={Boolean(marketingPreferences[preference.key])}
-                  onChange={(event) =>
+            return (
+              <div key={preference.key} className='py-4 flex items-center justify-between gap-4'>
+                <div>
+                  <p className='text-lg font-semibold text-slate-900'>{preference.title}</p>
+                  <p className='mt-1 text-sm text-slate-500'>{preference.description}</p>
+                </div>
+
+                <button
+                  type='button'
+                  role='switch'
+                  aria-checked={enabled}
+                  onClick={() =>
                     setMarketingPreferences((current) => ({
                       ...current,
-                      [preference.key]: event.target.checked,
+                      [preference.key]: !enabled,
                     }))
                   }
-                  type='checkbox'
-                  className='h-5 w-5'
-                />
+                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition ${
+                    enabled ? 'bg-slate-900' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                      enabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  ></span>
+                </button>
               </div>
-            </label>
-          ))}
+            );
+          })}
         </div>
+
+        <button
+          type='button'
+          onClick={saveMarketingPreferences}
+          disabled={isSavingPreferences}
+          className='mt-4 w-full rounded-full bg-slate-950 px-5 py-3 text-sm font-medium uppercase tracking-[0.14em] text-white disabled:opacity-60'
+        >
+          {isSavingPreferences ? 'Saving...' : 'Save preferences'}
+        </button>
       </section>
     </div>
   );
