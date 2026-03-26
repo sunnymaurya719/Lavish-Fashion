@@ -15,6 +15,7 @@ const Collection = () => {
   const [filterProducts, setFilterProducts] = useState([]);
   const [category, setCategory] = useState([]);
   const [subCategory, setSubCategory] = useState([]);
+  const activeFilterCount = category.length + subCategory.length;
 
   const toggleCategory = (value) => {
     if (category.includes(value)) {
@@ -95,7 +96,14 @@ const Collection = () => {
           onClick={() => setShowFilter(!showFilter)}
           className='w-full sm:w-auto flex items-center justify-between gap-3 px-4 py-3 sm:p-0 text-left'
         >
-          <span className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Filters</span>
+          <span className='inline-flex items-center gap-2'>
+            <span className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Filters</span>
+            {activeFilterCount > 0 && (
+              <span className='inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#111] px-1.5 text-[10px] font-medium text-white'>
+                {activeFilterCount}
+              </span>
+            )}
+          </span>
           <img
             className={`h-3 sm:hidden transition-transform ${showFilter ? 'rotate-90' : ''}`}
             src={assets.dropdown_icon}
