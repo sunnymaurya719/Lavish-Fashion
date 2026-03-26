@@ -58,6 +58,7 @@ const ToastCloseButton = ({ closeToast }) => (
 const MobileToastContainer = () => (
   <ToastContainer
     position='bottom-center'
+    theme='dark'
     autoClose={2500}
     closeOnClick={false}
     draggable
@@ -72,9 +73,20 @@ const MobileToastContainer = () => (
     icon={ToastIcon}
     closeButton={ToastCloseButton}
     transition={mobileToastTransition}
-    containerClassName='lf-toast-container'
-    toastClassName='lf-toast'
-    bodyClassName='lf-toast-body'
+    containerClassName={() => 'lf-toast-container'}
+    toastClassName={() => 'lf-toast'}
+    bodyClassName={() => 'lf-toast-body'}
+    toastStyle={{
+      background: 'rgba(17, 17, 17, 0.95)',
+      color: '#fff',
+      borderRadius: '14px',
+      boxShadow: '0 10px 30px rgba(0, 0, 0, 0.25)',
+      border: '1px solid rgba(255, 255, 255, 0.08)',
+      backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)',
+      padding: '0.75rem 0.82rem',
+      minHeight: '54px',
+    }}
   />
 );
 

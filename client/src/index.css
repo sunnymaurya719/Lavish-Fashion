@@ -217,21 +217,22 @@ a.active hr{
   transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
 }
 
-.lf-toast-container {
+.Toastify__toast-container.lf-toast-container {
   pointer-events: none;
   width: calc(100% - 1.5rem);
   max-width: 420px;
   margin: 0;
   padding: 0;
+  z-index: 60;
 }
 
-.lf-toast-container.Toastify__toast-container--bottom-center {
+.Toastify__toast-container.lf-toast-container.Toastify__toast-container--bottom-center {
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  bottom: max(16px, calc(16px + env(safe-area-inset-bottom)));
 }
 
-.lf-toast {
+.Toastify__toast-container.lf-toast-container .Toastify__toast.lf-toast {
   pointer-events: auto;
   display: flex;
   align-items: center;
@@ -247,7 +248,7 @@ a.active hr{
   padding: 0.75rem 0.82rem;
 }
 
-.lf-toast-body {
+.Toastify__toast-container.lf-toast-container .Toastify__toast-body.lf-toast-body {
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -262,6 +263,16 @@ a.active hr{
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@media (min-width: 768px) {
+  .Toastify__toast-container.lf-toast-container {
+    width: min(420px, calc(100% - 2rem));
+  }
+
+  .Toastify__toast-container.lf-toast-container.Toastify__toast-container--bottom-center {
+    bottom: 24px;
+  }
 }
 
 .lf-toast-icon {
