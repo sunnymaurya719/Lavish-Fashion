@@ -116,7 +116,7 @@ const Hero = () => {
     if (showHeroSkeleton) {
         return (
             <section
-                className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-[460px]'
+                className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-0 lg:min-h-[460px]'
                 aria-label='Loading featured products'
                 aria-busy='true'
             >
@@ -158,7 +158,7 @@ const Hero = () => {
     }
 
     return (
-        <section className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-[460px]'>
+        <section className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-0 lg:min-h-[460px]'>
             <div className='pointer-events-none absolute inset-0'>
                 <span
                     className='absolute -left-28 -top-24 h-64 w-64 rounded-full border border-[#414141]/8 will-change-transform'
