@@ -46,6 +46,8 @@ const defaultEligibility = {
   orderId: '',
 };
 
+const IMAGE_SWIPE_THRESHOLD = 40;
+
 const isMissingRouteError = (error) => {
   const statusCode = Number(error?.response?.status || 0);
   const errorMessage = String(error?.response?.data?.message || '').toLowerCase();
@@ -81,7 +83,8 @@ const Product = () => {
     loadingProductsData,
   } = useContext(ShopContext);
   const [productData, setProductData] = useState(false);
-  const [image, setImage] = useState('');
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [isImageZoomed, setIsImageZoomed] = useState(false);
   const [size, setSize] = useState('');
   const [reviews, setReviews] = useState([]);
   const [reviewSummary, setReviewSummary] = useState(defaultReviewSummary);
@@ -95,6 +98,10 @@ const Product = () => {
   const [isLoadingReviews, setIsLoadingReviews] = useState(true);
   const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [showSwipeHint, setShowSwipeHint] = useState(false);
+  const imageTouchStartXRef = useRef(null);
+  const imageTouchDeltaXRef = useRef(0);
+  const swipeHintTimerRef = useRef(null);
   const reviewMediaInputRef = useRef(null);
 
   const fetchReviews = useCallback(async () => {
@@ -193,7 +200,8 @@ const Product = () => {
     }
 
     setProductData(matchedProduct);
-    setImage(matchedProduct.image?.[0] || '');
+    setActiveImageIndex(0);
+    setIsImageZoomed(false);
     setSize((currentSize) => (matchedProduct.sizes?.includes(currentSize) ? currentSize : ''));
   }, [productId, products]);
 
@@ -272,6 +280,105 @@ const Product = () => {
   const isOutOfStock = Number(productData?.stock || 0) === 0;
   const reviewMediaEnabled =
     serverStatus === 'online' ? Boolean(serverBootstrap?.features?.reviewMediaEnabled) : true;
+  const imageList = useMemo(
+    () => (Array.isArray(productData?.image) && productData.image.length ? productData.image : []),
+    [productData?.image]
+  );
+  const activeImage = imageList[activeImageIndex] || imageList[0] || '';
+  const sizeOptions = useMemo(() => (Array.isArray(productData?.sizes) ? productData.sizes : []), [productData?.sizes]);
+  const descriptionPoints = useMemo(
+    () => [
+      productData?.description,
+      `Tailored for the ${String(productData?.category || '').toLowerCase()} wardrobe with a ${String(
+        productData?.subCategory || ''
+      ).toLowerCase()} silhouette.`,
+      `Available sizes: ${sizeOptions.join(', ') || 'Standard sizing options'}.`,
+    ].filter(Boolean),
+    [productData?.category, productData?.description, productData?.subCategory, sizeOptions]
+  );
+  const detailPoints = useMemo(
+    () => [
+      `Category: ${productData?.category || 'N/A'}`,
+      `Style: ${productData?.subCategory || 'N/A'}`,
+      `Stock status: ${isOutOfStock ? 'Out of stock' : `${productData?.stock ?? 'Available'} units available`}`,
+      '100% original product sourced for the Lavish Fashion catalog.',
+      'Cash on delivery, Stripe, and Razorpay checkout are supported.',
+      'Easy return and exchange requests can be initiated within 7 days of delivery.',
+    ],
+    [isOutOfStock, productData?.category, productData?.stock, productData?.subCategory]
+  );
+
+  const selectImageByIndex = useCallback(
+    (index) => {
+      if (!imageList.length) {
+        return;
+      }
+
+      setActiveImageIndex((index + imageList.length) % imageList.length);
+      setIsImageZoomed(false);
+      setShowSwipeHint(false);
+    },
+    [imageList.length]
+  );
+
+  const handleImageTouchStart = (event) => {
+    imageTouchStartXRef.current = event.touches?.[0]?.clientX ?? null;
+    imageTouchDeltaXRef.current = 0;
+    setShowSwipeHint(false);
+  };
+
+  const handleImageTouchMove = (event) => {
+    if (imageTouchStartXRef.current === null) {
+      return;
+    }
+
+    const currentX = event.touches?.[0]?.clientX ?? imageTouchStartXRef.current;
+    imageTouchDeltaXRef.current = currentX - imageTouchStartXRef.current;
+  };
+
+  const handleImageTouchEnd = () => {
+    if (Math.abs(imageTouchDeltaXRef.current) >= IMAGE_SWIPE_THRESHOLD && imageList.length > 1) {
+      if (imageTouchDeltaXRef.current > 0) {
+        selectImageByIndex(activeImageIndex - 1);
+      } else {
+        selectImageByIndex(activeImageIndex + 1);
+      }
+    }
+
+    imageTouchStartXRef.current = null;
+    imageTouchDeltaXRef.current = 0;
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    if (imageList.length < 2) {
+      setShowSwipeHint(false);
+      return undefined;
+    }
+
+    const storageKey = 'lf-product-swipe-hint-shown';
+    const hasSeenHint = window.localStorage.getItem(storageKey) === '1';
+
+    if (hasSeenHint) {
+      return undefined;
+    }
+
+    setShowSwipeHint(true);
+    window.localStorage.setItem(storageKey, '1');
+    swipeHintTimerRef.current = window.setTimeout(() => {
+      setShowSwipeHint(false);
+    }, 2600);
+
+    return () => {
+      if (swipeHintTimerRef.current) {
+        window.clearTimeout(swipeHintTimerRef.current);
+        swipeHintTimerRef.current = null;
+      }
+    };
+  }, [imageList.length, productId]);
 
   const reviewBreakdownMax = useMemo(
     () => Math.max(...reviewSummary.ratingBreakdown.map((item) => Number(item.count || 0)), 1),
@@ -290,11 +397,35 @@ const Product = () => {
 
   if (!productData) {
     if (loadingProductsData) {
-      return <div className='border-t-2 pt-10 text-sm text-slate-500'>Loading product details...</div>;
+      return (
+        <div className='pt-6 animate-pulse'>
+          <div className='grid gap-7 lg:grid-cols-[1.03fr_0.97fr]'>
+            <div className='space-y-3'>
+              <div className='aspect-[4/5] rounded-[32px] bg-slate-100'></div>
+              <div className='flex gap-2 overflow-hidden'>
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div key={index} className='h-20 w-20 rounded-2xl bg-slate-100'></div>
+                ))}
+              </div>
+            </div>
+
+            <div className='space-y-4'>
+              <div className='h-3 w-24 rounded-full bg-slate-200'></div>
+              <div className='h-11 w-[82%] rounded-2xl bg-slate-200'></div>
+              <div className='h-5 w-36 rounded-full bg-slate-200'></div>
+              <div className='h-10 w-32 rounded-full bg-slate-200'></div>
+              <div className='space-y-2'>
+                <div className='h-4 w-full rounded-full bg-slate-100'></div>
+                <div className='h-4 w-[88%] rounded-full bg-slate-100'></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
     }
 
     return (
-      <div className='border-t-2 pt-10'>
+      <div className='pt-10'>
         <div className='rounded-[32px] border border-slate-200 bg-white p-8 text-center shadow-sm'>
           <p className='text-2xl font-semibold text-slate-900'>Product not found</p>
           <p className='mt-3 text-sm text-slate-500'>
@@ -313,71 +444,128 @@ const Product = () => {
   }
 
   return (
-    <div className='border-t-2 pt-10 transition-opacity ease-in duration-500 opacity-100'>
-      <div className='flex gap-12 sm:gap-12 flex-col sm:flex-row'>
-        <div className='flex-1 flex flex-col-reverse gap-3 sm:flex-row'>
-          <div className='flex sm:flex-col overflow-x-auto sm:overflow-y-scroll justify-between sm:justify-normal sm:w-[18.7%] w-full'>
-            {productData.image.map((item, index) => (
-              <img
-                onClick={() => setImage(item)}
-                src={item}
-                key={index}
-                className='w-[24%] sm:w-full sm:mb-3 flex-shrink-0 cursor-pointer'
-                alt={`${productData.name} view ${index + 1}`}
-              />
-            ))}
+    <div className='pt-6 pb-28 sm:pb-0 transition-opacity ease-in duration-500 opacity-100'>
+      <section className='grid gap-7 lg:grid-cols-[1.03fr_0.97fr]'>
+        <div className='space-y-3'>
+          <div
+            className='relative overflow-hidden rounded-[32px] bg-[#f5f5f5]'
+            onTouchStart={handleImageTouchStart}
+            onTouchMove={handleImageTouchMove}
+            onTouchEnd={handleImageTouchEnd}
+          >
+            <img
+              src={activeImage}
+              alt={productData.name}
+              onClick={() => setIsImageZoomed((current) => !current)}
+              className={`w-full aspect-[4/5] object-cover cursor-zoom-in transition-transform duration-500 ${
+                isImageZoomed ? 'scale-110' : 'scale-100'
+              }`}
+            />
+
+            <button
+              type='button'
+              onClick={() => setIsImageZoomed((current) => !current)}
+              className='absolute right-4 top-4 rounded-full bg-white/85 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-slate-600 backdrop-blur-sm'
+            >
+              {isImageZoomed ? 'Reset' : 'Zoom'}
+            </button>
+
+            {showSwipeHint && imageList.length > 1 ? (
+              <div className='absolute left-1/2 -translate-x-1/2 bottom-14 rounded-full bg-white/90 px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] text-slate-600 shadow-sm backdrop-blur-sm'>
+                Swipe for more photos
+              </div>
+            ) : null}
+
+            {imageList.length > 1 ? (
+              <div className='absolute left-1/2 -translate-x-1/2 bottom-4 z-10 flex items-center gap-2 rounded-full bg-white/70 px-3 py-1.5 backdrop-blur-sm'>
+                {imageList.map((item, index) => (
+                  <button
+                    key={`${item}-${index}`}
+                    type='button'
+                    onClick={() => selectImageByIndex(index)}
+                    className={`h-2.5 rounded-full transition-all ${
+                      index === activeImageIndex ? 'w-6 bg-[#111]' : 'w-2.5 bg-[#111]/30'
+                    }`}
+                    aria-label={`View product image ${index + 1}`}
+                  ></button>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <div className='w-full sm:w-[80%]'>
-            <img className='w-full h-auto rounded-[32px] bg-slate-50' src={image} alt={productData.name} />
-          </div>
+
+          {imageList.length > 1 ? (
+            <div className='flex gap-2 overflow-x-auto pb-1'>
+              {imageList.map((item, index) => (
+                <button
+                  key={`${item}-thumb-${index}`}
+                  type='button'
+                  onClick={() => {
+                    setShowSwipeHint(false);
+                    selectImageByIndex(index);
+                  }}
+                  className={`shrink-0 overflow-hidden rounded-2xl transition-all ${
+                    index === activeImageIndex
+                      ? 'ring-2 ring-[#111] ring-offset-2 ring-offset-[#f5f5f5]'
+                      : 'opacity-80 hover:opacity-100'
+                  }`}
+                >
+                  <img
+                    src={item}
+                    alt={`${productData.name} thumbnail ${index + 1}`}
+                    className='h-20 w-20 object-cover bg-[#f5f5f5]'
+                  />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
-        <div className='flex-1'>
-          <h1 className='font-medium text-2xl mt-2'>{productData.name}</h1>
-          <div className='mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-500'>
-            <span className='px-3 py-1 rounded-full bg-gray-100'>Fresh catalog drop</span>
-            {reviewCount > 0 ? (
-              <span className='inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-amber-700'>
-                <StarRating rating={averageRating} size={14} />
-                {averageRating.toFixed(1)} from {reviewCount} reviews
-              </span>
-            ) : (
-              <span className='px-3 py-1 rounded-full bg-slate-100 text-slate-600'>
-                Be the first verified buyer to review
-              </span>
-            )}
+        <div className='flex flex-col gap-5'>
+          <div className='flex items-start justify-between gap-4'>
+            <div>
+              <p className='text-[11px] uppercase tracking-[0.24em] text-[#7b7b7b]'>{productData.category}</p>
+              <h1 className='mt-2 text-[2rem] sm:text-[2.4rem] leading-[1.05] font-semibold tracking-[-0.015em] text-[#111]'>
+                {productData.name}
+              </h1>
+            </div>
+
+            <button
+              type='button'
+              onClick={() => toggleWishlist(productData._id)}
+              className={`mt-1 inline-flex h-11 w-11 items-center justify-center rounded-full transition-colors ${
+                wishlisted ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+              aria-label={wishlisted ? 'Remove from wishlist' : 'Add to wishlist'}
+            >
+              <HeartIcon filled={wishlisted} />
+            </button>
           </div>
-          <p className='mt-5 text-3xl font-medium'>
+
+          <div className='flex flex-wrap items-center gap-3 text-sm text-slate-500'>
+            <StarRating rating={averageRating} size={15} />
+            <span>{reviewCount > 0 ? `${averageRating.toFixed(1)} (${reviewCount} reviews)` : 'No reviews yet'}</span>
+          </div>
+
+          <p className='text-4xl font-semibold tracking-tight text-[#111]'>
             {currency}
             {productData.price}
           </p>
-          <p className='mt-5 text-gray-500 md:w-4/5'>{productData.description}</p>
 
-          <div className='mt-5 text-sm text-gray-500 flex flex-col gap-1'>
-            <p>
-              Category: <span className='text-gray-700'>{productData.category}</span>
-            </p>
-            <p>
-              Style: <span className='text-gray-700'>{productData.subCategory}</span>
-            </p>
-            <p>
-              Stock:{' '}
-              <span className={`${isOutOfStock ? 'text-rose-600' : 'text-gray-700'}`}>
-                {isOutOfStock ? 'Out of stock' : productData.stock ?? 'Available'}
-              </span>
-            </p>
-          </div>
+          <p className='text-[15px] leading-7 text-slate-600'>{productData.description}</p>
 
-          <div className='flex flex-col gap-4 my-8'>
-            <p>Select Size</p>
-            <div className='flex gap-2 flex-wrap'>
-              {productData.sizes.map((item, index) => (
+          <div className='space-y-3'>
+            <p className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Select Size</p>
+            <div className='flex flex-wrap gap-2.5'>
+              {sizeOptions.map((item, index) => (
                 <button
+                  key={`${item}-${index}`}
+                  type='button'
                   onClick={() => setSize(item)}
-                  className={`border border-gray-100 py-2 px-4 bg-gray-100 ${
-                    item === size ? 'border-orange-500' : ''
+                  className={`rounded-full px-5 py-2.5 text-sm transition-all ${
+                    item === size
+                      ? 'bg-[#111] text-white shadow-[0_10px_22px_rgba(17,17,17,0.22)]'
+                      : 'bg-[#f3f3f3] text-[#3f3f3f] hover:bg-[#e9e9e9]'
                   }`}
-                  key={index}
                 >
                   {item}
                 </button>
@@ -385,58 +573,57 @@ const Product = () => {
             </div>
           </div>
 
-          <div className='flex gap-4 flex-wrap'>
+          <div className='grid grid-cols-2 gap-3'>
             <button
+              type='button'
               onClick={() => addToCart(productData._id, size)}
               disabled={isOutOfStock}
-              className='bg-black text-white px-8 py-3 text-sm active:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50'
+              className='rounded-full border border-[#111] bg-white px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase text-[#111] transition hover:bg-[#111] hover:text-white disabled:cursor-not-allowed disabled:opacity-50'
             >
-              {isOutOfStock ? 'OUT OF STOCK' : 'ADD TO CART'}
+              Add To Cart
             </button>
             <button
+              type='button'
               onClick={buyNow}
               disabled={isOutOfStock}
-              className='bg-black text-white px-8 py-3 text-sm active:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50'
+              className='rounded-full bg-[#111] px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase text-white transition hover:bg-[#262626] disabled:cursor-not-allowed disabled:opacity-50'
             >
-              BUY NOW
-            </button>
-            <button
-              onClick={() => toggleWishlist(productData._id)}
-              className={`inline-flex items-center gap-2 border px-6 py-3 text-sm ${
-                wishlisted ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-gray-300 text-gray-700'
-              }`}
-            >
-              <HeartIcon filled={wishlisted} />
-              {wishlisted ? 'SAVED' : 'SAVE FOR LATER'}
+              Buy Now
             </button>
           </div>
 
-          <hr className='mt-8 sm:w-4/5' />
-          <div className='text-sm text-gray-500 mt-5 flex flex-col gap-1'>
-            <p>100% original product sourced for the Lavish Fashion catalog.</p>
-            <p>Cash on delivery, Stripe, and Razorpay checkout are all supported.</p>
-            <p>Easy return and exchange requests can be initiated within 7 days of delivery.</p>
+          <div className='inline-flex w-fit items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600'>
+            <span className={`h-2 w-2 rounded-full ${isOutOfStock ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
+            {isOutOfStock ? 'Out of stock' : `${productData.stock ?? 'Limited'} in stock`}
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className='mt-20'>
-        <div className='flex'>
-          <b className='border px-5 py-3 text-sm'>Details</b>
-          <p className='border px-5 py-3 text-sm'>Shopping Notes</p>
-        </div>
-        <div className='flex flex-col gap-4 border px-6 py-6 text-sm text-gray-500'>
-          <p>{productData.description}</p>
-          <p>
-            This product is currently available in {productData.sizes.join(', ')} and belongs to the{' '}
-            {productData.category} / {productData.subCategory} lineup.
-          </p>
-          <p>
-            Need sizing help before ordering? Use the contact page and our team will help you pick the
-            best fit before checkout.
-          </p>
-        </div>
-      </div>
+      <section className='mt-10 grid gap-4 sm:grid-cols-2'>
+        <article className='rounded-[28px] bg-white p-5 shadow-[0_8px_30px_rgba(15,23,42,0.06)]'>
+          <p className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Description</p>
+          <ul className='mt-4 space-y-3 text-sm leading-6 text-slate-600'>
+            {descriptionPoints.map((point, index) => (
+              <li key={`description-${index}`} className='flex gap-2.5'>
+                <span className='mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400'></span>
+                <span>{point}</span>
+              </li>
+            ))}
+          </ul>
+        </article>
+
+        <article className='rounded-[28px] bg-white p-5 shadow-[0_8px_30px_rgba(15,23,42,0.06)]'>
+          <p className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Details</p>
+          <ul className='mt-4 space-y-3 text-sm leading-6 text-slate-600'>
+            {detailPoints.map((point, index) => (
+              <li key={`details-${index}`} className='flex gap-2.5'>
+                <span className='mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400'></span>
+                <span>{point}</span>
+              </li>
+            ))}
+          </ul>
+        </article>
+      </section>
 
       <section className='mt-20 grid gap-6 xl:grid-cols-[0.95fr_1.05fr]'>
         <article className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
@@ -679,6 +866,30 @@ const Product = () => {
           )}
         </article>
       </section>
+
+      <div className='fixed bottom-3 left-4 right-4 z-40 sm:hidden'>
+        <div className='flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_12px_28px_rgba(15,23,42,0.15)] backdrop-blur'>
+          <div>
+            <p className='text-[10px] uppercase tracking-[0.22em] text-slate-500'>Price</p>
+            <p className='text-xl font-semibold leading-none text-[#111]'>
+              {currency}
+              {productData.price}
+            </p>
+            <p className='mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500'>
+              {size ? `Size ${size}` : 'Select size'}
+            </p>
+          </div>
+
+          <button
+            type='button'
+            onClick={buyNow}
+            disabled={isOutOfStock}
+            className='rounded-full bg-[#111] px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-white disabled:opacity-45'
+          >
+            Buy Now
+          </button>
+        </div>
+      </div>
 
       <RelatedProducts category={productData.category} subCategory={productData.subCategory} />
     </div>
