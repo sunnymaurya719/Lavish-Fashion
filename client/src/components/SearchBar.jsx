@@ -1,32 +1,46 @@
 import React, { useEffect } from 'react'
 import { useContext,useState } from 'react';
-import { ShopContext} from '../context/ShopContext';
+import { ShopContext } from '../context/ShopContext';
 import { assets } from '../assets/assets';
 import { useLocation } from 'react-router-dom';
+
 const SearchBar = () => {
-    
-    const {search,setSearch, showSearch, setShowSearch} = useContext(ShopContext);
+
+    const { search, setSearch, showSearch, setShowSearch } = useContext(ShopContext);
     const [visible, setVisible] = useState(false);
     const location = useLocation();
 
-    useEffect(() =>{
-        if (location.pathname.includes('collection')){
+    useEffect(() => {
+        if (location.pathname.includes('collection')) {
             setVisible(true);
         }
         else {
             setVisible(false);
         }
-    },[location])
+    }, [location])
 
 
 
   return showSearch && visible ? (
-    <div className='border-t border-b bg-gray-50 text-center'>
-        <div className='inline-flex items-center justify-center border border-gray-400 px-5 py-2 my-5 mx-3 rounded-full w-3/4 sm:w-1/2'>
-            <input value={search} onChange={(e)=>setSearch(e.target.value)} className='flex-1 outline-none bg-inherit text-sm' type="text" placeholder='Search'/>
-            <img className='w-4' src={assets.search_icon} alt='' />
+    <div className='bg-white text-center px-4 py-4 sm:py-5'>
+        <div className='mx-auto flex items-center gap-3 rounded-full bg-[#f5f5f5] px-4 py-3 w-full sm:w-[min(560px,78%)]'>
+            <img className='w-4 opacity-60' src={assets.search_icon} alt='search icon' />
+            <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className='flex-1 outline-none bg-transparent text-[15px] text-[#111] placeholder:text-[#8a8a8a]'
+                type='text'
+                placeholder='Search products'
+            />
         </div>
-        <img onClick={()=>setShowSearch(false)} className='inline w-3 cursor-pointer' src={assets.cross_icon} alt=''/>
+
+        <button
+            type='button'
+            onClick={() => setShowSearch(false)}
+            className='mt-3 text-[11px] uppercase tracking-[0.2em] text-[#777] hover:text-[#111] transition-colors'
+        >
+            Close
+        </button>
     </div>
   ) : null
 }
