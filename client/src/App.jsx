@@ -1,5 +1,5 @@
 import React from 'react'
-import {Routes, Route} from 'react-router-dom'
+import {Routes, Route, useLocation} from 'react-router-dom'
 import Home from './pages/Home'
 import About from './pages/About'
 import Collection from './pages/Collection'
@@ -20,11 +20,14 @@ import MobileToastContainer from './components/MobileToastContainer'
 
 
 const App = () => {
+  const location = useLocation()
+  const isAuthRoute = location.pathname === '/login'
+
   return (
     <div className='px-4 sm:px-[5vw] md:px-[7vw] lg:px-[9vw]'>
       <MobileToastContainer />
       <Navbar />
-      <SearchBar />
+      {isAuthRoute ? null : <SearchBar />}
       <Routes>
         <Route path='/' element={<Home />} />
         <Route path='/about' element={<About/>} />
@@ -40,7 +43,7 @@ const App = () => {
         <Route path='/orders' element={<Orders/>} />
         <Route path='/verify' element={<Verify/>} />
       </Routes>
-      <Footer />
+      {isAuthRoute ? null : <Footer />}
     </div>
   )
 }

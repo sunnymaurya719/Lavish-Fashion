@@ -105,7 +105,6 @@ const Navbar = () => {
     getCartCount,
     getWishlistCount,
     navigate,
-    serverStatus,
     setShowSearch,
     token,
   } = useContext(ShopContext);
@@ -148,13 +147,6 @@ const Navbar = () => {
   const drawerChevronClass = (isActive) =>
     `h-4 w-4 transition-colors ${isActive ? 'text-[#c9ab8b]' : 'text-slate-400/80'}`;
 
-  const serverBadge =
-    serverStatus === 'online'
-      ? { label: 'API online', classes: 'bg-emerald-50 text-emerald-700' }
-      : serverStatus === 'offline'
-        ? { label: 'API offline', classes: 'bg-rose-50 text-rose-700' }
-        : { label: 'Checking API', classes: 'bg-slate-100 text-slate-600' };
-
   return (
     <div className='flex justify-between items-center py-5 font-medium'>
       <Link to='/'>
@@ -191,10 +183,6 @@ const Navbar = () => {
       </ul>
 
       <div className='flex items-center gap-6'>
-        <div className={`hidden rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] md:block ${serverBadge.classes}`}>
-          {serverBadge.label}
-        </div>
-
         <img
           onClick={() => setShowSearch(true)}
           src={assets.search_icon}
