@@ -132,42 +132,56 @@ const Hero = () => {
             {/* Left Section */}
             <div className='relative w-full lg:w-[48%] px-7 sm:px-12 lg:px-16 xl:px-20 py-12 sm:py-14 lg:py-0 flex items-center min-h-[440px]'>
 
-                <div className='hero-copy relative z-10 text-[#414141] max-w-md'>
+                <div className='hero-copy relative z-10 text-[#414141] max-w-[39rem]'>
                     <div className='hero-line flex items-center gap-3'>
                         <p className='w-10 md:w-14 h-[2px] bg-[#414141]'></p>
                         <p className='hero-kicker hero-track text-[11px] sm:text-xs font-medium tracking-[0.28em]'>NEW SEASON 2026</p>
                     </div>
 
-                    <h1 className='hero-title prata-regular text-[2.15rem] sm:text-5xl lg:text-[3.55rem] leading-[1.08] mt-5'>
+                    <h1 className='hero-title prata-regular text-[2.35rem] sm:text-[3.65rem] lg:text-[4.45rem] leading-[1.03] mt-6'>
                         Dress for <span className='italic'>Every</span>
                         <br />
                         Occasion
                     </h1>
 
-                    <p className='hero-subtitle text-sm sm:text-base text-[#414141]/75 mt-5 leading-7'>
+                    <p className='hero-subtitle text-sm sm:text-base text-[#414141]/75 mt-6 leading-7'>
                         Curated styles from everyday essentials to standout pieces, all under one roof.
                     </p>
 
-                    <div className='hero-actions mt-8 flex flex-wrap items-center gap-4 sm:gap-6'>
+                    <p className='hero-meta hero-track mt-5 text-[10px] sm:text-[11px] uppercase tracking-[0.24em] text-[#414141]/70'>
+                        Free Shipping | Easy Returns | New Weekly Drops
+                    </p>
+
+                    <div className='hero-actions mt-9 flex flex-wrap items-end gap-6 sm:gap-8'>
                         <div className='pr-4 sm:pr-6 border-r border-[#414141]/25'>
                             <p className='prata-regular text-2xl leading-none'>500+</p>
                             <p className='text-[10px] tracking-[0.2em] uppercase mt-1.5 text-[#414141]/80'>New Arrivals</p>
                         </div>
 
-                        <Link
-                            to='/collection'
-                            className='hero-lookbook hero-track group text-left text-xs sm:text-sm font-semibold tracking-[0.18em] uppercase text-[#414141]'
-                        >
-                            View Lookbook
-                            <span className='ml-2 inline-block transition-transform duration-300 group-hover:translate-x-1'>-&gt;</span>
-                        </Link>
+                        <div className='flex flex-col items-start gap-2.5'>
+                            <Link
+                                to='/collection'
+                                className='hero-primary-link hero-track group inline-flex items-center gap-2 text-[11px] sm:text-xs font-semibold tracking-[0.2em] uppercase text-[#414141]'
+                            >
+                                Shop Collection
+                                <span aria-hidden='true' className='transition-transform duration-300 group-hover:translate-x-1'>-&gt;</span>
+                            </Link>
+
+                            <Link
+                                to='/collection'
+                                className='hero-lookbook hero-track group text-left text-[11px] sm:text-xs font-semibold tracking-[0.18em] uppercase text-[#414141]/80 hover:text-[#414141]'
+                            >
+                                View Lookbook
+                                <span className='ml-2 inline-block transition-transform duration-300 group-hover:translate-x-1'>-&gt;</span>
+                            </Link>
+                        </div>
                     </div>
                 </div>
             </div>
 
             {/* Right Section */}
             <div
-                className='relative w-full lg:w-[52%] min-h-[360px] sm:min-h-[420px] lg:min-h-[440px] overflow-hidden'
+                className='relative w-full lg:w-[52%] min-h-[360px] sm:min-h-[420px] lg:min-h-[440px] rounded-xl overflow-hidden'
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
@@ -248,6 +262,7 @@ const Hero = () => {
                     </>
                 )}
             </div>
+
         </section>
     )
 }

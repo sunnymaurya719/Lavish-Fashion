@@ -25,6 +25,7 @@ a.active hr{
 
 .hero-shell .hero-title {
   animation: heroFadeUp 0.8s ease-out 0.12s both;
+  letter-spacing: -0.015em;
 }
 
 .hero-shell .hero-subtitle {
@@ -33,6 +34,10 @@ a.active hr{
 
 .hero-shell .hero-actions {
   animation: heroFadeUp 0.9s ease-out 0.24s both;
+}
+
+.hero-shell .hero-meta {
+  animation: heroFadeUp 0.88s ease-out 0.22s both;
 }
 
 .hero-shell .hero-image {
@@ -51,6 +56,26 @@ a.active hr{
 .hero-shell .hero-lookbook {
   --track-end: 0.18em;
   animation-delay: 0.24s;
+}
+
+.hero-shell .hero-primary-link {
+  position: relative;
+}
+
+.hero-shell .hero-primary-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -6px;
+  width: 100%;
+  height: 1px;
+  background: rgba(65, 65, 65, 0.55);
+  transform-origin: left;
+  transition: transform 0.3s ease;
+}
+
+.hero-shell .hero-primary-link:hover::after {
+  transform: scaleX(0.78);
 }
 
 @keyframes heroFadeUp {
@@ -95,6 +120,7 @@ a.active hr{
   .hero-shell .hero-line,
   .hero-shell .hero-title,
   .hero-shell .hero-subtitle,
+  .hero-shell .hero-meta,
   .hero-shell .hero-actions,
   .hero-shell .hero-image,
   .hero-shell .hero-track {
