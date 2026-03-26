@@ -130,7 +130,7 @@ const Hero = () => {
             </div>
 
             {/* Left Section */}
-            <div className='relative w-full lg:w-[48%] px-7 sm:px-12 lg:px-16 xl:px-20 py-12 sm:py-14 lg:py-0 flex items-center min-h-[440px]'>
+            <div className='hidden lg:flex relative w-full lg:w-[48%] px-7 sm:px-12 lg:px-16 xl:px-20 py-12 sm:py-14 lg:py-0 items-center min-h-[440px]'>
 
                 <div className='hero-copy relative z-10 text-[#414141] max-w-[39rem]'>
                     <div className='hero-line flex items-center gap-3'>
