@@ -211,7 +211,12 @@ const Navbar = () => {
 
         <div className='group relative'>
           {token ? (
-            <img src={assets.profile_icon} alt='profile_icon' className='w-5 cursor-pointer' />
+            <>
+              <Link to='/profile' className='sm:hidden'>
+                <img src={assets.profile_icon} alt='profile_icon' className='w-5 cursor-pointer' />
+              </Link>
+              <img src={assets.profile_icon} alt='profile_icon' className='hidden sm:block w-5 cursor-pointer' />
+            </>
           ) : (
             <Link to='/login'>
               <img src={assets.profile_icon} alt='profile_icon' className='w-5 cursor-pointer' />
@@ -219,7 +224,7 @@ const Navbar = () => {
           )}
 
           {token ? (
-            <div className='group-hover:block hidden absolute dropdown-menu right-0 pt-4'>
+            <div className='hidden sm:group-hover:block absolute dropdown-menu right-0 pt-4 z-50'>
               <div className='flex flex-col gap-2 w-40 py-3 px-5 bg-slate-100 text-gray-500 rounded'>
                 <button
                   type='button'
