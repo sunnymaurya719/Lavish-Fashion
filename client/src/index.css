@@ -185,6 +185,34 @@ a.active hr{
   animation-delay: 0.28s;
 }
 
+.checkout-shell .checkout-entrance {
+  animation: checkoutFadeUp 0.5s ease-out both;
+}
+
+.checkout-shell .checkout-delay-0 {
+  animation-delay: 0.02s;
+}
+
+.checkout-shell .checkout-delay-1 {
+  animation-delay: 0.1s;
+}
+
+.checkout-shell .checkout-delay-2 {
+  animation-delay: 0.18s;
+}
+
+.checkout-shell .checkout-delay-3 {
+  animation-delay: 0.24s;
+}
+
+.checkout-shell .checkout-delay-4 {
+  animation-delay: 0.32s;
+}
+
+.checkout-shell .checkout-delay-5 {
+  animation-delay: 0.38s;
+}
+
 .rewards-shell .rewards-hover-lift {
   transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
 }
@@ -323,6 +351,17 @@ a.active hr{
   }
 }
 
+@keyframes checkoutFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 ::-webkit-scrollbar{
   display: none;
 }
@@ -343,7 +382,8 @@ a.active hr{
   .orders-shell .orders-entrance,
   .rewards-shell .rewards-entrance,
   .wishlist-shell .wishlist-entrance,
-  .cart-shell .cart-entrance {
+  .cart-shell .cart-entrance,
+  .checkout-shell .checkout-entrance {
     animation: none !important;
   }
 

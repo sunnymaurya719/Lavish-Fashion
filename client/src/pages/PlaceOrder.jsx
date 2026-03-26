@@ -1,10 +1,34 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useLocation } from 'react-router-dom';
-import Title from '../components/Title';
-import OrdersTotal from '../components/OrdersTotal';
-import { assets } from '../assets/assets';
 import { ShopContext } from '../context/ShopContext';
+
+const FREE_DELIVERY_THRESHOLD = 999;
+
+const formatCurrency = (value) =>
+  new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(Number(value || 0));
+
+const sanitizeAddressData = (data = {}) => {
+  const normalizedName = String(data.fullName || '').trim().replace(/\s+/g, ' ');
+  const nameParts = normalizedName.split(' ').filter(Boolean);
+  const firstName = nameParts[0] || '';
+  const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : firstName;
+
+  return {
+    firstName,
+    lastName,
+    street: String(data.address || '').trim(),
+    city: String(data.city || '').trim(),
+    state: String(data.state || '').trim(),
+    pincode: String(data.pincode || '').trim(),
+    country: 'India',
+    phone: String(data.phone || '').trim(),
+  };
+};
 
 const PlaceOrder = () => {
   const {
@@ -19,17 +43,21 @@ const PlaceOrder = () => {
     serverBootstrap,
     serverStatus,
   } = useContext(ShopContext);
-  const [method, setMethod] = useState('');
-  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
-  const [couponInput, setCouponInput] = useState('');
-  const [pointsInput, setPointsInput] = useState('');
-  const [pricingPreview, setPricingPreview] = useState(null);
-  const [pricingAction, setPricingAction] = useState('');
-  const idempotencyKeyRef = useRef('');
 
   const location = useLocation();
   const isBuyNow = location.state?.buyNow;
   const buyNowProduct = location.state?.product;
+
+  const [method, setMethod] = useState('cod');
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [couponInput, setCouponInput] = useState('');
+  const [pointsInput, setPointsInput] = useState('');
+  const [pricingPreview, setPricingPreview] = useState(null);
+  const [pricingAction, setPricingAction] = useState('');
+  const [isLocating, setIsLocating] = useState(false);
+  const idempotencyKeyRef = useRef('');
+
   const checkoutItems = useMemo(
     () => getCheckoutItems({ isBuyNow, buyNowProduct }),
     [buyNowProduct, getCheckoutItems, isBuyNow]
@@ -37,18 +65,17 @@ const PlaceOrder = () => {
   const checkoutItemsKey = useMemo(() => JSON.stringify(checkoutItems), [checkoutItems]);
 
   const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    street: '',
+    fullName: '',
+    phone: '',
+    address: '',
     city: '',
     state: '',
     pincode: '',
-    country: '',
-    phone: '',
   });
 
   const baseSubtotal =
     isBuyNow && buyNowProduct ? Number(buyNowProduct.price || 0) * Number(buyNowProduct.quantity || 1) : getCartAmount();
+
   const defaultPricingSummary = useMemo(
     () => ({
       subtotal: baseSubtotal,
@@ -64,57 +91,69 @@ const PlaceOrder = () => {
     }),
     [baseSubtotal, delivery_fee]
   );
+
   const pricingSummary = pricingPreview || defaultPricingSummary;
   const appliedCouponCode = pricingSummary.appliedCoupon?.code || '';
-  const availableLoyaltyPoints = Number(pricingSummary.availableLoyaltyPoints || 0);
+  const availableLoyaltyPoints = Math.max(0, Number(pricingSummary.availableLoyaltyPoints || 0));
   const loyaltyRules = pricingSummary.loyaltyRules || null;
+
   const paymentCapabilities = serverBootstrap?.payments || {};
-  const stripeEnabled = serverStatus === 'online' ? Boolean(paymentCapabilities.stripeEnabled) : true;
   const razorpayKeyId = paymentCapabilities.razorpayKeyId || import.meta.env.VITE_RAZORPAY_KEY_ID || '';
-  const razorpayEnabled = serverStatus === 'online' ? Boolean(paymentCapabilities.razorpayEnabled && razorpayKeyId) : Boolean(razorpayKeyId);
+  const razorpayEnabled =
+    serverStatus === 'online'
+      ? Boolean(paymentCapabilities.razorpayEnabled && razorpayKeyId)
+      : Boolean(razorpayKeyId);
+
   const pointValue = Number(loyaltyRules?.pointValue || 1);
   const minRedeemPoints = Number(loyaltyRules?.minRedeemPoints || 0);
   const minimumRedeemPointsRequired = Math.max(0, Math.floor(minRedeemPoints));
-  const maxRedeemShare = Math.round(Number(loyaltyRules?.maxRedeemShare || 0) * 100);
   const couponAdjustedBaseAmount = Math.max(
     0,
     Number(pricingSummary.subtotal || 0) +
       Number(pricingSummary.deliveryFee || 0) -
       Number(pricingSummary.couponDiscountAmount || 0)
   );
+
   const orderShareCap = Math.floor(couponAdjustedBaseAmount * Number(loyaltyRules?.maxRedeemShare || 0));
   const orderValuePointCap = Math.floor(orderShareCap / Math.max(pointValue, 0.01));
   const totalCheckoutUnits = checkoutItems.reduce(
     (sum, item) => sum + Math.max(0, Math.floor(Number(item.quantity || 0))),
     0
   );
+
   const perProductPointCap = Number.isFinite(Number(loyaltyRules?.maxRedeemPointsPerProduct))
     ? Math.max(0, totalCheckoutUnits * Math.max(0, Math.floor(Number(loyaltyRules?.maxRedeemPointsPerProduct || 0))))
     : Number.POSITIVE_INFINITY;
+
   const maxRedeemPointsPerOrder = Number.isFinite(Number(loyaltyRules?.maxRedeemPointsPerOrder))
     ? Math.max(0, Math.floor(Number(loyaltyRules?.maxRedeemPointsPerOrder || 0)))
     : Number.POSITIVE_INFINITY;
-  const orderRulePointCap = Math.max(
-    0,
-    Math.min(
-      maxRedeemPointsPerOrder,
-      perProductPointCap,
-      orderValuePointCap || 0
-    )
-  );
+
+  const orderRulePointCap = Math.max(0, Math.min(maxRedeemPointsPerOrder, perProductPointCap, orderValuePointCap || 0));
   const maxRedeemableForThisOrder = Math.max(0, Math.min(availableLoyaltyPoints, orderRulePointCap));
-  const orderCapBelowMinimum = minimumRedeemPointsRequired > 0 && orderRulePointCap < minimumRedeemPointsRequired;
   const canRedeemOnThisOrder = minimumRedeemPointsRequired > 0
-    ? maxRedeemableForThisOrder >= minimumRedeemPointsRequired && !orderCapBelowMinimum
+    ? maxRedeemableForThisOrder >= minimumRedeemPointsRequired
     : maxRedeemableForThisOrder > 0;
-  const pointsNeededForMinimumRedemption =
-    minimumRedeemPointsRequired > 0 && !orderCapBelowMinimum && maxRedeemableForThisOrder < minimumRedeemPointsRequired
-      ? minimumRedeemPointsRequired - maxRedeemableForThisOrder
-      : 0;
-  const onlinePaymentDisabled = pricingSummary.total <= 0;
+
+  const itemCount = checkoutItems.reduce((total, item) => total + Number(item.quantity || 0), 0);
+  const onlinePaymentDisabled = Number(pricingSummary.total || 0) <= 0;
   const isRefreshingPricing = pricingAction === 'refresh';
   const isApplyingCoupon = pricingAction === 'coupon';
   const isApplyingPoints = pricingAction === 'points';
+
+  const hasAddressInput =
+    Boolean(formData.fullName.trim()) &&
+    Boolean(formData.phone.trim()) &&
+    Boolean(formData.address.trim()) &&
+    Boolean(formData.city.trim()) &&
+    Boolean(formData.state.trim()) &&
+    Boolean(formData.pincode.trim());
+
+  const steps = [
+    { label: 'Address', active: hasAddressInput },
+    { label: 'Payment', active: Boolean(method) },
+    { label: 'Review', active: itemCount > 0 },
+  ];
 
   useEffect(() => {
     setPricingPreview(null);
@@ -189,54 +228,55 @@ const PlaceOrder = () => {
     }
 
     const refreshPricing = async () => {
-      await requestPricingPreview({
-        action: 'refresh',
-        toastOnError: false,
-      });
+      await requestPricingPreview({ action: 'refresh', toastOnError: false });
     };
 
     refreshPricing();
-  }, [checkoutItems.length, requestPricingPreview, token]);
+  }, [checkoutItemsKey, requestPricingPreview, token, checkoutItems.length]);
 
   useEffect(() => {
-    if (pricingSummary.total <= 0 && (method === 'stripe' || method === 'razorpay')) {
+    if (method === 'razorpay' && (!razorpayEnabled || onlinePaymentDisabled)) {
       setMethod('cod');
     }
-  }, [pricingSummary.total, method]);
-
-  if (!token) {
-    return (
-      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
-        <h2 className='text-2xl font-semibold mb-2'>Login Required</h2>
-        <p className='text-gray-600 mb-6'>Please login to continue and place your order</p>
-        <button
-          onClick={() => navigate('/login')}
-          className='bg-black text-white px-8 py-3 text-sm rounded hover:bg-gray-800 transition'
-        >
-          LOGIN TO CONTINUE
-        </button>
-      </div>
-    );
-  }
-
-  if (checkoutItems.length === 0) {
-    return (
-      <div className='min-h-[70vh] flex flex-col items-center justify-center text-center px-4 border-t'>
-        <h2 className='text-2xl font-semibold mb-2'>Nothing to checkout</h2>
-        <p className='text-gray-600 mb-6'>Add products to your cart or start with Buy Now before placing an order.</p>
-        <button
-          onClick={() => navigate('/collection')}
-          className='bg-black text-white px-8 py-3 text-sm rounded hover:bg-gray-800 transition'
-        >
-          SHOP COLLECTION
-        </button>
-      </div>
-    );
-  }
+  }, [method, onlinePaymentDisabled, razorpayEnabled]);
 
   const onChangeHandler = (event) => {
     const { name, value } = event.target;
     setFormData((currentData) => ({ ...currentData, [name]: value }));
+  };
+
+  const useCurrentLocationHandler = () => {
+    if (isLocating) {
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      toast.error('Location access is not available on this device');
+      return;
+    }
+
+    setIsLocating(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = Number(position.coords?.latitude || 0).toFixed(4);
+        const lng = Number(position.coords?.longitude || 0).toFixed(4);
+
+        setFormData((current) => ({
+          ...current,
+          address: current.address.trim() || `Near current location (${lat}, ${lng})`,
+        }));
+
+        toast.success('Current location added. Please confirm address details.');
+        setIsLocating(false);
+      },
+      (error) => {
+        const denied = Number(error?.code || 0) === 1;
+        toast.error(denied ? 'Location permission was denied' : 'Unable to access your current location');
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
   };
 
   const resetLocalCartIfNeeded = () => {
@@ -290,17 +330,6 @@ const PlaceOrder = () => {
       return;
     }
 
-    if (minimumRedeemPointsRequired > 0 && !canRedeemOnThisOrder) {
-      if (orderCapBelowMinimum) {
-        toast.error(
-          `This order currently supports up to ${orderRulePointCap} points. Minimum redemption is ${minimumRedeemPointsRequired} points.`
-        );
-      } else {
-        toast.error(`You need at least ${minimumRedeemPointsRequired} points to redeem on this order`);
-      }
-      return;
-    }
-
     if (minimumRedeemPointsRequired > 0 && normalizedPoints < minimumRedeemPointsRequired) {
       toast.error(`Minimum redemption is ${minimumRedeemPointsRequired} points`);
       return;
@@ -341,7 +370,7 @@ const PlaceOrder = () => {
     }
 
     if (typeof window === 'undefined' || typeof window.Razorpay !== 'function') {
-      toast.error('Razorpay checkout is unavailable right now. Please refresh the page or choose another payment method.');
+      toast.error('Razorpay checkout is unavailable right now. Please refresh and try again.');
       return;
     }
 
@@ -370,6 +399,10 @@ const PlaceOrder = () => {
           toast.error(error?.response?.data?.message || error.message);
         }
       },
+      prefill: {
+        name: formData.fullName,
+        contact: formData.phone,
+      },
     };
 
     const razorpay = new window.Razorpay(options);
@@ -377,7 +410,7 @@ const PlaceOrder = () => {
   };
 
   const buildOrderData = () => ({
-    address: formData,
+    address: sanitizeAddressData(formData),
     items: checkoutItems,
     checkoutSource: isBuyNow && buyNowProduct ? 'buy_now' : 'cart',
     couponCode: appliedCouponCode,
@@ -396,8 +429,13 @@ const PlaceOrder = () => {
       return;
     }
 
-    if ((method === 'stripe' || method === 'razorpay') && onlinePaymentDisabled) {
-      toast.error('Online payments are unavailable for zero-total orders');
+    if (!hasAddressInput) {
+      toast.error('Please complete your address details');
+      return;
+    }
+
+    if (method === 'razorpay' && onlinePaymentDisabled) {
+      toast.error('Online payment is unavailable for zero-total orders');
       return;
     }
 
@@ -412,53 +450,33 @@ const PlaceOrder = () => {
 
       const idempotencyKey = idempotencyKeyRef.current;
 
-      switch (method) {
-        case 'cod': {
-          const codResponse = await axios.post(BACKEND_URL + '/api/order/place', orderData, {
-            headers: { token, 'idempotency-key': idempotencyKey },
-          });
+      if (method === 'cod') {
+        const codResponse = await axios.post(BACKEND_URL + '/api/order/place', orderData, {
+          headers: { token, 'idempotency-key': idempotencyKey },
+        });
 
-          if (codResponse.data.success) {
-            resetLocalCartIfNeeded();
-            toast.success('Order placed successfully');
-            navigate('/orders');
-            return;
-          }
-
-          toast.error(codResponse.data.message || 'Unable to place COD order');
-          break;
+        if (codResponse.data.success) {
+          resetLocalCartIfNeeded();
+          toast.success('Order placed successfully');
+          navigate('/orders');
+          return;
         }
 
-        case 'stripe': {
-          const stripeResponse = await axios.post(BACKEND_URL + '/api/order/stripe', orderData, {
-            headers: { token, 'idempotency-key': idempotencyKey },
-          });
+        toast.error(codResponse.data.message || 'Unable to place COD order');
+        return;
+      }
 
-          if (stripeResponse.data.success && stripeResponse.data.session?.url) {
-            window.location.replace(stripeResponse.data.session.url);
-            return;
-          }
+      if (method === 'razorpay') {
+        const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay', orderData, {
+          headers: { token, 'idempotency-key': idempotencyKey },
+        });
 
-          toast.error(stripeResponse.data.message || 'Unable to start Stripe checkout');
-          break;
+        if (razorpayResponse.data.success) {
+          initPay(razorpayResponse.data.order);
+          return;
         }
 
-        case 'razorpay': {
-          const razorpayResponse = await axios.post(BACKEND_URL + '/api/order/razorpay', orderData, {
-            headers: { token, 'idempotency-key': idempotencyKey },
-          });
-
-          if (razorpayResponse.data.success) {
-            initPay(razorpayResponse.data.order);
-            return;
-          }
-
-          toast.error(razorpayResponse.data.message || 'Failed to initialize Razorpay');
-          break;
-        }
-
-        default:
-          break;
+        toast.error(razorpayResponse.data.message || 'Failed to initialize Razorpay');
       }
     } catch (error) {
       toast.error(error?.response?.data?.message || 'Failed to place order. Please try again.');
@@ -468,327 +486,363 @@ const PlaceOrder = () => {
     }
   };
 
+  if (!token) {
+    return (
+      <div className='checkout-shell checkout-entrance checkout-delay-0 min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
+        <h2 className='text-3xl font-semibold text-slate-900'>Checkout</h2>
+        <p className='mt-2 text-base text-slate-600'>Login to continue</p>
+        <p className='mt-4 max-w-md text-sm text-slate-500'>Please login to continue and place your order.</p>
+        <button
+          onClick={() => navigate('/login')}
+          className='mt-6 rounded-full bg-slate-950 px-8 py-3 text-sm font-medium text-white transition hover:bg-slate-800'
+        >
+          Login to continue
+        </button>
+      </div>
+    );
+  }
+
+  if (checkoutItems.length === 0) {
+    return (
+      <div className='checkout-shell checkout-entrance checkout-delay-0 min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
+        <h2 className='text-3xl font-semibold text-slate-900'>Checkout</h2>
+        <p className='mt-2 text-base text-slate-600'>No items to review</p>
+        <p className='mt-4 max-w-md text-sm text-slate-500'>Add products to your cart or use Buy Now before placing an order.</p>
+        <button
+          onClick={() => navigate('/collection')}
+          className='mt-6 rounded-full bg-slate-950 px-8 py-3 text-sm font-medium text-white transition hover:bg-slate-800'
+        >
+          Shop collection
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <form
-      onSubmit={onSubmitHandler}
-      className='flex flex-col sm:flex-row justify-between gap-6 pt-5 sm:pt-14 min-h-[80vh] border-t'
-    >
-      <div className='flex flex-col gap-4 w-full sm:max-w-[450px]'>
-        <div className='text-xl sm:text-2xl my-3'>
-          <Title text1='DELIVERY' text2='INFORMATION' />
+    <form onSubmit={onSubmitHandler} className='checkout-shell pt-8 sm:pt-10 pb-28 lg:pb-20'>
+      <header className='checkout-entrance checkout-delay-0'>
+        <h1 className='text-[2rem] sm:text-[2.35rem] font-semibold tracking-[-0.015em] text-[#111] leading-none'>Checkout</h1>
+        <p className='mt-2 text-sm text-slate-500'>{itemCount} item{itemCount === 1 ? '' : 's'} ready</p>
+
+        <div className='mt-4 grid grid-cols-3 gap-2'>
+          {steps.map((step, index) => (
+            <div
+              key={step.label}
+              style={{ animationDelay: `${Math.min(0.08 + index * 0.04, 0.2)}s` }}
+              className='checkout-entrance'
+              data-step={step.label}
+            >
+              <div className={`rounded-full px-3 py-2 text-center text-xs font-medium ${
+                step.active ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-500'
+              }`}>
+                <span className='uppercase tracking-[0.16em]'>0{index + 1}</span>
+                <p className='mt-0.5 normal-case tracking-normal'>{step.label}</p>
+              </div>
+            </div>
+          ))}
         </div>
-        <div className='flex gap-3'>
-          <input
-            onChange={onChangeHandler}
-            name='firstName'
-            value={formData.firstName}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='First name'
-            maxLength='15'
-            required
-          />
-          <input
-            onChange={onChangeHandler}
-            name='lastName'
-            value={formData.lastName}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='Last name'
-            maxLength='15'
-            required
-          />
+      </header>
+
+      <div className='mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_390px] lg:items-start'>
+        <div className='space-y-4'>
+          <section className='checkout-entrance checkout-delay-1 rounded-[24px] border border-slate-200 bg-white p-4 sm:p-5'>
+            <div className='flex items-start justify-between gap-3'>
+              <div>
+                <h2 className='text-lg font-semibold text-slate-900'>Delivery information</h2>
+                <p className='mt-1 text-sm text-slate-500'>Use one complete address to speed up checkout.</p>
+              </div>
+              <button
+                type='button'
+                onClick={useCurrentLocationHandler}
+                disabled={isLocating}
+                className='rounded-full border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 disabled:opacity-60'
+              >
+                {isLocating ? 'Locating...' : 'Use current location'}
+              </button>
+            </div>
+
+            <div className='mt-4 space-y-3'>
+              <input
+                onChange={onChangeHandler}
+                name='fullName'
+                value={formData.fullName}
+                className='w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                type='text'
+                placeholder='Full Name'
+                maxLength='40'
+                required
+              />
+
+              <input
+                onChange={onChangeHandler}
+                name='phone'
+                value={formData.phone}
+                className='w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                type='text'
+                placeholder='Phone'
+                maxLength='20'
+                required
+              />
+
+              <textarea
+                onChange={onChangeHandler}
+                name='address'
+                value={formData.address}
+                className='w-full resize-none rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                rows='3'
+                placeholder='Address'
+                maxLength='120'
+                required
+              />
+
+              <div className='grid grid-cols-2 gap-3'>
+                <input
+                  onChange={onChangeHandler}
+                  name='city'
+                  value={formData.city}
+                  className='w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                  type='text'
+                  placeholder='City'
+                  maxLength='25'
+                  required
+                />
+
+                <input
+                  onChange={onChangeHandler}
+                  name='state'
+                  value={formData.state}
+                  className='w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                  type='text'
+                  placeholder='State'
+                  maxLength='25'
+                  required
+                />
+              </div>
+
+              <input
+                onChange={onChangeHandler}
+                name='pincode'
+                value={formData.pincode}
+                className='w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-500'
+                type='text'
+                placeholder='PIN Code'
+                maxLength='12'
+                required
+              />
+            </div>
+          </section>
+
+          <section className='checkout-entrance checkout-delay-2 rounded-[24px] border border-slate-200 bg-white p-4 sm:p-5'>
+            <h2 className='text-lg font-semibold text-slate-900'>Payment</h2>
+            <p className='mt-1 text-sm text-slate-500'>Choose a payment method.</p>
+
+            <div className='mt-4 space-y-2.5'>
+              <button
+                type='button'
+                onClick={() => setMethod('cod')}
+                className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                  method === 'cod' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                }`}
+              >
+                <div className='flex items-center justify-between gap-3'>
+                  <div>
+                    <p className='text-sm font-medium text-slate-900'>Cash on Delivery</p>
+                    <p className='mt-0.5 text-xs text-slate-500'>Pay when your order arrives</p>
+                  </div>
+                  <span className={`h-3 w-3 rounded-full ${method === 'cod' ? 'bg-slate-900' : 'bg-slate-300'}`}></span>
+                </div>
+              </button>
+
+              {razorpayEnabled && !onlinePaymentDisabled ? (
+                <button
+                  type='button'
+                  onClick={() => setMethod('razorpay')}
+                  className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                    method === 'razorpay' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                  }`}
+                >
+                  <div className='flex items-center justify-between gap-3'>
+                    <div>
+                      <p className='text-sm font-medium text-slate-900'>Razorpay</p>
+                      <p className='mt-0.5 text-xs text-slate-500'>UPI, Cards, Wallets</p>
+                    </div>
+                    <span
+                      className={`h-3 w-3 rounded-full ${method === 'razorpay' ? 'bg-slate-900' : 'bg-slate-300'}`}
+                    ></span>
+                  </div>
+                </button>
+              ) : null}
+            </div>
+          </section>
         </div>
-        <input
-          onChange={onChangeHandler}
-          name='phone'
-          value={formData.phone}
-          className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-          type='text'
-          placeholder='Phone number'
-          maxLength='20'
-          required
-        />
-        <input
-          onChange={onChangeHandler}
-          name='street'
-          value={formData.street}
-          className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-          type='text'
-          placeholder='Street'
-          maxLength='60'
-          required
-        />
-        <div className='flex gap-3'>
-          <input
-            onChange={onChangeHandler}
-            name='city'
-            value={formData.city}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='City'
-            maxLength='25'
-            required
-          />
-          <input
-            onChange={onChangeHandler}
-            name='state'
-            value={formData.state}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='State'
-            maxLength='25'
-            required
-          />
-        </div>
-        <div className='flex gap-3'>
-          <input
-            onChange={onChangeHandler}
-            name='pincode'
-            value={formData.pincode}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='PIN code'
-            maxLength='12'
-            required
-          />
-          <input
-            onChange={onChangeHandler}
-            name='country'
-            value={formData.country}
-            className='border border-gray-300 rounded py-1.5 px-3.5 w-full'
-            type='text'
-            placeholder='Country'
-            maxLength='20'
-            required
-          />
-        </div>
+
+        <aside className='space-y-4 lg:sticky lg:top-24'>
+          <section className='checkout-entrance checkout-delay-2 rounded-[24px] border border-slate-200 bg-white p-4 sm:p-5'>
+            <h2 className='text-lg font-semibold text-slate-900'>Review</h2>
+            <p className='mt-1 text-sm text-slate-500'>Subtotal and discounts before payment.</p>
+
+            {isRefreshingPricing ? (
+              <div className='mt-4 space-y-2'>
+                <div className='lf-shimmer h-3.5 w-32 rounded-full'></div>
+                <div className='lf-shimmer h-3.5 w-full rounded-full'></div>
+                <div className='lf-shimmer h-3.5 w-2/3 rounded-full'></div>
+              </div>
+            ) : (
+              <div className='mt-4 space-y-2.5 text-sm'>
+                <div className='flex items-center justify-between text-slate-600'>
+                  <span>Subtotal</span>
+                  <span className='font-medium text-slate-900'>{formatCurrency(pricingSummary.subtotal)}</span>
+                </div>
+
+                <div className='flex items-center justify-between text-slate-600'>
+                  <span>Shipping</span>
+                  <span className='font-medium text-slate-900'>
+                    {Number(pricingSummary.deliveryFee || 0) === 0 ? 'Free' : formatCurrency(pricingSummary.deliveryFee)}
+                  </span>
+                </div>
+
+                {Number(pricingSummary.couponDiscountAmount || 0) > 0 ? (
+                  <div className='flex items-center justify-between text-emerald-700'>
+                    <span>Coupon</span>
+                    <span>-{formatCurrency(pricingSummary.couponDiscountAmount)}</span>
+                  </div>
+                ) : null}
+
+                {Number(pricingSummary.loyaltyDiscountAmount || 0) > 0 ? (
+                  <div className='flex items-center justify-between text-sky-700'>
+                    <span>Rewards</span>
+                    <span>-{formatCurrency(pricingSummary.loyaltyDiscountAmount)}</span>
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            <p className='mt-4 text-xs text-slate-500'>
+              Free delivery above {formatCurrency(FREE_DELIVERY_THRESHOLD)}.
+            </p>
+          </section>
+
+          <section className='checkout-entrance checkout-delay-3 rounded-[24px] border border-slate-200 bg-white p-4 sm:p-5'>
+            <button
+              type='button'
+              onClick={() => setCouponOpen((current) => !current)}
+              className='w-full flex items-center justify-between gap-3'
+            >
+              <div className='text-left'>
+                <p className='text-base font-semibold text-slate-900'>Coupon</p>
+                <p className='text-xs text-slate-500'>Apply code if you have one</p>
+              </div>
+              <span className='text-lg text-slate-500'>{couponOpen ? '-' : '+'}</span>
+            </button>
+
+            {couponOpen ? (
+              <div className='mt-3 space-y-3'>
+                <div className='flex gap-2'>
+                  <input
+                    value={couponInput}
+                    onChange={(event) => setCouponInput(event.target.value.toUpperCase())}
+                    className='w-full rounded-full border border-slate-300 px-4 py-2.5 text-sm uppercase'
+                    type='text'
+                    placeholder='Enter coupon'
+                    maxLength='30'
+                    disabled={Boolean(appliedCouponCode)}
+                  />
+                  <button
+                    type='button'
+                    onClick={applyCouponHandler}
+                    disabled={isApplyingCoupon || Boolean(appliedCouponCode)}
+                    className='rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60'
+                  >
+                    {isApplyingCoupon ? '...' : 'Apply'}
+                  </button>
+                </div>
+
+                {appliedCouponCode ? (
+                  <div className='rounded-2xl bg-emerald-50 px-3 py-3 text-xs text-emerald-800'>
+                    <div className='flex items-center justify-between gap-3'>
+                      <span>{appliedCouponCode} applied</span>
+                      <button type='button' onClick={clearCouponHandler} className='font-semibold'>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className='checkout-entrance checkout-delay-4 rounded-[24px] border border-slate-200 bg-white p-4 sm:p-5'>
+            <div className='flex items-center justify-between gap-3'>
+              <div>
+                <p className='text-base font-semibold text-slate-900'>Loyalty</p>
+                <p className='text-xs text-slate-500'>Redeem available points</p>
+              </div>
+              <span className='rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-800'>
+                {availableLoyaltyPoints} pts
+              </span>
+            </div>
+
+            <div className='mt-3 flex gap-2'>
+              <input
+                value={pointsInput}
+                onChange={(event) => setPointsInput(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                className='w-full rounded-full border border-slate-300 px-4 py-2.5 text-sm'
+                type='text'
+                inputMode='numeric'
+                placeholder='Enter points'
+                disabled={availableLoyaltyPoints === 0 || !canRedeemOnThisOrder}
+              />
+              <button
+                type='button'
+                onClick={applyPointsHandler}
+                disabled={isApplyingPoints || availableLoyaltyPoints === 0 || !canRedeemOnThisOrder}
+                className='rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60'
+              >
+                {isApplyingPoints ? '...' : 'Redeem'}
+              </button>
+            </div>
+
+            {minimumRedeemPointsRequired > 0 ? (
+              <p className='mt-2 text-xs text-slate-500'>Minimum redemption: {minimumRedeemPointsRequired} pts.</p>
+            ) : null}
+
+            {Number(pricingSummary.loyaltyPointsRedeemed || 0) > 0 ? (
+              <div className='mt-3 flex items-center justify-between rounded-2xl bg-sky-50 px-3 py-3 text-xs text-sky-900'>
+                <span>{pricingSummary.loyaltyPointsRedeemed} points applied</span>
+                <button type='button' onClick={clearPointsHandler} className='font-semibold'>
+                  Remove
+                </button>
+              </div>
+            ) : null}
+          </section>
+
+          <section className='checkout-entrance checkout-delay-4 rounded-[24px] border border-slate-200 bg-white p-4'>
+            <div className='flex flex-wrap gap-2'>
+              <span className='rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600'>Secure payment</span>
+              <span className='rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600'>Easy returns</span>
+              <span className='rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600'>Order tracking</span>
+            </div>
+          </section>
+        </aside>
       </div>
 
-      <div className='mt-8 w-full max-w-[420px]'>
-            <div className='rounded-3xl border border-gray-200 bg-white p-6 shadow-sm'>
-          <OrdersTotal
-            isBuyNow={isBuyNow}
-            buyNowProduct={buyNowProduct}
-            subtotal={pricingSummary.subtotal}
-            deliveryFee={pricingSummary.deliveryFee}
-            discountAmount={pricingSummary.discountAmount}
-            couponDiscountAmount={pricingSummary.couponDiscountAmount}
-            loyaltyDiscountAmount={pricingSummary.loyaltyDiscountAmount}
-            loyaltyPointsRedeemed={pricingSummary.loyaltyPointsRedeemed}
-            total={pricingSummary.total}
-            couponCode={appliedCouponCode}
-          />
-
-          {isRefreshingPricing ? (
-            <p className='mt-4 text-xs text-slate-500'>Refreshing server-side pricing for the current checkout...</p>
-          ) : null}
-
-          {serverStatus === 'offline' ? (
-            <p className='mt-3 text-xs text-rose-700'>
-              Live server capability checks are currently unavailable. Checkout actions may fail until the API reconnects.
-            </p>
-          ) : null}
-        </div>
-
-        <div className='mt-5 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm'>
-          <p className='text-sm font-semibold text-slate-900'>Offer code</p>
-          <p className='mt-1 text-sm text-slate-500'>Validate coupon pricing directly against the server before payment.</p>
-          <div className='mt-4 flex gap-3'>
-            <input
-              value={couponInput}
-              onChange={(event) => setCouponInput(event.target.value.toUpperCase())}
-              className='w-full rounded-2xl border border-slate-300 px-4 py-3 uppercase'
-              type='text'
-              placeholder='Enter coupon code'
-              maxLength='30'
-              disabled={Boolean(appliedCouponCode)}
-            />
-            <button
-              type='button'
-              onClick={applyCouponHandler}
-              disabled={isApplyingCoupon || Boolean(appliedCouponCode)}
-              className='rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white disabled:opacity-60'
-            >
-              {isApplyingCoupon ? 'Checking...' : 'Apply'}
-            </button>
-          </div>
-
-          {appliedCouponCode ? (
-            <div className='mt-4 rounded-2xl bg-emerald-50 px-4 py-4 text-sm text-emerald-900'>
-              <div className='flex items-start justify-between gap-4'>
-                <div>
-                  <p className='font-medium'>{appliedCouponCode} applied</p>
-                  <p className='mt-1 text-emerald-800'>
-                    {pricingSummary.appliedCoupon?.description || 'Discount is now reflected in your order total.'}
-                  </p>
-                </div>
-                <button type='button' onClick={clearCouponHandler} className='text-xs font-semibold uppercase tracking-[0.2em]'>
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className='mt-5 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm'>
-          <div className='flex items-start justify-between gap-4'>
+      <div
+        className='fixed left-1/2 -translate-x-1/2 bottom-3 z-40 w-[calc(100%-1.25rem)] max-w-5xl'
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className='checkout-entrance checkout-delay-5 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur'>
+          <div className='flex items-center justify-between gap-3'>
             <div>
-              <p className='text-sm font-semibold text-slate-900'>Loyalty redemption</p>
-              <p className='mt-1 text-sm text-slate-500'>Redeem points with a live checkout preview from the server.</p>
+              <p className='text-xs uppercase tracking-[0.16em] text-slate-500'>Total</p>
+              <p className='mt-0.5 text-xl font-semibold text-slate-900'>{formatCurrency(pricingSummary.total)}</p>
             </div>
-            <div className='rounded-2xl bg-sky-50 px-4 py-3 text-right'>
-              <p className='text-xs uppercase tracking-[0.2em] text-sky-600'>Available</p>
-              <p className='mt-1 text-lg font-semibold text-sky-900'>{availableLoyaltyPoints} pts</p>
-            </div>
-          </div>
 
-          <div className='mt-4 flex gap-3'>
-            <input
-              value={pointsInput}
-              onChange={(event) => setPointsInput(event.target.value.replace(/[^\d]/g, '').slice(0, 6))}
-              className='w-full rounded-2xl border border-slate-300 px-4 py-3'
-              type='text'
-              inputMode='numeric'
-              placeholder='Enter points to redeem'
-              disabled={availableLoyaltyPoints === 0 || !canRedeemOnThisOrder}
-            />
-            <button
-              type='button'
-              onClick={applyPointsHandler}
-              disabled={isApplyingPoints || availableLoyaltyPoints === 0 || !canRedeemOnThisOrder}
-              className='rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white disabled:opacity-60'
-            >
-              {isApplyingPoints ? 'Checking...' : 'Redeem'}
-            </button>
-          </div>
-
-          {loyaltyRules ? (
-            <div className='mt-4 rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600'>
-              <p>Minimum redemption for this order: {minimumRedeemPointsRequired} points.</p>
-              <p className='mt-1'>Point value: 1 point = Rs {pointValue.toFixed(0)}.</p>
-              <p className='mt-1'>Up to {maxRedeemShare}% of the coupon-adjusted order can be covered with points.</p>
-              <p className='mt-1'>Per-product cap: {Number(loyaltyRules.maxRedeemPointsPerProduct || 0)} points each.</p>
-              <p className='mt-1'>
-                Current order cap: {orderRulePointCap} points
-                {Number.isFinite(Number(loyaltyRules.maxRedeemPointsPerOrder))
-                  ? ` (hard cap ${Number(loyaltyRules.maxRedeemPointsPerOrder)} per order)`
-                  : ''}
-                .
-              </p>
-              {orderCapBelowMinimum ? (
-                <p className='mt-2 text-amber-700'>
-                  This order does not currently meet the minimum redemption threshold of {minimumRedeemPointsRequired} points.
-                </p>
-              ) : null}
-              {pointsNeededForMinimumRedemption > 0 ? (
-                <p className='mt-2 text-amber-700'>
-                  You need {pointsNeededForMinimumRedemption} more points to unlock redemption for this checkout.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {Number(pricingSummary.loyaltyPointsRedeemed || 0) > 0 ? (
-            <div className='mt-4 rounded-2xl bg-sky-50 px-4 py-4 text-sm text-sky-900'>
-              <div className='flex items-start justify-between gap-4'>
-                <div>
-                  <p className='font-medium'>{pricingSummary.loyaltyPointsRedeemed} points reserved</p>
-                  <p className='mt-1 text-sky-800'>
-                    This redemption will remain reserved until payment succeeds or the COD order is finalized.
-                  </p>
-                </div>
-                <button type='button' onClick={clearPointsHandler} className='text-xs font-semibold uppercase tracking-[0.2em]'>
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className='mt-6 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm'>
-          <Title text1='PAYMENT' text2='METHOD' />
-
-          <div className='mt-4 flex gap-3 flex-col'>
-            <button
-              type='button'
-              onClick={() => setMethod('cod')}
-              className={`flex items-center justify-between gap-3 border p-4 px-4 cursor-pointer rounded-2xl ${
-                method === 'cod' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-              }`}
-            >
-              <div className='flex items-center gap-3'>
-                <p className={`min-w-3.5 h-3.5 border rounded-full ${method === 'cod' ? 'bg-green-400 border-green-400' : ''}`}></p>
-                <span className='text-sm font-medium text-gray-700'>Cash on Delivery</span>
-              </div>
-              <span className='text-xs uppercase tracking-[0.2em] text-slate-500'>Flexible</span>
-            </button>
-
-            <button
-              type='button'
-              onClick={() => {
-                if (!onlinePaymentDisabled && stripeEnabled) {
-                  setMethod('stripe');
-                }
-              }}
-              className={`flex items-center justify-between gap-3 border p-4 px-4 cursor-pointer rounded-2xl ${
-                method === 'stripe' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-              } ${onlinePaymentDisabled || !stripeEnabled ? 'cursor-not-allowed opacity-50' : ''}`}
-            >
-              <div className='flex items-center gap-3'>
-                <p className={`min-w-3.5 h-3.5 border rounded-full ${method === 'stripe' ? 'bg-green-400 border-green-400' : ''}`}></p>
-                <img className='h-5' src={assets.stripe_logo} alt='Stripe' />
-              </div>
-              <span className='text-xs uppercase tracking-[0.2em] text-slate-500'>
-                {stripeEnabled ? 'Card checkout' : 'Unavailable'}
-              </span>
-            </button>
-
-            <button
-              type='button'
-              onClick={() => {
-                if (!onlinePaymentDisabled && razorpayEnabled) {
-                  setMethod('razorpay');
-                }
-              }}
-              className={`flex items-center justify-between gap-3 border p-4 px-4 cursor-pointer rounded-2xl ${
-                method === 'razorpay' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-              } ${onlinePaymentDisabled || !razorpayEnabled ? 'cursor-not-allowed opacity-50' : ''}`}
-            >
-              <div className='flex items-center gap-3'>
-                <p className={`min-w-3.5 h-3.5 border rounded-full ${method === 'razorpay' ? 'bg-green-400 border-green-400' : ''}`}></p>
-                <img className='h-5' src={assets.razorpay_logo} alt='Razorpay' />
-              </div>
-              <span className='text-xs uppercase tracking-[0.2em] text-slate-500'>
-                {razorpayEnabled ? 'UPI and wallet' : 'Unavailable'}
-              </span>
-            </button>
-          </div>
-
-          <p className='mt-4 text-xs text-gray-500'>
-            Choose COD to pay when your order arrives, or complete the payment online with Stripe or Razorpay.
-          </p>
-
-          {!stripeEnabled || !razorpayEnabled ? (
-            <p className='mt-2 text-xs text-slate-500'>
-              Server capability sync: Stripe is {stripeEnabled ? 'enabled' : 'disabled'} and Razorpay is{' '}
-              {razorpayEnabled ? 'enabled' : 'disabled'} for this deployment.
-            </p>
-          ) : null}
-
-          {onlinePaymentDisabled ? (
-            <p className='mt-2 text-xs text-amber-700'>
-              This order currently totals zero after discounts, so online payment is disabled.
-            </p>
-          ) : null}
-
-          <div className='w-full text-end mt-8'>
             <button
               type='submit'
-              disabled={isPlacingOrder}
-              className='bg-black text-white px-16 py-3 text-sm disabled:opacity-60 disabled:cursor-not-allowed'
+              disabled={isPlacingOrder || !method || !hasAddressInput}
+              className='rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:opacity-60 disabled:cursor-not-allowed'
             >
-              {isPlacingOrder ? 'PLACING ORDER...' : 'PLACE ORDER'}
+              {isPlacingOrder ? 'Placing...' : 'Place order'}
             </button>
           </div>
         </div>
