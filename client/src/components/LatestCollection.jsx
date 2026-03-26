@@ -14,9 +14,9 @@ const LatestCollection = () => {
 
   return (
     <div className='mt-0 mb-16 sm:my-20'>
-      <div className='text-center pt-0 pb-4 sm:py-8 text-3xl'>
+      <div className='text-center pt-0 pb-4 sm:py-8 text-[2rem] leading-[0.95] sm:text-3xl'>
         <Title text1='LATEST' text2='COLLECTIONS' />
-        <p className='w-3/4 m-auto text-xs sm:text-sm md:text-base text-gray-600'>
+        <p className='hidden sm:block w-3/4 m-auto text-sm md:text-base text-gray-600'>
           Explore the newest additions to Lavish Fashion, from everyday essentials to standout seasonal
           layers selected for quick, confident shopping.
         </p>
