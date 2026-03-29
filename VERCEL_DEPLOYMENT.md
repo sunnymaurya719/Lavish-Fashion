@@ -67,6 +67,16 @@ This file must be present in deployment if you want the trained model to load in
 
 If the file is missing, the ML service can still start, but it will fall back to heuristic mode.
 
+## FastAPI Entrypoint
+
+The `ml-service` Vercel project uses:
+
+- `ml-service/index.py`
+
+This is the FastAPI entrypoint exported to Vercel.
+
+No custom `functions` mapping is required for this setup.
+
 ## Deployment Order
 
 1. Deploy `ml-service`

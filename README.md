@@ -152,7 +152,6 @@ Notes:
 
 - `ml-service/index.py` is the Vercel Python entrypoint
 - `ml-service/.python-version` pins Python `3.12`
-- `ml-service/vercel.json` trims tests and training files from the deployment bundle
 - `ml-service/app/models/size_recommender.joblib` is intentionally allowed in git so the trained model can be deployed with the service
 
 ## Useful Commands
