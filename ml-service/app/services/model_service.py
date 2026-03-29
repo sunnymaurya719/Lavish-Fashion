@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import joblib
-import numpy as np
 
 from app.core.config import settings
 from app.services.model_artifact import GradientBoostedFitArtifact
@@ -72,14 +71,21 @@ class ModelService:
         if not self._model or not feature_rows:
             return None
 
-        prediction_input = np.asarray(feature_rows, dtype=float)
-
         try:
-            predictions = self._model.predict(prediction_input)
+            predictions = self._model.predict(feature_rows)
         except TypeError:
             predictions = self._model.predict(feature_rows)
 
-        return [float(value) for value in np.asarray(predictions).reshape(-1)]
+        if isinstance(predictions, (list, tuple)):
+            return [float(value) for value in predictions]
+
+        if hasattr(predictions, "tolist"):
+            converted_predictions = predictions.tolist()
+            if isinstance(converted_predictions, list):
+                return [float(value) for value in converted_predictions]
+            return [float(converted_predictions)]
+
+        return [float(predictions)]
 
 
 model_service = ModelService()

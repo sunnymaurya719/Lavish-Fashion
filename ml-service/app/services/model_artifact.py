@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-import numpy as np
-import xgboost as xgb
+from typing import Any
 
 
 @dataclass
 class GradientBoostedFitArtifact:
-    booster: xgb.Booster
+    booster: Any
     feature_order: tuple[str, ...]
     metadata: dict[str, object] = field(default_factory=dict)
 
-    def predict(self, feature_rows) -> np.ndarray:
-        prediction_input = np.asarray(feature_rows, dtype=float)
-        matrix = xgb.DMatrix(prediction_input, feature_names=list(self.feature_order))
+    def predict(self, feature_rows):
+        try:
+            import xgboost as xgb
+        except ImportError as exc:  # pragma: no cover - depends on deployment runtime
+            raise RuntimeError("xgboost runtime is not installed") from exc
+
+        matrix = xgb.DMatrix(feature_rows, feature_names=list(self.feature_order))
         return self.booster.predict(matrix)

@@ -156,7 +156,7 @@ const normalizeMlRecommendationResponse = (payload) => {
     }
 
     return {
-        source: 'ml',
+        source: String(payload?.source || 'ml').trim() || 'ml',
         recommendation: {
             size: recommendationSize,
             confidence: Number(payload?.recommendation?.confidence || 0),

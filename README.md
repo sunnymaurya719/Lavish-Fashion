@@ -109,7 +109,7 @@ Install dependencies:
 cd server && npm install
 cd client && npm install
 cd admin && npm install
-cd ml-service && python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+cd ml-service && python -m venv .venv && .venv\Scripts\pip install -r requirements.local.txt
 ```
 
 Run the apps in separate terminals:
@@ -153,6 +153,8 @@ Notes:
 - `ml-service/index.py` is the Vercel Python entrypoint
 - `ml-service/.python-version` pins Python `3.12`
 - `ml-service/app/models/size_recommender.joblib` is intentionally allowed in git so the trained model can be deployed with the service
+- `ml-service/requirements.txt` is intentionally slim for Vercel deployment
+- `ml-service/requirements.local.txt` keeps the full local ML stack including `xgboost`
 
 ## Useful Commands
 

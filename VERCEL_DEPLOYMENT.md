@@ -77,6 +77,25 @@ This is the FastAPI entrypoint exported to Vercel.
 
 No custom `functions` mapping is required for this setup.
 
+## Vercel Dependency Limit
+
+Vercel Python serverless functions have a strict dependency size limit.
+
+Because `xgboost` and its native dependencies are too large for this limit, the deployable Vercel runtime uses:
+
+- `ml-service/requirements.txt`
+
+That slim runtime keeps the service deployable for:
+
+- body analysis
+- heuristic recommendations
+
+The full local ML stack remains in:
+
+- `ml-service/requirements.local.txt`
+
+That file is for local development and non-Vercel hosting where the trained XGBoost artifact can actually run.
+
 ## Deployment Order
 
 1. Deploy `ml-service`
