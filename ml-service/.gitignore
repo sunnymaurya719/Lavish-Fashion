@@ -6,3 +6,4 @@ __pycache__/
 app/models/*.joblib
 !app/models/size_recommender.joblib
 .env
+.env.example
