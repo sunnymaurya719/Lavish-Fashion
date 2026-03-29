@@ -1,75 +1,38 @@
 # Lavish Fashion
 
-Lavish Fashion is a full-stack ecommerce project with three separate apps:
+Lavish Fashion is a full-stack ecommerce project split into four apps inside one repository:
 
 - `client` for the customer storefront
-- `admin` for product and order management
-- `server` for the API, auth, cart, checkout, and payment workflows
-
-The project uses React on the frontend, Express on the backend, MongoDB for persistence, Cloudinary for media uploads, and Stripe/Razorpay for online payments.
-
-## Current Features
-
-### Storefront
-- Product listing and single product pages
-- Category and subcategory filtering
-- Cart management
-- User signup and login
-- Customer profile page with editable name and phone
-- Checkout with Stripe, Razorpay, and Cash on Delivery
-- Buy now flow
-- Order history page
-
-### Admin
-- Admin login
-- Add product
-- Edit product
-- Delete product
-- Product list
-- Order list with status updates
-
-### Backend
-- JWT auth for users and admin
-- Request validation with Zod
-- Cart APIs
-- Product add, update, remove, list, and single-item APIs
-- Order creation for Stripe, Razorpay, and Cash on Delivery
-- Stripe and Razorpay payment verification
-- Stripe and Razorpay webhook handling
-- Rate limiting, structured logging, and idempotent checkout requests
-- Automated server tests for core auth, cart, order, checkout, and webhook flows
-
-## Tech Stack
-
-### Frontend
-- React
-- React Router
-- Tailwind CSS
-- Axios
-- Vite
-
-### Backend
-- Node.js
-- Express
-- MongoDB with Mongoose
-- JWT
-- Zod
-- Cloudinary
-- Stripe
-- Razorpay
+- `admin` for the admin workspace
+- `server` for the main API, auth, cart, checkout, orders, and payments
+- `ml-service` for fit recommendations and camera-based body analysis
 
 ## Project Structure
 
 ```text
 Lavish Fashion/
-├── admin/
-├── client/
-├── server/
-├── ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md
-└── README.md
+|-- admin/
+|-- client/
+|-- ml-service/
+|-- server/
+`-- README.md
 ```
 
-## Environment Variables
+## Architecture
+
+Use this connection flow:
+
+- `client -> server`
+- `admin -> server`
+- `server -> ml-service`
+
+Important:
+
+- `client` and `admin` should not call `ml-service` directly
+- the ML shared secret belongs only in `server` and `ml-service`
+- if `ml-service` is unavailable, `server` can still fall back to the rule engine for size recommendations
+
+## Local Environment Variables
 
 ### Server
 
@@ -99,11 +62,14 @@ RAZORPAY_KEY_ID=your_razorpay_key
 RAZORPAY_KEY_SECRET=your_razorpay_secret
 RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret
 
-# Realtime (Admin Instant Order Updates)
 REALTIME_ENABLED=true
 REALTIME_PROVIDER=ably
 ABLY_API_KEY=your_ably_api_key
 REALTIME_TOKEN_TTL_MS=600000
+
+ML_SERVICE_URL=http://127.0.0.1:8011
+ML_SERVICE_SHARED_SECRET=replace-with-long-random-secret
+ML_SERVICE_TIMEOUT_MS=4000
 ```
 
 ### Client
@@ -124,14 +90,26 @@ VITE_BACKEND_URL=http://localhost:4000
 VITE_REALTIME_ENABLED=true
 ```
 
+### ML Service
+
+Create `ml-service/.env` with:
+
+```env
+ML_APP_ENV=development
+MODEL_VERSION=xgb-fit-v1
+MODEL_PATH=app/models/size_recommender.joblib
+ML_SERVICE_SHARED_SECRET=replace-with-the-same-secret-used-by-server
+```
+
 ## Local Development
 
-Install dependencies inside each app:
+Install dependencies:
 
 ```bash
 cd server && npm install
 cd client && npm install
 cd admin && npm install
+cd ml-service && python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
 ```
 
 Run the apps in separate terminals:
@@ -140,6 +118,7 @@ Run the apps in separate terminals:
 cd server && npm run server
 cd client && npm run client
 cd admin && npm run admin
+cd ml-service && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8011
 ```
 
 Default local ports:
@@ -147,6 +126,34 @@ Default local ports:
 - `client`: `5173`
 - `admin`: `5174`
 - `server`: `4000`
+- `ml-service`: `8011`
+
+## Vercel Deployment
+
+This repository is intended to be deployed as four separate Vercel projects from the same GitHub repo.
+
+Create one Vercel project for each folder and set its Root Directory:
+
+- `client` project -> `client`
+- `admin` project -> `admin`
+- `server` project -> `server`
+- `ml-service` project -> `ml-service`
+
+Recommended deployment order:
+
+1. Deploy `ml-service`
+2. Copy the deployed `ml-service` URL into the `server` environment as `ML_SERVICE_URL`
+3. Deploy `server`
+4. Set `client` and `admin` `VITE_BACKEND_URL` to the deployed `server` URL
+5. Deploy `client`
+6. Deploy `admin`
+
+Notes:
+
+- `ml-service/index.py` is the Vercel Python entrypoint
+- `ml-service/.python-version` pins Python `3.12`
+- `ml-service/vercel.json` trims tests and training files from the deployment bundle
+- `ml-service/app/models/size_recommender.joblib` is intentionally allowed in git so the trained model can be deployed with the service
 
 ## Useful Commands
 
@@ -172,10 +179,9 @@ npm run admin
 npm run build
 ```
 
-## Roadmap
+### ML Service
 
-The next major upgrade plan is documented in:
-
-- [ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md](./ADVANCED_ECOMMERCE_LAUNCH_ROADMAP.md)
-
-That document lists the missing launch-level features for catalog management, customer accounts, promotions, analytics, operations, SEO, and deployment readiness.
+```bash
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8011
+```

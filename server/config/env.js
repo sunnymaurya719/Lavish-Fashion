@@ -28,10 +28,21 @@ const optionalButRecommendedEnvVars = [
     'MARKETING_EMAIL_PROVIDER',
     'MARKETING_FROM_EMAIL',
     'MARKETING_REPLY_TO_EMAIL',
-    'RESEND_API_KEY'
+    'RESEND_API_KEY',
+    'FIT_ASSISTANT_ENABLED',
+    'FIT_CAMERA_ENABLED',
+    'FIT_ENABLE_PERCENT',
+    'FIT_CONFIDENCE_MIN',
+    'ML_SERVICE_URL',
+    'ML_SERVICE_TIMEOUT_MS',
+    'ML_SERVICE_SHARED_SECRET',
+    'REDIS_URL',
+    'FIT_CACHE_TTL_SECONDS',
+    'FIT_SCAN_SESSION_TTL_SECONDS',
+    'BODY_SCAN_MAX_IMAGE_BYTES'
 ];
 
-const urlEnvVars = ['CLIENT_URL', 'ADMIN_URL', 'FRONTEND_URL'];
+const urlEnvVars = ['CLIENT_URL', 'ADMIN_URL', 'FRONTEND_URL', 'ML_SERVICE_URL'];
 const isValidWebUrl = (value) => /^https?:\/\/.+/i.test(String(value || '').trim());
 
 const validateEnvironment = () => {
@@ -45,7 +56,7 @@ const validateEnvironment = () => {
     if (missingOptionalVars.length > 0) {
         logger.warn(
             { missingOptionalVars },
-            'Optional environment variables are missing. Some payment, media, loyalty, marketing, or cross-origin features may be unavailable.'
+            'Optional environment variables are missing. Some payment, media, loyalty, marketing, fit-assistant, ML, cache, or cross-origin features may be unavailable.'
         );
     }
 
@@ -57,7 +68,7 @@ const validateEnvironment = () => {
     if (invalidUrlEnvVars.length > 0) {
         logger.warn(
             { invalidUrlEnvVars },
-            'Some configured URL environment variables are not valid http/https URLs and will be ignored for public bootstrap metadata or CORS allowlists.'
+            'Some configured URL environment variables are not valid http/https URLs and will be ignored for public bootstrap metadata, CORS allowlists, or service integration calls.'
         );
     }
 };

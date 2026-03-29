@@ -72,6 +72,12 @@ const adminNavigationSections = [
         description: 'Moderation queue and trust signals'
       },
       {
+        label: 'Fit Analytics',
+        to: '/fit-analytics',
+        icon: 'fit',
+        description: 'Rollout health, confidence, and shopper fit outcomes'
+      },
+      {
         label: 'Marketing',
         to: '/marketing',
         icon: 'marketing',
@@ -157,6 +163,13 @@ const resolveAdminPageMeta = (pathname = '') => {
     };
   }
 
+  if (pathname.startsWith('/fit-analytics')) {
+    return {
+      title: 'Fit Analytics',
+      description: 'Track fit rollout readiness, recommendation confidence, and post-delivery shopper outcomes.'
+    };
+  }
+
   if (pathname.startsWith('/marketing')) {
     return {
       title: 'Marketing Automation',
@@ -202,6 +215,10 @@ const isNavItemActive = (pathname = '', to = '') => {
 
   if (to === '/reviews') {
     return pathname.startsWith('/reviews');
+  }
+
+  if (to === '/fit-analytics') {
+    return pathname.startsWith('/fit-analytics');
   }
 
   if (to === '/marketing') {

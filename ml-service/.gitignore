@@ -1,0 +1,7 @@
+.venv/
+.tmp/
+__pycache__/
+.pytest_cache/
+*.pyc
+app/models/*.joblib
+!app/models/size_recommender.joblib

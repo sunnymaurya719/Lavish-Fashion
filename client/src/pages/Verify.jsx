@@ -5,7 +5,7 @@ import { notify as toast } from '../utils/notify';
 import { ShopContext } from '../context/ShopContext';
 
 const Verify = () => {
-  const { navigate, setCartItems, token, BACKEND_URL } = useContext(ShopContext);
+  const { navigate, clearCartState, token, BACKEND_URL } = useContext(ShopContext);
   const [searchParams] = useSearchParams();
   const success = searchParams.get('success');
   const orderId = searchParams.get('orderId');
@@ -33,7 +33,7 @@ const Verify = () => {
 
       if (response.data.success) {
         if (checkoutSource !== 'buy_now') {
-          setCartItems({});
+          clearCartState();
         }
         navigate('/orders');
         return;
@@ -45,7 +45,7 @@ const Verify = () => {
       toast.error(error?.response?.data?.message || error.message);
       navigate('/cart');
     }
-  }, [BACKEND_URL, checkoutSource, navigate, orderId, sessionId, setCartItems, success, token]);
+  }, [BACKEND_URL, checkoutSource, clearCartState, navigate, orderId, sessionId, success, token]);
 
   useEffect(() => {
     verifyPayment();

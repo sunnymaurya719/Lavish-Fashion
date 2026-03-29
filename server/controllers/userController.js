@@ -36,6 +36,11 @@ const buildUserProfile = (user) => ({
     lifetimeLoyaltyPoints: Number(user.lifetimeLoyaltyPoints || 0),
     loyaltyTier: determineLoyaltyTier(user.lifetimeLoyaltyPoints || user.loyaltyPoints || 0).currentTier,
     marketingPreferences: getUserMarketingPreferences(user),
+    fitProfile: {
+        heightCm: user.fitProfile?.heightCm ?? null,
+        weightKg: user.fitProfile?.weightKg ?? null,
+        preferredFit: user.fitProfile?.preferredFit || 'regular'
+    },
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null
 });
@@ -221,7 +226,7 @@ const getUserProfile = async (req, res) => {
 
 const updateUserProfile = async (req, res) => {
     try {
-        const { name, phone, marketingPreferences } = req.body;
+        const { name, phone, marketingPreferences, fitProfile } = req.body;
         const existingUser = await userModel.findById(req.userId);
 
         if (!existingUser) {
@@ -233,6 +238,16 @@ const updateUserProfile = async (req, res) => {
             {
                 name,
                 phone: String(phone || '').trim(),
+                ...(fitProfile
+                    ? {
+                        fitProfile: {
+                            ...(existingUser.fitProfile || {}),
+                            ...(fitProfile.heightCm !== undefined ? { heightCm: Number(fitProfile.heightCm) } : {}),
+                            ...(fitProfile.weightKg !== undefined ? { weightKg: Number(fitProfile.weightKg) } : {}),
+                            ...(fitProfile.preferredFit ? { preferredFit: fitProfile.preferredFit } : {})
+                        }
+                    }
+                    : {}),
                 ...(marketingPreferences
                     ? {
                         marketingPreferences: getUserMarketingPreferences({

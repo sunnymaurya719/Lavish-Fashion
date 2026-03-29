@@ -2,7 +2,10 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
 import RelatedProducts from '../components/RelatedProducts';
+import FitAssistantModal from '../components/fit/FitAssistantModal';
 import { ShopContext } from '../context/ShopContext';
+import { getFitInsights as getFitInsightsRequest } from '../services/fitApi';
+import { isFitRolloutActiveForProduct } from '../utils/fitRollout';
 
 const HeartIcon = ({ filled = false }) => (
   <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
@@ -65,6 +68,17 @@ const formatDate = (value) => {
     year: 'numeric',
   });
 };
+const formatFitBiasLabel = (value) => {
+  if (value === 'runs_small') {
+    return 'Runs small';
+  }
+
+  if (value === 'runs_large') {
+    return 'Runs large';
+  }
+
+  return 'True to size';
+};
 
 const Product = () => {
   const { productId } = useParams();
@@ -99,6 +113,9 @@ const Product = () => {
   const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [showSwipeHint, setShowSwipeHint] = useState(false);
+  const [isFitAssistantOpen, setIsFitAssistantOpen] = useState(false);
+  const [appliedFitSelection, setAppliedFitSelection] = useState(null);
+  const [fitInsights, setFitInsights] = useState(null);
   const imageTouchStartXRef = useRef(null);
   const imageTouchDeltaXRef = useRef(0);
   const swipeHintTimerRef = useRef(null);
@@ -189,7 +206,16 @@ const Product = () => {
       return;
     }
 
-    navigate('/place-order', { state: { buyNow: true, product: { ...productData, size } } });
+    navigate('/place-order', {
+      state: {
+        buyNow: true,
+        product: {
+          ...productData,
+          size,
+          ...(appliedFitSelection?.selectedSize === size ? { fitAssistant: appliedFitSelection.fitAssistant } : {}),
+        },
+      },
+    });
   };
 
   useEffect(() => {
@@ -202,6 +228,8 @@ const Product = () => {
     setProductData(matchedProduct);
     setActiveImageIndex(0);
     setIsImageZoomed(false);
+    setIsFitAssistantOpen(false);
+    setAppliedFitSelection(null);
     setSize((currentSize) => (matchedProduct.sizes?.includes(currentSize) ? currentSize : ''));
   }, [productId, products]);
 
@@ -286,6 +314,26 @@ const Product = () => {
   );
   const activeImage = imageList[activeImageIndex] || imageList[0] || '';
   const sizeOptions = useMemo(() => (Array.isArray(productData?.sizes) ? productData.sizes : []), [productData?.sizes]);
+  const fitRolloutEnabled =
+    serverStatus === 'online'
+      ? isFitRolloutActiveForProduct({
+          productId: productData?._id,
+          rolloutPercent: serverBootstrap?.rollout?.fitRolloutPercent,
+        })
+      : true;
+  const fitAssistantEnabled =
+    Boolean(productData?.fitEnabled) &&
+    Boolean(productData?.fitProfileSummary?.ready) &&
+    fitRolloutEnabled &&
+    (serverStatus === 'online' ? Boolean(serverBootstrap?.features?.fitAssistantEnabled) : true);
+  const fitCameraEnabled =
+    fitAssistantEnabled &&
+    (serverStatus === 'online'
+      ? Boolean(serverBootstrap?.features?.fitCameraEnabled) && Boolean(serverBootstrap?.integrations?.mlServiceEnabled)
+      : false);
+  const fitInsightsEnabled =
+    fitAssistantEnabled &&
+    (serverStatus === 'online' ? Boolean(serverBootstrap?.features?.fitInsightsEnabled) : false);
   const descriptionPoints = useMemo(
     () => [
       productData?.description,
@@ -320,6 +368,45 @@ const Product = () => {
     },
     [imageList.length]
   );
+
+  const handleSizeSelection = useCallback((nextSize) => {
+    setSize(nextSize);
+    setAppliedFitSelection((currentSelection) =>
+      currentSelection?.selectedSize === nextSize ? currentSelection : null
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!productData?._id || !fitInsightsEnabled) {
+      setFitInsights(null);
+      return;
+    }
+
+    let isActive = true;
+
+    const fetchFitInsights = async () => {
+      try {
+        const response = await getFitInsightsRequest({
+          backendUrl: BACKEND_URL,
+          productId: productData._id,
+        });
+
+        if (isActive && response.success) {
+          setFitInsights(response.insights || null);
+        }
+      } catch {
+        if (isActive) {
+          setFitInsights(null);
+        }
+      }
+    };
+
+    fetchFitInsights();
+
+    return () => {
+      isActive = false;
+    };
+  }, [BACKEND_URL, fitInsightsEnabled, productData?._id]);
 
   const handleImageTouchStart = (event) => {
     imageTouchStartXRef.current = event.touches?.[0]?.clientX ?? null;
@@ -560,7 +647,7 @@ const Product = () => {
                 <button
                   key={`${item}-${index}`}
                   type='button'
-                  onClick={() => setSize(item)}
+                  onClick={() => handleSizeSelection(item)}
                   className={`rounded-full px-5 py-2.5 text-sm transition-all ${
                     item === size
                       ? 'bg-[#111] text-white shadow-[0_10px_22px_rgba(17,17,17,0.22)]'
@@ -573,10 +660,58 @@ const Product = () => {
             </div>
           </div>
 
+          {fitAssistantEnabled ? (
+            <div className='rounded-[28px] border border-slate-200 bg-slate-50 p-4'>
+              <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                <div>
+                  <p className='text-[11px] uppercase tracking-[0.24em] text-slate-500'>Need fit help?</p>
+                  <p className='mt-2 text-sm leading-6 text-slate-600'>
+                    Get a size recommendation from manual measurements and, when enabled, a guided camera scan.
+                  </p>
+                </div>
+
+                <button
+                  type='button'
+                  onClick={() => setIsFitAssistantOpen(true)}
+                  className='rounded-full bg-white px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-slate-900 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100'
+                >
+                  Find My Size
+                </button>
+              </div>
+
+              {fitInsightsEnabled && (fitInsights?.crowdSignal || fitInsights?.fitBias) ? (
+                <div className='mt-4 rounded-[22px] bg-white px-4 py-4 ring-1 ring-slate-200/80'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <p className='text-[11px] uppercase tracking-[0.22em] text-slate-500'>Fit notes</p>
+                    {fitInsights?.fitBias ? (
+                      <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-700'>
+                        {formatFitBiasLabel(fitInsights.fitBias)}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {fitInsights?.crowdSignal ? (
+                    <p className='mt-3 text-sm leading-6 text-slate-600'>{fitInsights.crowdSignal}</p>
+                  ) : (
+                    <p className='mt-3 text-sm leading-6 text-slate-600'>
+                      This fit note is based on the product&apos;s measurement profile and verified shopper feedback.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className='grid grid-cols-2 gap-3'>
             <button
               type='button'
-              onClick={() => addToCart(productData._id, size)}
+              onClick={() =>
+                addToCart(
+                  productData._id,
+                  size,
+                  appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
+                )
+              }
               disabled={isOutOfStock}
               className='rounded-full border border-[#111] bg-white px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase text-[#111] transition hover:bg-[#111] hover:text-white disabled:cursor-not-allowed disabled:opacity-50'
             >
@@ -892,6 +1027,27 @@ const Product = () => {
       </div>
 
       <RelatedProducts category={productData.category} subCategory={productData.subCategory} />
+
+      <FitAssistantModal
+        isOpen={isFitAssistantOpen}
+        onClose={() => setIsFitAssistantOpen(false)}
+        product={productData}
+        backendUrl={BACKEND_URL}
+        token={token}
+        toast={toast}
+        onApplySize={({ size: recommendedSize, fitAssistant }) => {
+          setSize(recommendedSize);
+          setAppliedFitSelection(
+            fitAssistant
+              ? {
+                  selectedSize: recommendedSize,
+                  fitAssistant,
+                }
+              : null
+          );
+        }}
+        cameraEnabled={fitCameraEnabled}
+      />
     </div>
   );
 };

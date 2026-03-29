@@ -3,6 +3,7 @@ import { unlink } from 'fs/promises';
 import productModel from '../models/productModel.js';
 import reviewModel from '../models/reviewModel.js';
 import { backfillMissingProductInventory, normalizeInventoryFields } from '../services/productInventoryService.js';
+import { buildProductFitConfig, normalizeProductFitData } from '../services/productFitProfileService.js';
 
 const imageFieldNames = ['image1', 'image2', 'image3', 'image4'];
 const subCategoryAliases = {
@@ -43,6 +44,23 @@ const parseStringArray = (value) => {
         return Array.isArray(parsed)
             ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
             : [];
+    } catch {
+        return [];
+    }
+};
+
+const parseJsonArray = (value) => {
+    if (Array.isArray(value)) {
+        return value;
+    }
+
+    if (typeof value !== 'string') {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
     } catch {
         return [];
     }
@@ -89,7 +107,7 @@ const normalizeProductDocument = (product) => {
         return null;
     }
 
-    const normalizedProduct = normalizeInventoryFields(product);
+    const normalizedProduct = normalizeProductFitData(normalizeInventoryFields(product));
     normalizedProduct.subCategory = normalizeSubCategory(normalizedProduct.subCategory);
     return normalizedProduct;
 };
@@ -151,7 +169,25 @@ const getSingleNormalizedProduct = async (id) => {
 
 const addProduct = async (req ,res) =>{
     try{
-        const {name,description, price,category,subCategory,sizes,sku = '',stock = 25,lowStockThreshold = 5,status = 'active',isFeatured = false} = req.body ;
+        const {
+            name,
+            description,
+            price,
+            category,
+            subCategory,
+            sizes,
+            fitEnabled = false,
+            sizeScale = 'alpha',
+            measurementTemplate = 'topwear',
+            fitBias = 'true_to_size',
+            stretchScore = 0.25,
+            sizeMeasurements = '[]',
+            sku = '',
+            stock = 25,
+            lowStockThreshold = 5,
+            status = 'active',
+            isFeatured = false
+        } = req.body;
 
         if (!req.files || Object.keys(req.files).length === 0) {
             return res.status(400).json({ success: false, message: 'At least one image is required' });
@@ -166,13 +202,27 @@ const addProduct = async (req ,res) =>{
 
         const imagesUrl = await buildImageList({ files: req.files });
 
+        const normalizedSizes = parseStringArray(sizes);
+        const fitConfig = buildProductFitConfig({
+            fitEnabled,
+            sizeScale,
+            measurementTemplate,
+            fitBias,
+            stretchScore,
+            sizeMeasurements: parseJsonArray(sizeMeasurements),
+            sizes: normalizedSizes
+        });
+
         const productData = {
             name,
             description,
             category,
             price: Number(price),
             subCategory: normalizeSubCategory(subCategory),
-            sizes: parseStringArray(sizes),
+            sizes: normalizedSizes,
+            fitEnabled: fitConfig.fitEnabled,
+            sizeScale: fitConfig.sizeScale,
+            fitProfile: fitConfig.fitProfile,
             sku: String(sku || '').trim().toUpperCase(),
             stock: Number(stock),
             lowStockThreshold: Number(lowStockThreshold),
@@ -195,7 +245,27 @@ const addProduct = async (req ,res) =>{
 
 const updateProduct = async (req, res) => {
     try {
-        const { id, name, description, price, category, subCategory, sizes, existingImages, sku = '', stock = 25, lowStockThreshold = 5, status = 'active', isFeatured = false } = req.body;
+        const {
+            id,
+            name,
+            description,
+            price,
+            category,
+            subCategory,
+            sizes,
+            fitEnabled = false,
+            sizeScale = 'alpha',
+            measurementTemplate = 'topwear',
+            fitBias = 'true_to_size',
+            stretchScore = 0.25,
+            sizeMeasurements = '[]',
+            existingImages,
+            sku = '',
+            stock = 25,
+            lowStockThreshold = 5,
+            status = 'active',
+            isFeatured = false
+        } = req.body;
         const existingProduct = await productModel.findById(id);
 
         if (!existingProduct) {
@@ -224,6 +294,17 @@ const updateProduct = async (req, res) => {
             return res.status(400).json({ success: false, message: 'At least one image is required' });
         }
 
+        const normalizedSizes = parseStringArray(sizes);
+        const fitConfig = buildProductFitConfig({
+            fitEnabled,
+            sizeScale,
+            measurementTemplate,
+            fitBias,
+            stretchScore,
+            sizeMeasurements: parseJsonArray(sizeMeasurements),
+            sizes: normalizedSizes
+        });
+
         await productModel.findByIdAndUpdate(
             id,
             {
@@ -232,7 +313,10 @@ const updateProduct = async (req, res) => {
                 category,
                 price: Number(price),
                 subCategory: normalizeSubCategory(subCategory),
-                sizes: parseStringArray(sizes),
+                sizes: normalizedSizes,
+                fitEnabled: fitConfig.fitEnabled,
+                sizeScale: fitConfig.sizeScale,
+                fitProfile: fitConfig.fitProfile,
                 sku: String(sku || '').trim().toUpperCase(),
                 stock: Number(stock),
                 lowStockThreshold: Number(lowStockThreshold),

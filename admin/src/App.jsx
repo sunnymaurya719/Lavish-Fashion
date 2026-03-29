@@ -12,6 +12,7 @@ import Coupons from './pages/Coupons';
 import Customers from './pages/Customers';
 import Dashboard from './pages/Dashboard';
 import Edit from './pages/Edit';
+import FitAnalytics from './pages/FitAnalytics';
 import Inventory from './pages/Inventory';
 import List from './pages/List';
 import Loyalty from './pages/Loyalty';
@@ -172,6 +173,17 @@ const App = () => {
                 <Route path='/customers' element={<Customers token={token} />} />
                 <Route path='/coupons' element={<Coupons token={token} />} />
                 <Route path='/loyalty' element={<Loyalty token={token} />} />
+                <Route
+                  path='/fit-analytics'
+                  element={
+                    <FitAnalytics
+                      token={token}
+                      serverStatus={serverStatus}
+                      serverBootstrap={serverBootstrap}
+                      onRefreshServerStatus={() => fetchServerBootstrap()}
+                    />
+                  }
+                />
                 <Route path='/reviews' element={<Reviews token={token} />} />
                 <Route path='/marketing' element={<Marketing token={token} />} />
                 <Route path='/add' element={<Navigate to='/products/new' replace />} />

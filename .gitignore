@@ -1,2 +1,8 @@
 node_modules
 *.env
+
+AI_FIT_ASSISTANT_PLAN.md
+renttherunway_final_data.json
+modcloth_final_data.json
+.tmp_modcloth_sample.jsonl
+.tmp_modcloth_sample_500.jsonl

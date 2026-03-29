@@ -21,6 +21,34 @@ const isCheckoutError = (error) => Boolean(error?.isCheckoutError);
 
 const normalizeCouponCode = (value) => String(value || '').trim().toUpperCase();
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(2));
+const normalizeOptionalFitAssistant = (fitAssistant) => {
+    if (!fitAssistant || typeof fitAssistant !== 'object' || Array.isArray(fitAssistant)) {
+        return undefined;
+    }
+
+    const recommendedSize = String(fitAssistant.recommendedSize || '').trim();
+
+    if (!recommendedSize) {
+        return undefined;
+    }
+
+    const confidenceValue = Number(fitAssistant.confidence);
+    const normalizedConfidence =
+        Number.isFinite(confidenceValue) && confidenceValue >= 0 && confidenceValue <= 1
+            ? Number(confidenceValue.toFixed(4))
+            : null;
+    const normalizedSource = ['manual', 'camera', 'hybrid'].includes(String(fitAssistant.source || '').trim())
+        ? String(fitAssistant.source).trim()
+        : 'manual';
+    const normalizedModelVersion = String(fitAssistant.modelVersion || '').trim();
+
+    return {
+        recommendedSize,
+        confidence: normalizedConfidence,
+        source: normalizedSource,
+        modelVersion: normalizedModelVersion
+    };
+};
 
 const buildNormalizedOrderItems = async (items, { checkInventory = true } = {}) => {
     if (!Array.isArray(items) || items.length === 0) {
@@ -60,13 +88,16 @@ const buildNormalizedOrderItems = async (items, { checkInventory = true } = {}) 
         const productPrice = Number(product.price);
         subtotal += productPrice * quantity;
 
+        const fitAssistant = normalizeOptionalFitAssistant(rawItem.fitAssistant);
+
         normalizedItems.push({
             _id: String(product._id),
             name: product.name,
             price: productPrice,
             image: product.image,
             size: rawItem.size || '',
-            quantity
+            quantity,
+            ...(fitAssistant ? { fitAssistant } : {})
         });
     }
 

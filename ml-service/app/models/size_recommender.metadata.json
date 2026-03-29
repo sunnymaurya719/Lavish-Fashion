@@ -1,0 +1,79 @@
+{
+  "modelVersion": "xgb-fit-v1",
+  "trainedAt": "2026-03-29T05:45:54.314479+00:00",
+  "featureOrder": [
+    "heightCm",
+    "weightKg",
+    "bmi",
+    "preferredFitSlim",
+    "preferredFitRelaxed",
+    "stretchScore",
+    "fitBiasRunsSmall",
+    "fitBiasRunsLarge",
+    "scanQuality",
+    "shoulderRatio",
+    "hipRatio",
+    "torsoRatio",
+    "chestDelta",
+    "waistDelta",
+    "hipDelta",
+    "shoulderDelta",
+    "sleeveLengthDelta",
+    "inseamDelta",
+    "garmentLengthDelta",
+    "requiredCoverage"
+  ],
+  "rowCount": 12000,
+  "trainingRowCount": 9600,
+  "validationRowCount": 2400,
+  "seed": 17,
+  "numBoostRound": 140,
+  "datasetSummary": {
+    "source": "synthetic_bootstrap",
+    "rows": 12000,
+    "featureCount": 20,
+    "products": 148,
+    "categoryCounts": {
+      "Men": 60,
+      "Women": 59,
+      "Kids": 29
+    },
+    "templateCounts": {
+      "topwear": 35,
+      "bottomwear": 52,
+      "dress": 18,
+      "outerwear": 34,
+      "kids_general": 9
+    },
+    "fitBiasCounts": {
+      "runs_small": 31,
+      "true_to_size": 83,
+      "runs_large": 34
+    },
+    "targetMean": 0.7962,
+    "targetStd": 9.4513
+  },
+  "trainMetrics": {
+    "rmse": 0.6223,
+    "mae": 0.4568,
+    "withinHalfPointRate": 0.656,
+    "withinOnePointRate": 0.9087
+  },
+  "validationMetrics": {
+    "rmse": 0.829,
+    "mae": 0.5911,
+    "withinHalfPointRate": 0.5575,
+    "withinOnePointRate": 0.8408
+  },
+  "trainingSource": "synthetic_bootstrap",
+  "evaluationHistoryTail": {
+    "train": {
+      "rmse": 0.6223,
+      "mae": 0.4568
+    },
+    "validation": {
+      "rmse": 0.829,
+      "mae": 0.5911
+    }
+  }
+}

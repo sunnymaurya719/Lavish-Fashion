@@ -587,25 +587,25 @@ describe('checkout and order lifecycle e2e api tests', () => {
             .post('/api/order/preview')
             .set('token', token)
             .send({
-                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
-                pointsToRedeem: 100
+                items: [{ _id: String(product._id), quantity: 2, size: 'M' }],
+                pointsToRedeem: 60
             });
 
         expect(previewResponse.status).toBe(200);
-        expect(previewResponse.body.pricing.subtotal).toBe(500);
-        expect(previewResponse.body.pricing.loyaltyDiscountAmount).toBe(100);
-        expect(previewResponse.body.pricing.loyaltyPointsRedeemed).toBe(100);
+        expect(previewResponse.body.pricing.subtotal).toBe(1000);
+        expect(previewResponse.body.pricing.loyaltyDiscountAmount).toBe(60);
+        expect(previewResponse.body.pricing.loyaltyPointsRedeemed).toBe(60);
         expect(previewResponse.body.pricing.availableLoyaltyPoints).toBe(200);
-        expect(previewResponse.body.pricing.total).toBe(410);
+        expect(previewResponse.body.pricing.total).toBe(950);
 
         const orderResponse = await request(app)
             .post('/api/order/place')
             .set('token', token)
             .set('idempotency-key', `rewards_cod_${Date.now()}`)
             .send({
-                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                items: [{ _id: String(product._id), quantity: 2, size: 'M' }],
                 address,
-                pointsToRedeem: 100,
+                pointsToRedeem: 60,
                 checkoutSource: 'cart'
             });
 
@@ -615,12 +615,12 @@ describe('checkout and order lifecycle e2e api tests', () => {
         const reservedOrder = await orderModel.findById(orderResponse.body.orderId).lean();
         const reservedUser = await userModel.findById(rewardsUser._id).lean();
 
-        expect(reservedOrder.loyaltyDiscountAmount).toBe(100);
-        expect(reservedOrder.loyaltyPointsRedeemed).toBe(100);
+        expect(reservedOrder.loyaltyDiscountAmount).toBe(60);
+        expect(reservedOrder.loyaltyPointsRedeemed).toBe(60);
         expect(reservedOrder.loyaltyRedemptionStatus).toBe('reserved');
-        expect(reservedOrder.amount).toBe(410);
+        expect(reservedOrder.amount).toBe(950);
         expect(reservedUser.loyaltyPoints).toBe(200);
-        expect(reservedUser.reservedLoyaltyPoints).toBe(100);
+        expect(reservedUser.reservedLoyaltyPoints).toBe(60);
 
         const adminLoginResponse = await request(app)
             .post('/api/user/admin')
@@ -647,7 +647,7 @@ describe('checkout and order lifecycle e2e api tests', () => {
 
         expect(settledOrder.loyaltyRedemptionStatus).toBe('redeemed');
         expect(settledUser.reservedLoyaltyPoints).toBe(0);
-        expect(settledUser.loyaltyPoints).toBe(110);
+        expect(settledUser.loyaltyPoints).toBe(150);
     });
 
     it('supports wishlist add and remove flows for authenticated users', async () => {

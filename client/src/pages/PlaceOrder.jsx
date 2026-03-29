@@ -36,7 +36,7 @@ const PlaceOrder = () => {
     toast,
     BACKEND_URL,
     token,
-    setCartItems,
+    clearCartState,
     getCartAmount,
     delivery_fee,
     getCheckoutItems,
@@ -281,7 +281,7 @@ const PlaceOrder = () => {
 
   const resetLocalCartIfNeeded = () => {
     if (!isBuyNow) {
-      setCartItems({});
+      clearCartState();
     }
   };
 

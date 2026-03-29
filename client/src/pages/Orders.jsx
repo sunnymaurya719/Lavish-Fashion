@@ -1,6 +1,7 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { ShopContext } from '../context/ShopContext';
+import { getFitFeedbackHistory, submitFitFeedback as submitFitFeedbackRequest } from '../services/fitApi';
 
 const STATUS_STYLES = {
   delivered: {
@@ -36,6 +37,16 @@ const STATUS_STYLES = {
 };
 
 const DELIVERY_STEPS = ['Order placed', 'Shipped', 'Delivered'];
+const FIT_FEEDBACK_OPTIONS = [
+  { value: 'too_small', label: 'Too small' },
+  { value: 'perfect', label: 'Perfect fit' },
+  { value: 'too_large', label: 'Too large' },
+];
+const FIT_FEEDBACK_LABELS = {
+  too_small: 'Too small',
+  perfect: 'Perfect fit',
+  too_large: 'Too large',
+};
 
 const formatMoney = (currency, value) => {
   const amount = Number(value || 0);
@@ -165,19 +176,59 @@ const getTimelineIndex = (status) => {
   return 0;
 };
 
+const buildFitFeedbackKey = (orderId, productId) => `${orderId}:${productId}`;
+
+const buildFitFeedbackMap = (entries = []) =>
+  entries.reduce((accumulator, entry) => {
+    const feedbackKey = buildFitFeedbackKey(entry.orderId, entry.productId);
+    accumulator[feedbackKey] = entry;
+    return accumulator;
+  }, {});
+
+const formatFitConfidence = (value) => `${Math.round(Number(value || 0) * 100)}%`;
+
 const Orders = () => {
-  const { BACKEND_URL, token, currency, navigate } = useContext(ShopContext);
+  const { BACKEND_URL, token, currency, navigate, toast } = useContext(ShopContext);
   const [orderData, setOrderData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState('');
   const [expandedOrders, setExpandedOrders] = useState({});
   const [expandedAddresses, setExpandedAddresses] = useState({});
+  const [fitFeedbackMap, setFitFeedbackMap] = useState({});
+  const [submittingFitFeedbackKey, setSubmittingFitFeedbackKey] = useState('');
+
+  const refreshFitFeedbackHistory = useCallback(
+    async ({ silent = true } = {}) => {
+      if (!token) {
+        setFitFeedbackMap({});
+        return null;
+      }
+
+      try {
+        const response = await getFitFeedbackHistory({ backendUrl: BACKEND_URL, token });
+
+        if (response.success) {
+          setFitFeedbackMap(buildFitFeedbackMap(response.feedback || []));
+        }
+
+        return response;
+      } catch (error) {
+        if (!silent) {
+          toast.error(error?.response?.data?.message || 'Unable to load fit feedback history right now.');
+        }
+
+        return null;
+      }
+    },
+    [BACKEND_URL, toast, token]
+  );
 
   const fetchOrders = useCallback(
     async ({ silent = false } = {}) => {
       if (!token) {
         setOrderData([]);
+        setFitFeedbackMap({});
         return;
       }
 
@@ -190,10 +241,16 @@ const Orders = () => {
       setFetchError('');
 
       try {
-        const response = await axios.post(BACKEND_URL + '/api/order/userorders', {}, { headers: { token } });
+        const [response, fitFeedbackResponse] = await Promise.all([
+          axios.post(BACKEND_URL + '/api/order/userorders', {}, { headers: { token } }),
+          getFitFeedbackHistory({ backendUrl: BACKEND_URL, token }).catch(() => null),
+        ]);
 
         if (response.data.success) {
           setOrderData(response.data.orders || []);
+          setFitFeedbackMap(
+            fitFeedbackResponse?.success ? buildFitFeedbackMap(fitFeedbackResponse.feedback || []) : {}
+          );
           return;
         }
 
@@ -243,6 +300,62 @@ const Orders = () => {
       ...current,
       [orderId]: !current[orderId],
     }));
+  };
+
+  const handleSubmitFitFeedback = async ({ orderId, item, feedback }) => {
+    const feedbackKey = buildFitFeedbackKey(orderId, item._id);
+
+    if (submittingFitFeedbackKey === feedbackKey) {
+      return;
+    }
+
+    setSubmittingFitFeedbackKey(feedbackKey);
+
+    try {
+      const response = await submitFitFeedbackRequest({
+        backendUrl: BACKEND_URL,
+        token,
+        productId: item._id,
+        orderId,
+        selectedSize: item.size,
+        recommendedSize: item.fitAssistant.recommendedSize,
+        feedback,
+        source: item.fitAssistant.source || 'manual',
+        confidence: item.fitAssistant.confidence,
+        modelVersion: item.fitAssistant.modelVersion || '',
+      });
+
+      if (!response.success) {
+        toast.error(response.message || 'Unable to record fit feedback right now.');
+        return;
+      }
+
+      setFitFeedbackMap((current) => ({
+        ...current,
+        [feedbackKey]: {
+          productId: item._id,
+          orderId,
+          selectedSize: item.size,
+          recommendedSize: item.fitAssistant.recommendedSize,
+          feedback,
+          source: item.fitAssistant.source || 'manual',
+          confidence: item.fitAssistant.confidence ?? null,
+          modelVersion: item.fitAssistant.modelVersion || '',
+          createdAt: new Date().toISOString(),
+        },
+      }));
+      toast.success('Fit feedback saved. Thanks for helping improve sizing.');
+    } catch (error) {
+      if (Number(error?.response?.status || 0) === 409) {
+        await refreshFitFeedbackHistory({ silent: true });
+        toast.info('Fit feedback was already submitted for this item.');
+        return;
+      }
+
+      toast.error(error?.response?.data?.message || 'Unable to record fit feedback right now.');
+    } finally {
+      setSubmittingFitFeedbackKey('');
+    }
   };
 
   return (
@@ -354,6 +467,11 @@ const Orders = () => {
             const isAddressExpanded = Boolean(expandedAddresses[order._id]);
             const addressData = getAddressData(order.address);
             const isDelivered = String(order.status || '').trim().toLowerCase() === 'delivered';
+            const fitFeedbackItems = isDelivered
+              ? (order.items || []).filter(
+                  (item) => item?.size && String(item?.fitAssistant?.recommendedSize || '').trim()
+                )
+              : [];
 
             return (
               <article
@@ -500,6 +618,81 @@ const Orders = () => {
                         </div>
                       </div>
                     </div>
+
+                    {fitFeedbackItems.length > 0 ? (
+                      <div className='rounded-2xl bg-[#f7f7f7] p-3'>
+                        <div className='flex items-start justify-between gap-3'>
+                          <div>
+                            <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Fit feedback</p>
+                            <p className='mt-1 text-sm text-slate-600'>
+                              Tell us whether the assistant landed on the right size for delivered items.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className='mt-3 space-y-3'>
+                          {fitFeedbackItems.map((item) => {
+                            const feedbackKey = buildFitFeedbackKey(order._id, item._id);
+                            const feedbackEntry = fitFeedbackMap[feedbackKey];
+                            const isSubmittingFeedback = submittingFitFeedbackKey === feedbackKey;
+                            const selectedSizeDiffers =
+                              String(item.fitAssistant?.recommendedSize || '').trim() !== String(item.size || '').trim();
+
+                            return (
+                              <div key={feedbackKey} className='rounded-2xl border border-slate-200 bg-white p-3'>
+                                <div className='flex items-start justify-between gap-3'>
+                                  <div>
+                                    <p className='text-sm font-medium text-slate-900'>{item.name}</p>
+                                    <p className='mt-1 text-xs uppercase tracking-[0.16em] text-slate-500'>
+                                      Bought {item.size} | Recommended {item.fitAssistant.recommendedSize}
+                                    </p>
+                                  </div>
+
+                                  {item.fitAssistant?.confidence !== null && item.fitAssistant?.confidence !== undefined ? (
+                                    <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-600'>
+                                      {formatFitConfidence(item.fitAssistant.confidence)} confidence
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                {selectedSizeDiffers ? (
+                                  <p className='mt-2 text-sm text-slate-500'>
+                                    You bought a different size than the assistant&apos;s first suggestion, so this helps us
+                                    learn about overrides too.
+                                  </p>
+                                ) : null}
+
+                                {feedbackEntry ? (
+                                  <div className='mt-3 rounded-2xl bg-emerald-50 px-3 py-3 text-sm text-emerald-800'>
+                                    Recorded: {FIT_FEEDBACK_LABELS[feedbackEntry.feedback] || 'Fit feedback submitted'}
+                                  </div>
+                                ) : (
+                                  <div className='mt-3 flex flex-wrap gap-2'>
+                                    {FIT_FEEDBACK_OPTIONS.map((option) => (
+                                      <button
+                                        key={option.value}
+                                        type='button'
+                                        disabled={isSubmittingFeedback}
+                                        onClick={() =>
+                                          handleSubmitFitFeedback({
+                                            orderId: order._id,
+                                            item,
+                                            feedback: option.value,
+                                          })
+                                        }
+                                        className='rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
+                                      >
+                                        {isSubmittingFeedback ? 'Saving...' : option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </article>

@@ -6,6 +6,23 @@ const positiveIntSchema = z.number().int().min(1);
 const nonNegativeIntSchema = z.union([z.string(), z.number()]).pipe(z.coerce.number().int().min(0));
 const nonNegativeNumberSchema = z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0));
 const productStatusSchema = z.enum(['active', 'draft', 'archived']);
+const fitSizeScaleSchema = z.enum(['alpha', 'numeric', 'waist', 'custom']);
+const fitMeasurementTemplateSchema = z.enum(['topwear', 'bottomwear', 'dress', 'outerwear', 'kids_general']);
+const fitBiasSchema = z.enum(['runs_small', 'true_to_size', 'runs_large']);
+const fitPreferredFitSchema = z.enum(['slim', 'regular', 'relaxed']);
+const fitFeedbackValueSchema = z.enum(['too_small', 'perfect', 'too_large']);
+const fitSourceSchema = z.enum(['manual', 'camera', 'hybrid']);
+const fitAssistantSelectionSchema = z.object({
+    recommendedSize: z.string().trim().min(1).max(10),
+    confidence: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional(),
+    source: fitSourceSchema.optional(),
+    modelVersion: z.string().trim().max(60).optional()
+});
+const fitLandmarkSchema = z.object({
+    x: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)),
+    y: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)),
+    visibility: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional()
+});
 const couponDiscountTypeSchema = z.enum(['percentage', 'flat', 'free_shipping']);
 const reviewStatusValueSchema = z.enum(['pending', 'published', 'rejected']);
 const marketingCampaignTypeSchema = z.enum(['broadcast', 'automation']);
@@ -74,10 +91,47 @@ const jsonStringArraySchema = z.string().refine((value) => {
     }
 }, 'Field must be a JSON array of strings');
 
+const parseJsonValue = (value) => {
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
+};
+
+const jsonSizeMeasurementsSchema = z.string().refine((value) => {
+    const parsed = parseJsonValue(value);
+
+    if (!Array.isArray(parsed)) {
+        return false;
+    }
+
+    return parsed.every((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return false;
+        }
+
+        if (typeof item.size !== 'string' || item.size.trim().length === 0 || item.size.trim().length > 10) {
+            return false;
+        }
+
+        return ['chest', 'waist', 'hip', 'shoulder', 'sleeveLength', 'inseam', 'garmentLength'].every((field) => {
+            const fieldValue = item[field];
+            return (
+                fieldValue === null ||
+                fieldValue === undefined ||
+                fieldValue === '' ||
+                (Number.isFinite(Number(fieldValue)) && Number(fieldValue) >= 0)
+            );
+        });
+    });
+}, 'Field must be a JSON array of size measurement objects');
+
 const orderItemSchema = z.object({
     _id: objectIdSchema,
     quantity: positiveIntSchema,
-    size: z.string().trim().min(1).max(10)
+    size: z.string().trim().min(1).max(10),
+    fitAssistant: fitAssistantSelectionSchema.optional()
 });
 
 const addressSchema = z.object({
@@ -115,7 +169,12 @@ const userRegisterSchema = z.object({
 const userProfileUpdateSchema = z.object({
     name: z.string().trim().min(2).max(60),
     phone: optionalPhoneSchema,
-    marketingPreferences: marketingPreferencesSchema.optional()
+    marketingPreferences: marketingPreferencesSchema.optional(),
+    fitProfile: z.object({
+        heightCm: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(50).max(260)).optional(),
+        weightKg: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(20).max(350)).optional(),
+        preferredFit: fitPreferredFitSchema.optional()
+    }).optional()
 });
 
 const marketingPreferencesUpdateSchema = marketingPreferencesSchema.refine(
@@ -154,6 +213,12 @@ const productAddSchema = z.object({
     price: z.union([z.string(), z.number()]).pipe(z.coerce.number().positive()),
     category: z.string().trim().min(2).max(50),
     subCategory: z.string().trim().min(2).max(50),
+    fitEnabled: booleanLikeSchema.optional(),
+    sizeScale: fitSizeScaleSchema.optional(),
+    measurementTemplate: fitMeasurementTemplateSchema.optional(),
+    fitBias: fitBiasSchema.optional(),
+    stretchScore: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional(),
+    sizeMeasurements: jsonSizeMeasurementsSchema.optional(),
     sku: z.string().trim().max(40).optional(),
     stock: nonNegativeIntSchema.optional(),
     lowStockThreshold: nonNegativeIntSchema.optional(),
@@ -280,6 +345,49 @@ const reviewStatusSchema = z.object({
     adminReply: z.string().trim().max(500).optional()
 });
 
+const fitRecommendSchema = z.object({
+    productId: objectIdSchema,
+    mode: z.enum(['manual', 'camera', 'hybrid']).default('manual'),
+    userMetrics: z.object({
+        heightCm: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(50).max(260)),
+        weightKg: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(20).max(350)),
+        preferredFit: fitPreferredFitSchema.optional()
+    }),
+    bodyFeatures: z.object({
+        shoulderRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
+        hipRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
+        torsoRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
+        scanQuality: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional()
+    }).optional()
+});
+
+const fitInsightsParamsSchema = z.object({
+    productId: objectIdSchema
+});
+
+const fitBodyScanSchema = z
+    .object({
+        heightCm: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(50).max(260)),
+        weightKg: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(20).max(350)).optional(),
+        imageBase64: z.string().trim().max(2_500_000).startsWith('data:image/', 'A valid image payload is required').optional(),
+        landmarks: z.array(fitLandmarkSchema).min(4).max(50).optional()
+    })
+    .refine((value) => Boolean(value.imageBase64) || Boolean(value.landmarks?.length), {
+        message: 'Either an image or landmarks are required',
+        path: ['imageBase64']
+    });
+
+const fitFeedbackSchema = z.object({
+    productId: objectIdSchema,
+    orderId: objectIdSchema,
+    selectedSize: z.string().trim().min(1).max(10),
+    recommendedSize: z.string().trim().min(1).max(10),
+    feedback: fitFeedbackValueSchema,
+    source: fitSourceSchema.optional(),
+    confidence: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional(),
+    modelVersion: z.string().trim().max(60).optional()
+});
+
 const marketingCampaignBaseSchema = z.object({
     name: z.string().trim().min(3).max(120),
     campaignType: marketingCampaignTypeSchema,
@@ -355,6 +463,10 @@ export {
     couponStatusSchema,
     couponUpdateSchema,
     couponValidateSchema,
+    fitBodyScanSchema,
+    fitFeedbackSchema,
+    fitInsightsParamsSchema,
+    fitRecommendSchema,
     orderCreateSchema,
     orderPricingPreviewSchema,
     orderStatusSchema,

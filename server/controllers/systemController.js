@@ -1,3 +1,10 @@
+import {
+    getFitConfidenceMin,
+    getFitRolloutPercent,
+    isFitAssistantGloballyEnabled,
+    isFitCameraGloballyEnabled
+} from '../services/fitRuntimeService.js';
+
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 const toPublicUrl = (value) => (/^https?:\/\/.+/i.test(normalizeUrl(value)) ? normalizeUrl(value) : '');
 
@@ -13,6 +20,12 @@ const getSystemBootstrap = async (req, res) => {
     const razorpayEnabled = isConfigured(process.env.RAZORPAY_KEY_ID, process.env.RAZORPAY_KEY_SECRET);
     const marketingEmailMode = String(process.env.MARKETING_EMAIL_MODE || 'simulation').trim().toLowerCase();
     const marketingEmailProvider = String(process.env.MARKETING_EMAIL_PROVIDER || 'resend').trim().toLowerCase();
+    const fitAssistantEnabled = isFitAssistantGloballyEnabled();
+    const fitCameraEnabled = isFitCameraGloballyEnabled();
+    const fitRolloutPercent = getFitRolloutPercent();
+    const fitConfidenceMin = getFitConfidenceMin();
+    const mlServiceEnabled = isConfigured(process.env.ML_SERVICE_URL);
+    const redisConfigured = isConfigured(process.env.REDIS_URL);
 
     return res.status(200).json({
         success: true,
@@ -34,6 +47,9 @@ const getSystemBootstrap = async (req, res) => {
                 loyaltyRedemptionEnabled: true,
                 reviewsEnabled: true,
                 reviewMediaEnabled: cloudinaryConfigured,
+                fitAssistantEnabled,
+                fitCameraEnabled,
+                fitInsightsEnabled: fitAssistantEnabled,
                 customerNotesEnabled: true,
                 couponsEnabled: true,
                 marketingEnabled: true,
@@ -47,9 +63,15 @@ const getSystemBootstrap = async (req, res) => {
             },
             integrations: {
                 cloudinaryConfigured,
+                mlServiceEnabled,
+                redisConfigured,
                 marketingEmailMode,
                 marketingEmailProvider,
                 liveEmailEnabled: marketingEmailMode === 'live'
+            },
+            rollout: {
+                fitRolloutPercent,
+                fitConfidenceMin
             }
         }
     });

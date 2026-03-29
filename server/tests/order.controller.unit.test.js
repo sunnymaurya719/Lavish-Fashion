@@ -282,7 +282,19 @@ describe('orderController unit tests', () => {
             headers: { 'idempotency-key': 'idem_cod_1' },
             userId: 'user_1',
             body: {
-                items: [{ _id: '507f1f77bcf86cd799439011', quantity: 1, size: 'M' }],
+                items: [
+                    {
+                        _id: '507f1f77bcf86cd799439011',
+                        quantity: 1,
+                        size: 'M',
+                        fitAssistant: {
+                            recommendedSize: 'M',
+                            confidence: 0.92,
+                            source: 'manual',
+                            modelVersion: 'rule-engine-v1'
+                        }
+                    }
+                ],
                 address: {
                     firstName: 'A',
                     lastName: 'B',
@@ -304,6 +316,17 @@ describe('orderController unit tests', () => {
         expect(orderModelMock.create).toHaveBeenCalledWith(
             expect.objectContaining({
                 userId: 'user_1',
+                items: expect.arrayContaining([
+                    expect.objectContaining({
+                        _id: '507f1f77bcf86cd799439011',
+                        fitAssistant: expect.objectContaining({
+                            recommendedSize: 'M',
+                            confidence: 0.92,
+                            source: 'manual',
+                            modelVersion: 'rule-engine-v1'
+                        })
+                    })
+                ]),
                 inventoryReserved: true,
                 paymentMethod: 'COD',
                 payment: false,

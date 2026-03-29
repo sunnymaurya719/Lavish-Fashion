@@ -16,7 +16,13 @@ const orderItemSchema = new mongoose.Schema(
         price: { type: Number, required: true, min: 0 },
         image: { type: [String], default: [] },
         size: { type: String, default: '', trim: true, maxlength: 10 },
-        quantity: { type: Number, required: true, min: 1, max: 99 }
+        quantity: { type: Number, required: true, min: 1, max: 99 },
+        fitAssistant: {
+            recommendedSize: { type: String, trim: true, maxlength: 10, default: '' },
+            confidence: { type: Number, min: 0, max: 1, default: null },
+            source: { type: String, enum: ['manual', 'camera', 'hybrid'], default: 'manual' },
+            modelVersion: { type: String, trim: true, maxlength: 60, default: '' }
+        }
     },
     { _id: false, strict: true }
 );

@@ -105,16 +105,16 @@ const About = () => {
       <section className='mt-10 sm:mt-12'>
         <p className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Why Choose Us</p>
         <div className='mt-4 grid gap-4 sm:grid-cols-2'>
-          {whyChooseCards.map(({ title, description, Icon }) => (
+          {whyChooseCards.map((card) => (
             <article
-              key={title}
+              key={card.title}
               className='rounded-2xl bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]'
             >
               <div className='inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#f5f5f5] text-[#111]'>
-                <Icon />
+                <card.Icon />
               </div>
-              <h2 className='mt-4 text-xl font-semibold text-[#111]'>{title}</h2>
-              <p className='mt-3 text-sm leading-7 text-[#777]'>{description}</p>
+              <h2 className='mt-4 text-xl font-semibold text-[#111]'>{card.title}</h2>
+              <p className='mt-3 text-sm leading-7 text-[#777]'>{card.description}</p>
             </article>
           ))}
         </div>

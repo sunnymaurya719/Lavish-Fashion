@@ -88,6 +88,17 @@ const SidebarIcon = ({ icon, active }) => {
     );
   }
 
+  if (icon === 'fit') {
+    return (
+      <svg className={iconClassName} width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+        <path
+          d='M8.5 4A2.5 2.5 0 0 0 6 6.5v11A2.5 2.5 0 0 0 8.5 20h7a2.5 2.5 0 0 0 2.5-2.5v-11A2.5 2.5 0 0 0 15.5 4h-7Zm0 2h7a.5.5 0 0 1 .5.5v11a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5Zm1.75 2.25a1 1 0 1 0 0 2h3.5a1 1 0 1 0 0-2h-3.5ZM9 13a3 3 0 1 0 6 0 3 3 0 0 0-6 0Zm2 0a1 1 0 1 1 2 0 1 1 0 0 1-2 0Z'
+          fill='currentColor'
+        />
+      </svg>
+    );
+  }
+
   if (icon === 'marketing') {
     return (
       <svg className={iconClassName} width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>

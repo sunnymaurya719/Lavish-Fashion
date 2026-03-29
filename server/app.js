@@ -15,12 +15,22 @@ import marketingRouter from './routes/marketingRoute.js';
 import reviewRouter from './routes/reviewRoute.js';
 import realtimeRouter from './routes/realtimeRoute.js';
 import systemRouter from './routes/systemRoute.js';
+import fitRouter from './routes/fitRoute.js';
 import webhookRouter from './routes/webhookRoute.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import requestLogger from './middleware/requestLogger.js';
 
 const normalizeOrigin = (value) => String(value || '').trim().replace(/\/$/, '');
 const isValidWebUrl = (value) => /^https?:\/\/.+/i.test(normalizeOrigin(value));
+const getJsonBodyLimitBytes = () => {
+    const configuredBodyScanBytes = Number(process.env.BODY_SCAN_MAX_IMAGE_BYTES || 1200000);
+    const bodyScanSafeBytes =
+        Number.isFinite(configuredBodyScanBytes) && configuredBodyScanBytes > 0
+            ? Math.ceil(configuredBodyScanBytes * 1.4)
+            : 1_680_000;
+
+    return Math.max(1_000_000, bodyScanSafeBytes);
+};
 
 const buildCorsOptions = () => {
     const envOrigins = [
@@ -95,9 +105,10 @@ const createApp = () => {
     });
 
     app.use('/api', apiRateLimiter);
-    app.use(express.json({ limit: '1mb' }));
+    app.use(express.json({ limit: getJsonBodyLimitBytes() }));
 
     app.use('/api/system', systemRouter);
+    app.use('/api/fit', fitRouter);
     app.use('/api/realtime', realtimeRouter);
     app.use('/api/user',userRouter);
     app.use('/api/admin/dashboard', dashboardRouter);

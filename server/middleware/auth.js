@@ -42,4 +42,6 @@ const authUser = async(req,res,next) =>{
     }
 }
 
+export { extractToken };
+
 export default authUser;

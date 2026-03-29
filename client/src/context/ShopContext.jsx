@@ -8,6 +8,31 @@ export const ShopContext = createContext();
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/^['"]|['"]$/g, '').replace(/\/$/, '');
 const DEFAULT_BACKEND_URL = 'http://localhost:4000';
+const FIT_SELECTIONS_STORAGE_KEY = 'lf-fit-selections';
+const readStoredFitSelections = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(FIT_SELECTIONS_STORAGE_KEY);
+    const parsedValue = rawValue ? JSON.parse(rawValue) : {};
+    return parsedValue && typeof parsedValue === 'object' ? parsedValue : {};
+  } catch {
+    return {};
+  }
+};
+const writeStoredFitSelections = (value) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(FIT_SELECTIONS_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore client storage write failures and keep the in-memory state as the source of truth.
+  }
+};
 
 const ShopContextProvider = (props) => {
   const currency = '\u20B9';
@@ -20,6 +45,7 @@ const ShopContextProvider = (props) => {
   const [loadingProductsData, setLoadingProductsData] = useState(false);
   const [loadingWishlist, setLoadingWishlist] = useState(false);
   const [wishlistItems, setWishlistItems] = useState([]);
+  const [fitSelections, setFitSelections] = useState(() => readStoredFitSelections());
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [serverBootstrap, setServerBootstrap] = useState(null);
   const [serverStatus, setServerStatus] = useState('checking');
@@ -27,11 +53,24 @@ const ShopContextProvider = (props) => {
   const authExpiryHandledRef = useRef(false);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    writeStoredFitSelections(fitSelections);
+  }, [fitSelections]);
+
+  const clearCartState = useCallback(() => {
+    setCartItems({});
+    setFitSelections({});
+  }, []);
+
+  const clearCartFitSelections = useCallback(() => {
+    setFitSelections({});
+  }, []);
+
   const clearSession = useCallback(
     ({ message = '', redirectTo = '/login' } = {}) => {
       localStorage.removeItem('token');
       setToken(null);
-      setCartItems({});
+      clearCartState();
       setWishlistItems([]);
       setLoadingWishlist(false);
 
@@ -43,7 +82,7 @@ const ShopContextProvider = (props) => {
         navigate(redirectTo);
       }
     },
-    [navigate]
+    [clearCartState, navigate]
   );
 
   const bootstrapServer = useCallback(
@@ -84,12 +123,14 @@ const ShopContextProvider = (props) => {
       for (const itemId in itemsMap) {
         for (const size in itemsMap[itemId]) {
           const quantity = Number(itemsMap[itemId][size] || 0);
+          const fitAssistant = fitSelections?.[itemId]?.[size] || null;
 
           if (quantity > 0) {
             lineItems.push({
               _id: itemId,
               size,
               quantity,
+              ...(fitAssistant ? { fitAssistant } : {}),
             });
           }
         }
@@ -97,7 +138,7 @@ const ShopContextProvider = (props) => {
 
       return lineItems;
     },
-    [cartItems]
+    [cartItems, fitSelections]
   );
 
   const getCheckoutItems = useCallback(
@@ -108,6 +149,7 @@ const ShopContextProvider = (props) => {
             _id: buyNowProduct._id,
             size: buyNowProduct.size,
             quantity: Number(buyNowProduct.quantity || 1),
+            ...(buyNowProduct.fitAssistant ? { fitAssistant: buyNowProduct.fitAssistant } : {}),
           },
         ];
       }
@@ -117,7 +159,7 @@ const ShopContextProvider = (props) => {
     [getCartLineItems]
   );
 
-  const addToCart = async (itemId, size) => {
+  const addToCart = async (itemId, size, fitAssistant = null) => {
     if (!size) {
       toast.sizeRequired();
       return;
@@ -137,6 +179,30 @@ const ShopContextProvider = (props) => {
     }
 
     setCartItems(cartData);
+    setFitSelections((currentSelections) => {
+      if (!fitAssistant) {
+        if (!currentSelections[itemId]?.[size]) {
+          return currentSelections;
+        }
+
+        const nextSelections = structuredClone(currentSelections);
+        delete nextSelections[itemId][size];
+
+        if (Object.keys(nextSelections[itemId]).length === 0) {
+          delete nextSelections[itemId];
+        }
+
+        return nextSelections;
+      }
+
+      return {
+        ...currentSelections,
+        [itemId]: {
+          ...(currentSelections[itemId] || {}),
+          [size]: fitAssistant,
+        },
+      };
+    });
 
     if (token) {
       try {
@@ -160,6 +226,21 @@ const ShopContextProvider = (props) => {
 
     cartData[itemId][size] = normalizedQuantity;
     setCartItems(cartData);
+    if (normalizedQuantity === 0) {
+      setFitSelections((currentSelections) => {
+        const nextSelections = structuredClone(currentSelections);
+
+        if (nextSelections[itemId]?.[size]) {
+          delete nextSelections[itemId][size];
+
+          if (Object.keys(nextSelections[itemId]).length === 0) {
+            delete nextSelections[itemId];
+          }
+        }
+
+        return nextSelections;
+      });
+    }
 
     if (token) {
       try {
@@ -380,6 +461,8 @@ const ShopContextProvider = (props) => {
     setToken,
     token,
     clearSession,
+    clearCartState,
+    clearCartFitSelections,
     toast,
     getUserCart,
     loadingProductsData,
@@ -388,6 +471,7 @@ const ShopContextProvider = (props) => {
     toggleWishlist,
     isWishlisted,
     getWishlistCount,
+    fitSelections,
     serverBootstrap,
     serverStatus,
     lastServerSyncAt,

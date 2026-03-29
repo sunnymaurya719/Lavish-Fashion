@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +13,48 @@ const statusOptions = [
   { value: 'draft', label: 'Draft' },
   { value: 'archived', label: 'Archived' },
 ];
+const sizeScaleOptions = [
+  { value: 'alpha', label: 'Alpha sizes' },
+  { value: 'numeric', label: 'Numeric sizes' },
+  { value: 'waist', label: 'Waist sizes' },
+  { value: 'custom', label: 'Custom labels' },
+];
+const fitBiasOptions = [
+  { value: 'true_to_size', label: 'True to size' },
+  { value: 'runs_small', label: 'Runs small' },
+  { value: 'runs_large', label: 'Runs large' },
+];
+const measurementTemplateConfig = {
+  topwear: {
+    label: 'Topwear',
+    fields: ['chest', 'shoulder', 'garmentLength'],
+  },
+  bottomwear: {
+    label: 'Bottomwear',
+    fields: ['waist', 'hip', 'inseam'],
+  },
+  dress: {
+    label: 'Dress',
+    fields: ['chest', 'waist', 'hip', 'garmentLength'],
+  },
+  outerwear: {
+    label: 'Outerwear',
+    fields: ['chest', 'shoulder', 'sleeveLength', 'garmentLength'],
+  },
+  kids_general: {
+    label: 'Kids general',
+    fields: ['chest', 'waist', 'hip', 'garmentLength'],
+  },
+};
+const measurementFieldLabels = {
+  chest: 'Chest',
+  waist: 'Waist',
+  hip: 'Hip',
+  shoulder: 'Shoulder',
+  sleeveLength: 'Sleeve',
+  inseam: 'Inseam',
+  garmentLength: 'Length',
+};
 
 const createFileSlot = (file) => ({
   kind: 'file',
@@ -24,6 +66,64 @@ const revokeFilePreview = (slot) => {
   if (slot?.kind === 'file' && slot.preview) {
     URL.revokeObjectURL(slot.preview);
   }
+};
+
+const createEmptyMeasurementRow = (size = '') => ({
+  size,
+  chest: '',
+  waist: '',
+  hip: '',
+  shoulder: '',
+  sleeveLength: '',
+  inseam: '',
+  garmentLength: '',
+});
+
+const syncSizeMeasurements = (sizes = [], measurementRows = []) =>
+  sizes.map((size) => {
+    const existingRow = measurementRows.find((row) => row.size === size);
+    return {
+      ...createEmptyMeasurementRow(size),
+      ...(existingRow || {}),
+      size,
+    };
+  });
+
+const calculateFitCompleteness = ({ sizes, sizeMeasurements, measurementTemplate }) => {
+  const requiredFields = measurementTemplateConfig[measurementTemplate]?.fields || measurementTemplateConfig.topwear.fields;
+  const totalFields = sizes.length * requiredFields.length;
+
+  if (totalFields === 0) {
+    return {
+      completedSizes: 0,
+      minimumReadySizes: 0,
+      ratio: 0,
+      requiredFields,
+      ready: false,
+    };
+  }
+
+  let completedFields = 0;
+  let completedSizes = 0;
+
+  sizeMeasurements.forEach((row) => {
+    const completedFieldsForRow = requiredFields.filter((field) => String(row[field] ?? '').trim() !== '');
+    completedFields += completedFieldsForRow.length;
+
+    if (completedFieldsForRow.length === requiredFields.length) {
+      completedSizes += 1;
+    }
+  });
+
+  const minimumReadySizes = sizes.length > 1 ? 2 : 1;
+
+  return {
+    completedSizes,
+    minimumReadySizes,
+    ratio: Number((completedFields / totalFields).toFixed(2)),
+    requiredFields,
+    ready: completedSizes >= minimumReadySizes && sizes.length >= minimumReadySizes,
+  };
 };
 
 const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, serverStatus }) => {
@@ -45,6 +145,12 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
   const [isFeatured, setIsFeatured] = useState(false);
   const [sizeInput, setSizeInput] = useState('');
   const [sizes, setSizes] = useState([]);
+  const [fitEnabled, setFitEnabled] = useState(false);
+  const [sizeScale, setSizeScale] = useState('alpha');
+  const [measurementTemplate, setMeasurementTemplate] = useState('topwear');
+  const [fitBias, setFitBias] = useState('true_to_size');
+  const [stretchScore, setStretchScore] = useState('0.25');
+  const [sizeMeasurements, setSizeMeasurements] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingProduct, setIsLoadingProduct] = useState(isEditMode);
   const submitDisabled = isSubmitting || (!mediaUploadsEnabled && !isEditMode);
@@ -71,6 +177,8 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
         }
 
         const product = response.data.product;
+        const productSizes = Array.isArray(product.sizes) ? product.sizes : [];
+        const fitProfile = product.fitProfile || {};
         setName(product.name || '');
         setDescription(product.description || '');
         setPrice(String(product.price || ''));
@@ -81,7 +189,13 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
         setLowStockThreshold(String(product.lowStockThreshold ?? 5));
         setStatus(product.status || 'active');
         setIsFeatured(Boolean(product.isFeatured));
-        setSizes(Array.isArray(product.sizes) ? product.sizes : []);
+        setSizes(productSizes);
+        setFitEnabled(Boolean(product.fitEnabled));
+        setSizeScale(product.sizeScale || 'alpha');
+        setMeasurementTemplate(fitProfile.measurementTemplate || 'topwear');
+        setFitBias(fitProfile.fitBias || 'true_to_size');
+        setStretchScore(String(fitProfile.stretchScore ?? '0.25'));
+        setSizeMeasurements(syncSizeMeasurements(productSizes, fitProfile.sizeMeasurements || []));
         setImageSlots(
           imageFieldNames.map((_, index) => {
             const existingImage = product.image?.[index];
@@ -103,6 +217,15 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     imageSlots.forEach(revokeFilePreview);
   }, [imageSlots]);
 
+  useEffect(() => {
+    setSizeMeasurements((currentRows) => syncSizeMeasurements(sizes, currentRows));
+  }, [sizes]);
+
+  const fitCompleteness = useMemo(
+    () => calculateFitCompleteness({ sizes, sizeMeasurements, measurementTemplate }),
+    [measurementTemplate, sizeMeasurements, sizes]
+  );
+
   const resetCreateForm = () => {
     setName('');
     setDescription('');
@@ -116,6 +239,12 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     setIsFeatured(false);
     setSizeInput('');
     setSizes([]);
+    setFitEnabled(false);
+    setSizeScale('alpha');
+    setMeasurementTemplate('topwear');
+    setFitBias('true_to_size');
+    setStretchScore('0.25');
+    setSizeMeasurements([]);
     setImageSlots([null, null, null, null]);
   };
 
@@ -160,6 +289,12 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     setSizes((currentSizes) => currentSizes.filter((size) => size !== sizeToRemove));
   };
 
+  const updateMeasurementField = (size, field, value) => {
+    setSizeMeasurements((currentRows) =>
+      currentRows.map((row) => (row.size === size ? { ...row, [field]: value } : row))
+    );
+  };
+
   const buildFormData = () => {
     const formData = new FormData();
     formData.append('name', name.trim());
@@ -167,6 +302,26 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     formData.append('price', price);
     formData.append('category', category);
     formData.append('subCategory', subCategory);
+    formData.append('fitEnabled', String(fitEnabled));
+    formData.append('sizeScale', sizeScale);
+    formData.append('measurementTemplate', measurementTemplate);
+    formData.append('fitBias', fitBias);
+    formData.append('stretchScore', stretchScore);
+    formData.append(
+      'sizeMeasurements',
+      JSON.stringify(
+        syncSizeMeasurements(sizes, sizeMeasurements).map((row) => ({
+          size: row.size,
+          chest: row.chest,
+          waist: row.waist,
+          hip: row.hip,
+          shoulder: row.shoulder,
+          sleeveLength: row.sleeveLength,
+          inseam: row.inseam,
+          garmentLength: row.garmentLength,
+        }))
+      )
+    );
     formData.append('sku', sku.trim().toUpperCase());
     formData.append('stock', stock);
     formData.append('lowStockThreshold', lowStockThreshold);
@@ -203,6 +358,11 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
 
     if (sizes.length === 0) {
       toast.error('Please add at least one size');
+      return;
+    }
+
+    if (fitEnabled && !fitCompleteness.ready) {
+      toast.error('Add complete measurements for at least the minimum required sizes before enabling AI fit');
       return;
     }
 
@@ -253,7 +413,7 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
                 {isEditMode ? 'Edit Product' : 'Create Product'}
               </p>
               <p className='text-sm text-slate-500'>
-                Manage catalog details, media, inventory, and publishing status in one workflow.
+                Manage catalog details, media, inventory, fit metadata, and publishing status in one workflow.
               </p>
             </div>
             <span className='px-3 py-1 rounded-full bg-slate-100 text-xs text-slate-600 uppercase tracking-[0.2em]'>
@@ -481,6 +641,151 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
             ) : (
               <p className='mt-4 text-sm text-slate-500'>No sizes added yet.</p>
             )}
+          </div>
+        </div>
+      </div>
+
+      <div className='bg-white border border-slate-200 rounded-3xl p-6 shadow-sm'>
+        <div className='flex flex-col gap-3 md:flex-row md:items-start md:justify-between'>
+          <div>
+            <p className='text-lg font-semibold text-slate-900'>AI Fit Assistant</p>
+            <p className='text-sm text-slate-500'>
+              Configure garment measurements so the storefront can recommend sizes with confidence.
+            </p>
+          </div>
+          <label className='inline-flex items-center gap-3 rounded-full bg-slate-100 px-4 py-2 text-sm text-slate-700'>
+            <span>Enable fit assistant</span>
+            <input
+              type='checkbox'
+              checked={fitEnabled}
+              onChange={(event) => setFitEnabled(event.target.checked)}
+              className='h-4 w-4'
+            />
+          </label>
+        </div>
+
+        <div className='grid gap-5 md:grid-cols-2 xl:grid-cols-4 mt-6'>
+          <div>
+            <p className='mb-2 text-sm font-medium text-slate-700'>Size scale</p>
+            <select
+              value={sizeScale}
+              onChange={(event) => setSizeScale(event.target.value)}
+              className='w-full px-4 py-3 border border-slate-300 rounded-2xl'
+            >
+              {sizeScaleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <p className='mb-2 text-sm font-medium text-slate-700'>Measurement template</p>
+            <select
+              value={measurementTemplate}
+              onChange={(event) => setMeasurementTemplate(event.target.value)}
+              className='w-full px-4 py-3 border border-slate-300 rounded-2xl'
+            >
+              {Object.entries(measurementTemplateConfig).map(([value, config]) => (
+                <option key={value} value={value}>
+                  {config.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <p className='mb-2 text-sm font-medium text-slate-700'>Fit bias</p>
+            <select
+              value={fitBias}
+              onChange={(event) => setFitBias(event.target.value)}
+              className='w-full px-4 py-3 border border-slate-300 rounded-2xl'
+            >
+              {fitBiasOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <p className='mb-2 text-sm font-medium text-slate-700'>Stretch score</p>
+            <input
+              value={stretchScore}
+              onChange={(event) => setStretchScore(event.target.value)}
+              className='w-full px-4 py-3 border border-slate-300 rounded-2xl'
+              type='number'
+              min='0'
+              max='1'
+              step='0.05'
+              placeholder='0.25'
+            />
+          </div>
+        </div>
+
+        <div className='mt-6 rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600'>
+          Required fields for this template: {fitCompleteness.requiredFields.map((field) => measurementFieldLabels[field]).join(', ')}.
+          Measurements are stored in centimeters.
+        </div>
+
+        {fitEnabled && !fitCompleteness.ready ? (
+          <div className='mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800'>
+            AI fit is enabled, but the product is not ready yet. Complete measurements for at least{' '}
+            {fitCompleteness.minimumReadySizes} size{fitCompleteness.minimumReadySizes > 1 ? 's' : ''}. Current readiness:{' '}
+            {Math.round(fitCompleteness.ratio * 100)}%.
+          </div>
+        ) : null}
+
+        {fitEnabled && fitCompleteness.ready ? (
+          <div className='mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-800'>
+            This product has enough fit data to support the manual recommendation flow.
+          </div>
+        ) : null}
+
+        <div className='mt-6 overflow-hidden rounded-3xl border border-slate-200'>
+          <div className='overflow-x-auto'>
+            <table className='min-w-full text-sm'>
+              <thead className='bg-slate-100 text-slate-600 uppercase tracking-[0.18em] text-[11px]'>
+                <tr>
+                  <th className='px-4 py-3 text-left'>Size</th>
+                  {fitCompleteness.requiredFields.map((field) => (
+                    <th key={field} className='px-4 py-3 text-left'>
+                      {measurementFieldLabels[field]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-200 bg-white'>
+                {sizes.length === 0 ? (
+                  <tr>
+                    <td colSpan={fitCompleteness.requiredFields.length + 1} className='px-4 py-6 text-slate-500'>
+                      Add sizes first to enter garment measurements.
+                    </td>
+                  </tr>
+                ) : (
+                  syncSizeMeasurements(sizes, sizeMeasurements).map((row) => (
+                    <tr key={row.size}>
+                      <td className='px-4 py-3 font-medium text-slate-800'>{row.size}</td>
+                      {fitCompleteness.requiredFields.map((field) => (
+                        <td key={`${row.size}-${field}`} className='px-4 py-3'>
+                          <input
+                            type='number'
+                            min='0'
+                            step='0.1'
+                            value={row[field]}
+                            onChange={(event) => updateMeasurementField(row.size, field, event.target.value)}
+                            className='w-28 px-3 py-2 border border-slate-300 rounded-xl'
+                            placeholder='cm'
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

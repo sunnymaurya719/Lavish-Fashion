@@ -78,6 +78,18 @@ const userSchema = new mongoose.Schema({
         loyaltyUpdates: { type: Boolean, default: true },
         reviewReminders: { type: Boolean, default: true }
     },
+    fitProfile: {
+        heightCm: { type: Number, min: 50, max: 260, default: null },
+        weightKg: { type: Number, min: 20, max: 350, default: null },
+        preferredFit: { type: String, enum: ['slim', 'regular', 'relaxed'], default: 'regular' },
+        bodyFeatures: {
+            shoulderRatio: { type: Number, min: 0, default: null },
+            hipRatio: { type: Number, min: 0, default: null },
+            torsoRatio: { type: Number, min: 0, default: null },
+            scanQuality: { type: Number, min: 0, max: 1, default: null }
+        },
+        lastScanAt: { type: Date, default: null }
+    },
     adminNotes: { type: String, default: '', trim: true, maxlength: 1000 },
     cartData: {
         type: Object,

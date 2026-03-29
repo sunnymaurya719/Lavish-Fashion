@@ -9,8 +9,7 @@ const toPlainUser = (user) => {
         return null;
     }
 
-    const { save, ...plainUser } = user;
-    return { ...plainUser };
+    return Object.fromEntries(Object.entries(user).filter(([key]) => key !== 'save'));
 };
 
 const buildUserDocument = (user) => {
