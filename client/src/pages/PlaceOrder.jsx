@@ -129,6 +129,7 @@ const PlaceOrder = () => {
     getCartAmount,
     delivery_fee,
     getCheckoutItems,
+    products,
     serverBootstrap,
     serverStatus,
   } = useContext(ShopContext);
@@ -149,6 +150,7 @@ const PlaceOrder = () => {
     return initialDraftRef.current?.step || 0;
   });
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [isStepTransitioning, setIsStepTransitioning] = useState(false);
   const [couponOpen, setCouponOpen] = useState(false);
   const [couponInput, setCouponInput] = useState('');
   const [pointsInput, setPointsInput] = useState('');
@@ -280,6 +282,15 @@ const PlaceOrder = () => {
     setPointsInput('');
     idempotencyKeyRef.current = '';
   }, [checkoutItemsKey]);
+
+  useEffect(() => {
+    if (!isStepTransitioning) {
+      return;
+    }
+
+    const timerId = setTimeout(() => setIsStepTransitioning(false), 700);
+    return () => clearTimeout(timerId);
+  }, [isStepTransitioning]);
 
   const requestPricingPreview = useCallback(
     async ({
@@ -450,6 +461,7 @@ const PlaceOrder = () => {
       return;
     }
 
+    setIsStepTransitioning(true);
     setCurrentStep(2);
   };
 
@@ -652,7 +664,7 @@ const PlaceOrder = () => {
   const onSubmitHandler = async (event) => {
     event.preventDefault();
 
-    if (isPlacingOrder) {
+    if (isPlacingOrder || isStepTransitioning) {
       return;
     }
 
@@ -738,6 +750,14 @@ const PlaceOrder = () => {
         ? 'Pay in cash when your order is delivered.'
         : 'Select one method to continue.';
   const visibleReviewItems = checkoutItems.slice(0, 3);
+
+  const productMap = useMemo(() => {
+    const map = {};
+    for (const p of products) {
+      map[p._id] = p;
+    }
+    return map;
+  }, [products]);
 
   if (!token) {
     return (
@@ -997,15 +1017,21 @@ const PlaceOrder = () => {
               <article className='mt-3 rounded-2xl border border-slate-200 p-3'>
                 <p className='text-xs uppercase tracking-[0.16em] text-slate-500'>Items</p>
                 <ul className='mt-2 space-y-2'>
-                  {visibleReviewItems.map((item, index) => (
-                    <li key={`${item._id || item.productId || item.name || 'item'}-${index}`} className='flex items-center justify-between gap-3 text-sm'>
-                      <span className='truncate text-slate-700'>{item.name || 'Product'}</span>
-                      <span className='shrink-0 text-slate-500'>x{Number(item.quantity || 0)}</span>
-                      <span className='shrink-0 font-medium text-slate-900'>
-                        {formatCurrency(Number(item.price || 0) * Number(item.quantity || 0))}
-                      </span>
-                    </li>
-                  ))}
+                  {visibleReviewItems.map((item, index) => {
+                    const product = productMap[item._id] || productMap[item.productId];
+                    const itemName = product?.name || item.name || 'Unknown product';
+                    const itemPrice = Number(product?.price ?? item.price ?? 0);
+                    const qty = Number(item.quantity || 0);
+                    return (
+                      <li key={`${item._id || item.productId || 'item'}-${item.size || ''}-${index}`} className='flex items-center justify-between gap-3 text-sm'>
+                        <span className='truncate text-slate-700'>{itemName}</span>
+                        <span className='shrink-0 text-slate-500'>x{qty}</span>
+                        <span className='shrink-0 font-medium text-slate-900'>
+                          {formatCurrency(itemPrice * qty)}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
                 {checkoutItems.length > visibleReviewItems.length ? (
                   <p className='mt-2 text-xs text-slate-500'>+ {checkoutItems.length - visibleReviewItems.length} more item(s)</p>
@@ -1211,7 +1237,7 @@ const PlaceOrder = () => {
               ) : (
                 <button
                   type='submit'
-                  disabled={isPlacingOrder || !method || !hasAddressInput}
+                  disabled={isPlacingOrder || isStepTransitioning || !method || !hasAddressInput}
                   className='rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:opacity-60 disabled:cursor-not-allowed'
                 >
                   {isPlacingOrder ? 'Placing...' : 'Place order'}
