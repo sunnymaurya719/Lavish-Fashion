@@ -162,7 +162,7 @@ const ShopContextProvider = (props) => {
   const addToCart = async (itemId, size, fitAssistant = null) => {
     if (!size) {
       toast.sizeRequired();
-      return;
+      return false;
     }
 
     const cartData = structuredClone(cartItems);
@@ -211,6 +211,7 @@ const ShopContextProvider = (props) => {
         toast.error(error?.response?.data?.message || 'Failed to update cart');
       }
     }
+    return true;
   };
 
   const getCartCount = () =>

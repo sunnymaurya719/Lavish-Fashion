@@ -125,14 +125,16 @@ const Product = () => {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [addedToCart, setAddedToCart] = useState(false);
 
-  const handleAddToCart = useCallback(() => {
-    addToCart(
+  const handleAddToCart = useCallback(async () => {
+    const success = await addToCart(
       productData._id,
       size,
       appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
     );
-    setAddedToCart(true);
-    setTimeout(() => setAddedToCart(false), 2000);
+    if (success) {
+      setAddedToCart(true);
+      setTimeout(() => setAddedToCart(false), 2000);
+    }
   }, [addToCart, productData, size, appliedFitSelection]);
 
   useScrollToTop([productId]);
