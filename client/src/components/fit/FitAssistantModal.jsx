@@ -116,6 +116,7 @@ const FitAssistantModal = ({
     }
 
     setIsCameraActive(false);
+    setIsCameraReady(false);
   }, []);
 
   const resetCameraState = useCallback(() => {
@@ -199,6 +200,8 @@ const FitAssistantModal = ({
     [bodyFeatures?.scanQuality]
   );
 
+  const [isCameraReady, setIsCameraReady] = useState(false);
+
   const startCamera = async () => {
     if (isStartingCamera || isSubmitting) {
       return;
@@ -216,6 +219,7 @@ const FitAssistantModal = ({
 
     resetResultState();
     setCameraError('');
+    setIsCameraReady(false);
     setIsStartingCamera(true);
 
     try {
@@ -231,12 +235,6 @@ const FitAssistantModal = ({
       });
 
       streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => undefined);
-      }
-
       setCapturedImage('');
       setBodyFeatures(null);
       setBodyScanMeta(null);
@@ -248,9 +246,28 @@ const FitAssistantModal = ({
     }
   };
 
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+
+    if (!isCameraActive || !video || !stream) {
+      return;
+    }
+
+    video.srcObject = stream;
+
+    const onLoadedMetadata = () => setIsCameraReady(true);
+    video.addEventListener('loadedmetadata', onLoadedMetadata);
+    video.play().catch(() => undefined);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+  }, [isCameraActive]);
+
   const captureScan = () => {
-    if (!videoRef.current) {
-      setCameraError('Camera preview is not ready yet. Please try again.');
+    if (!videoRef.current || !isCameraReady) {
+      setCameraError('Camera preview is still loading. Wait a moment and try again.');
       return;
     }
 
@@ -570,7 +587,14 @@ const FitAssistantModal = ({
                     {capturedImage ? (
                       <img src={capturedImage} alt='Captured body scan preview' className='h-full w-full object-cover' />
                     ) : isCameraActive ? (
-                      <video ref={videoRef} autoPlay muted playsInline className='h-full w-full object-cover' />
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        webkit-playsinline="true"
+                        className='h-full w-full object-cover'
+                      />
                     ) : (
                       <div className='flex h-full flex-col items-center justify-center px-6 text-center text-slate-200'>
                         <p className='text-[11px] uppercase tracking-[0.24em] text-slate-400'>Camera preview</p>
@@ -625,10 +649,10 @@ const FitAssistantModal = ({
                       <button
                         type='button'
                         onClick={captureScan}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || !isCameraReady}
                         className='rounded-full bg-slate-950 px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-white disabled:opacity-60'
                       >
-                        Capture Scan
+                        {isCameraReady ? 'Capture Scan' : 'Waiting for camera...'}
                       </button>
                       <button
                         type='button'
