@@ -257,9 +257,10 @@ const ShopContextProvider = (props) => {
 
   const getCartAmount = () => {
     let totalAmount = 0;
+    const productMap = new Map(products.map((p) => [p._id, p]));
 
     getCartLineItems().forEach((lineItem) => {
-      const product = products.find((item) => item._id === lineItem._id);
+      const product = productMap.get(lineItem._id);
 
       if (product) {
         totalAmount += Number(product.price || 0) * Number(lineItem.quantity || 0);

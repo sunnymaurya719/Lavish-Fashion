@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { assets } from '../assets/assets';
 import { ShopContext } from '../context/ShopContext';
+import { prefetchRoute } from '../utils/prefetchRoutes';
 
 const HeartIcon = ({ filled = false }) => (
   <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
@@ -154,28 +155,28 @@ const Navbar = () => {
       </Link>
 
       <ul className='hidden sm:flex gap-5 text-sm text-gray-700'>
-        <NavLink to='/' className='flex flex-col items-center gap-1 '>
+        <NavLink to='/' className='flex flex-col items-center gap-1 ' onMouseEnter={() => prefetchRoute('/')}>
           <p>HOME</p>
           <hr className='w-2/4 border-none h-[1.5px] bg-gray-700 hidden' />
         </NavLink>
 
-        <NavLink to='/collection' className='flex flex-col items-center gap-1'>
+        <NavLink to='/collection' className='flex flex-col items-center gap-1' onMouseEnter={() => prefetchRoute('/collection')}>
           <p>COLLECTION</p>
           <hr className='w-2/4 border-none h-[1.5px] bg-gray-700 hidden' />
         </NavLink>
 
-        <NavLink to='/about' className='flex flex-col items-center gap-1'>
+        <NavLink to='/about' className='flex flex-col items-center gap-1' onMouseEnter={() => prefetchRoute('/about')}>
           <p>ABOUT</p>
           <hr className='w-2/4 border-none h-[1.5px] bg-gray-700 hidden' />
         </NavLink>
 
-        <NavLink to='/contact' className='flex flex-col items-center gap-1'>
+        <NavLink to='/contact' className='flex flex-col items-center gap-1' onMouseEnter={() => prefetchRoute('/contact')}>
           <p>CONTACT</p>
           <hr className='w-2/4 border-none h-[1.5px] bg-gray-700 hidden' />
         </NavLink>
 
         {token ? (
-          <NavLink to='/rewards' className='flex flex-col items-center gap-1'>
+          <NavLink to='/rewards' className='flex flex-col items-center gap-1' onMouseEnter={() => prefetchRoute('/rewards')}>
             <p>REWARDS</p>
             <hr className='w-2/4 border-none h-[1.5px] bg-gray-700 hidden' />
           </NavLink>

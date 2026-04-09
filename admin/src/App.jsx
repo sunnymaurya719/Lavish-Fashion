@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Navigate, Route, Routes, useParams } from 'react-router-dom';
@@ -7,19 +7,26 @@ import { BACKEND_URL } from './config/api';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import Login from './components/Login';
-import Add from './pages/Add';
-import Coupons from './pages/Coupons';
-import Customers from './pages/Customers';
-import Dashboard from './pages/Dashboard';
-import Edit from './pages/Edit';
-import FitAnalytics from './pages/FitAnalytics';
-import Inventory from './pages/Inventory';
-import List from './pages/List';
-import Loyalty from './pages/Loyalty';
-import Marketing from './pages/Marketing';
-import Orders from './pages/Orders';
-import Reviews from './pages/Reviews';
 import 'react-toastify/dist/ReactToastify.css';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const List = lazy(() => import('./pages/List'));
+const Add = lazy(() => import('./pages/Add'));
+const Edit = lazy(() => import('./pages/Edit'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const Orders = lazy(() => import('./pages/Orders'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Coupons = lazy(() => import('./pages/Coupons'));
+const Loyalty = lazy(() => import('./pages/Loyalty'));
+const FitAnalytics = lazy(() => import('./pages/FitAnalytics'));
+const Reviews = lazy(() => import('./pages/Reviews'));
+const Marketing = lazy(() => import('./pages/Marketing'));
+
+const AdminRouteFallback = () => (
+  <div className='flex h-64 items-center justify-center'>
+    <div className='h-8 w-8 animate-spin rounded-full border-[3px] border-slate-200 border-t-slate-600'></div>
+  </div>
+);
 
 const LegacyEditRedirect = () => {
   const { productId } = useParams();
@@ -146,6 +153,7 @@ const App = () => {
               onRefreshServerStatus={() => fetchServerBootstrap()}
             />
             <main className='mx-auto flex-1 w-full min-h-0 max-w-[1600px] overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 xl:px-10'>
+              <Suspense fallback={<AdminRouteFallback />}>
               <Routes>
                 <Route path='/' element={<Navigate to='/dashboard' replace />} />
                 <Route
@@ -191,6 +199,7 @@ const App = () => {
                 <Route path='/list' element={<Navigate to='/products' replace />} />
                 <Route path='*' element={<Navigate to='/dashboard' replace />} />
               </Routes>
+              </Suspense>
             </main>
           </div>
         </div>

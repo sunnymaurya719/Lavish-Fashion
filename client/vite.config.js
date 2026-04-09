@@ -4,18 +4,19 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  theme: {
-    extend: {
-      animation: {
-        shimmer: "shimmer 1.5s infinite",
-      },
-      keyframes: {
-        shimmer: {
-          "100%": { transform: "translateX(100%)" },
+  plugins: [react(), tailwindcss()],
+  server: { port: 5173 },
+  build: {
+    target: 'es2020',
+    cssCodeSplit: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-router': ['react-router-dom'],
+          'vendor-axios': ['axios'],
         },
       },
     },
   },
-  plugins: [react(), tailwindcss()],
-  server: { port: 5173 }
 })

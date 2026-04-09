@@ -1,16 +1,16 @@
-import React, { lazy, Suspense } from 'react'
+import React, { lazy, Suspense, memo } from 'react'
 import {Routes, Route, useLocation} from 'react-router-dom'
-import Home from './pages/Home'
-import Collection from './pages/Collection'
-import Product from './pages/Product'
-import Cart from './pages/Cart'
-import Login from './pages/Login'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
 import SearchBar from './components/SearchBar'
 import ScrollToTop from './components/ScrollToTop'
 import MobileToastContainer from './components/MobileToastContainer'
 
+const Home = lazy(() => import('./pages/Home'))
+const Collection = lazy(() => import('./pages/Collection'))
+const Product = lazy(() => import('./pages/Product'))
+const Cart = lazy(() => import('./pages/Cart'))
+const Login = lazy(() => import('./pages/Login'))
 const About = lazy(() => import('./pages/About'))
 const Contact = lazy(() => import('./pages/Contact'))
 const Profile = lazy(() => import('./pages/Profile'))

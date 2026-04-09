@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useMemo } from 'react';
 import { ShopContext } from '../context/ShopContext';
 import ProductItem from './ProductItem';
 import ProductShimmer from './ProductShimmer';
@@ -18,11 +18,10 @@ const categoryLabels = {
 
 const CategoriesProduct = ({ catname, cat }) => {
   const { products, loadingProductsData } = useContext(ShopContext);
-  const [categoryProducts, setCategoryProducts] = useState([]);
-
-  useEffect(() => {
-    setCategoryProducts(products.filter((product) => product.category === cat));
-  }, [cat, products]);
+  const categoryProducts = useMemo(
+    () => products.filter((product) => product.category === cat),
+    [products, cat]
+  );
 
   return (
     <section className='mt-10 mb-14 sm:my-16 bg-white'>

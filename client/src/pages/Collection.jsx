@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useState } from 'react'
+import React, { useContext, useMemo, useState } from 'react'
 import { ShopContext } from '../context/ShopContext'
 import { assets } from '../assets/assets';
 import ProductItem from '../components/ProductItem';
@@ -12,10 +12,26 @@ const Collection = () => {
   const { products, search, showSearch, loadingProductsData } = useContext(ShopContext);
   const [showFilter, setShowFilter] = useState(false);
   const [openSections, setOpenSections] = useState({ categories: true, type: true });
-  const [filterProducts, setFilterProducts] = useState([]);
   const [category, setCategory] = useState([]);
   const [subCategory, setSubCategory] = useState([]);
   const activeFilterCount = category.length + subCategory.length;
+
+  const filterProducts = useMemo(() => {
+    let result = products;
+
+    if (showSearch && search) {
+      const searchLower = search.toLowerCase();
+      result = result.filter(item => item.name.toLowerCase().includes(searchLower));
+    }
+
+    if (category.length > 0) {
+      result = result.filter(item => category.includes(item.category));
+    }
+    if (subCategory.length > 0) {
+      result = result.filter(item => subCategory.includes(item.subCategory));
+    }
+    return result;
+  }, [products, showSearch, search, category, subCategory]);
 
   const toggleCategory = (value) => {
     if (category.includes(value)) {
@@ -38,30 +54,6 @@ const Collection = () => {
   const toggleSection = (sectionKey) => {
     setOpenSections((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
   };
-
-  const applyFilter = useCallback(() => {
-    let productsCopy = products.slice();
-
-    if (showSearch && search) {
-      productsCopy = productsCopy.filter(item => item.name.toLowerCase().includes(search.toLowerCase()));
-    }
-
-    if (category.length > 0) {
-      productsCopy = productsCopy.filter(item => category.includes(item.category));
-    }
-    if (subCategory.length > 0) {
-      productsCopy = productsCopy.filter(item => subCategory.includes(item.subCategory));
-    }
-    setFilterProducts(productsCopy);
-  }, [products, showSearch, search, category, subCategory]);
-
-  useEffect(() => {
-    setFilterProducts(products);
-  }, [products]);
-
-  useEffect(() => {
-    applyFilter();
-  }, [applyFilter]);
 
   const renderFilterChips = (options, selectedItems, onToggle) => (
     <div className='flex flex-wrap gap-2.5 pt-3'>

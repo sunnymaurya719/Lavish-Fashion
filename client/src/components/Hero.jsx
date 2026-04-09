@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { assets } from '../assets/assets'
 import { ShopContext } from '../context/ShopContext'
@@ -15,9 +15,9 @@ const Hero = () => {
     )
     const [activeIndex, setActiveIndex] = useState(0)
     const [isPaused, setIsPaused] = useState(false)
-    const [scrollOffset, setScrollOffset] = useState(0)
     const touchStartXRef = useRef(null)
     const touchDeltaXRef = useRef(0)
+    const parallaxRef = useRef(null)
 
     useEffect(() => {
         if (activeIndex >= featuredProducts.length) {
@@ -45,7 +45,6 @@ const Hero = () => {
         const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
         if (prefersReducedMotion) {
-            setScrollOffset(0)
             return undefined
         }
 
@@ -58,7 +57,14 @@ const Hero = () => {
 
             ticking = true
             window.requestAnimationFrame(() => {
-                setScrollOffset(window.scrollY || 0)
+                const scrollY = window.scrollY || 0
+                const container = parallaxRef.current
+                if (container) {
+                    const children = container.children
+                    if (children[0]) children[0].style.transform = `translate3d(0, ${Math.min(scrollY * 0.05 * PARALLAX_INTENSITY, 18)}px, 0)`
+                    if (children[1]) children[1].style.transform = `translate3d(0, ${Math.min(scrollY * 0.08 * PARALLAX_INTENSITY, 26)}px, 0)`
+                    if (children[2]) children[2].style.transform = `translate3d(0, ${Math.min(scrollY * 0.12 * PARALLAX_INTENSITY, 42)}px, 0)`
+                }
                 ticking = false
             })
         }
@@ -72,17 +78,14 @@ const Hero = () => {
     const activeProduct = featuredProducts[activeIndex]
     const activeImage = activeProduct?.image?.[0] || assets.hero_img
     const showHeroSkeleton = loadingProductsData && products.length === 0
-    const arcParallax = Math.min(scrollOffset * 0.05 * PARALLAX_INTENSITY, 18)
-    const primaryBlobParallax = Math.min(scrollOffset * 0.08 * PARALLAX_INTENSITY, 26)
-    const secondaryBlobParallax = Math.min(scrollOffset * 0.12 * PARALLAX_INTENSITY, 42)
 
-    const onSlideChange = (nextIndex) => {
+    const onSlideChange = useCallback((nextIndex) => {
         if (!featuredProducts.length) {
             return
         }
 
         setActiveIndex((nextIndex + featuredProducts.length) % featuredProducts.length)
-    }
+    }, [featuredProducts.length])
 
     const handleTouchStart = (event) => {
         touchStartXRef.current = event.touches?.[0]?.clientX ?? null
@@ -159,18 +162,15 @@ const Hero = () => {
 
     return (
         <section className='hero-shell relative overflow-hidden flex flex-col lg:flex-row min-h-0 lg:min-h-[460px]'>
-            <div className='pointer-events-none absolute inset-0'>
+            <div className='pointer-events-none absolute inset-0' ref={parallaxRef}>
                 <span
                     className='absolute -left-28 -top-24 h-64 w-64 rounded-full border border-[#414141]/8 will-change-transform'
-                    style={{ transform: `translate3d(0, ${arcParallax}px, 0)` }}
                 ></span>
                 <span
                     className='absolute right-[10%] top-[4%] h-[420px] w-[420px] rounded-full bg-[#efcdcf]/40 blur-3xl will-change-transform'
-                    style={{ transform: `translate3d(0, ${primaryBlobParallax}px, 0)` }}
                 ></span>
                 <span
                     className='absolute right-[-8%] bottom-[-20%] h-[280px] w-[280px] rounded-full bg-[#efcdcf]/35 blur-2xl will-change-transform'
-                    style={{ transform: `translate3d(0, ${secondaryBlobParallax}px, 0)` }}
                 ></span>
             </div>
 
@@ -243,6 +243,7 @@ const Hero = () => {
                     className='hero-image w-full h-full object-cover object-top opacity-[0.97]'
                     src={activeImage}
                     alt={activeProduct?.name || 'Model wearing latest arrivals'}
+                    fetchPriority='high'
                 />
 
                 {activeProduct && (

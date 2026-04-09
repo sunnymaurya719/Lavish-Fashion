@@ -1,6 +1,7 @@
-import React, { useContext } from 'react';
+import React, { memo, useContext } from 'react';
 import { ShopContext } from '../context/ShopContext';
 import { Link } from 'react-router-dom';
+import { prefetchRoute } from '../utils/prefetchRoutes';
 
 const HeartIcon = ({ filled = false }) => (
   <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
@@ -46,7 +47,7 @@ const ProductItem = ({ id, image, name, price, averageRating = 0, reviewCount = 
         <HeartIcon filled={wishlisted} />
       </button>
 
-      <Link className='text-gray-700 cursor-pointer block' to={`/product/${id}`}>
+      <Link className='text-gray-700 cursor-pointer block' to={`/product/${id}`} onMouseEnter={() => prefetchRoute('/product')}>
         <div className='overflow-hidden rounded-2xl bg-slate-50'>
           <img className='hover:scale-110 transition ease-in-out' src={image[0]} alt={name} loading='lazy' />
         </div>
@@ -73,4 +74,4 @@ const ProductItem = ({ id, image, name, price, averageRating = 0, reviewCount = 
   );
 };
 
-export default ProductItem;
+export default memo(ProductItem);

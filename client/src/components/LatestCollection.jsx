@@ -1,15 +1,11 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useMemo } from 'react';
 import { ShopContext } from '../context/ShopContext';
 import ProductItem from './ProductItem';
 import ProductShimmer from './ProductShimmer';
 
 const LatestCollection = () => {
   const { products, loadingProductsData } = useContext(ShopContext);
-  const [latestProducts, setLatestProducts] = useState([]);
-
-  useEffect(() => {
-    setLatestProducts(products.slice(0, 10));
-  }, [products]);
+  const latestProducts = useMemo(() => products.slice(0, 10), [products]);
 
   return (
     <section className='mt-2 mb-14 sm:my-16 bg-white'>
