@@ -1321,7 +1321,8 @@ const updateOrderStatus = async (req, res) => {
         }
 
         const updatePayload = { status };
-        const wasDelivered = existingOrder.status === 'Delivered';
+        let shouldProcessDeliveryRewards = false;
+        let shouldReleaseLoyalty = false;
 
         // Mark COD orders as paid once delivery is confirmed in admin.
         if (existingOrder.paymentMethod === 'COD' && status === 'Delivered' && !existingOrder.payment) {
@@ -1334,14 +1335,40 @@ const updateOrderStatus = async (req, res) => {
             updatePayload.deliveredAt = Date.now();
         }
 
-        const updatedOrder = await orderModel.findByIdAndUpdate(orderId, updatePayload, { new: true });
+        // Release reserved loyalty points when order is cancelled
+        if (status === 'Cancelled' && existingOrder.status !== 'Cancelled' && existingOrder.status !== 'Delivered') {
+            shouldReleaseLoyalty = Number(existingOrder.loyaltyPointsRedeemed || 0) > 0 &&
+                existingOrder.loyaltyRedemptionStatus === 'reserved';
+        }
+
+        let updatedOrder = null;
+
+        if (status === 'Delivered') {
+            // Ensure only one concurrent transition to Delivered executes delivery-linked rewards.
+            updatedOrder = await orderModel.findOneAndUpdate(
+                {
+                    _id: orderId,
+                    status: { $ne: 'Delivered' }
+                },
+                updatePayload,
+                { new: true }
+            );
+
+            if (updatedOrder) {
+                shouldProcessDeliveryRewards = true;
+            } else {
+                updatedOrder = await orderModel.findById(orderId);
+            }
+        } else {
+            updatedOrder = await orderModel.findByIdAndUpdate(orderId, updatePayload, { new: true });
+        }
 
         await publishAdminOrderUpsert({
             order: updatedOrder,
             source: 'orderController.updateOrderStatus'
         });
 
-        if (!wasDelivered && status === 'Delivered') {
+        if (shouldProcessDeliveryRewards && status === 'Delivered') {
             await finalizeReservedLoyaltyRedemption({ order: updatedOrder });
             const rewardSummary = await awardOrderDeliveryRewards(updatedOrder);
             const refreshedOrder = await orderModel.findById(orderId).lean();
@@ -1394,6 +1421,16 @@ const updateOrderStatus = async (req, res) => {
                     }
                 });
             }
+        }
+
+        // Release reserved loyalty points on cancellation
+        if (shouldReleaseLoyalty) {
+            await releaseReservedLoyaltyRedemption({ order: existingOrder });
+        }
+
+        // Release inventory on cancellation if still reserved
+        if (status === 'Cancelled' && existingOrder.status !== 'Cancelled' && existingOrder.inventoryReserved) {
+            await releaseInventoryForOrder(existingOrder);
         }
 
         res.status(200).json({ success: true, message: 'Status Updated', order: updatedOrder });

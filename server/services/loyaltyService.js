@@ -27,6 +27,14 @@ const getNumericEnvValue = (value, fallback) => {
     return Number.isFinite(parsedValue) ? parsedValue : fallback;
 };
 
+const getNonNegativeNumericEnvValue = (value, fallback) => {
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : fallback;
+};
+
+const getNonNegativeIntEnvValue = (value, fallback) =>
+    Math.max(0, Math.floor(getNonNegativeNumericEnvValue(value, fallback)));
+
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(2));
 
 const getUserAvailableLoyaltyPoints = (user = {}) =>
@@ -181,18 +189,28 @@ const awardLoyaltyPoints = async ({ userId, points, type, description, metadata 
         return null;
     }
 
-    const user = await userModel.findById(userId);
+    const incUpdate = { loyaltyPoints: normalizedPoints };
+
+    if (normalizedPoints > 0) {
+        incUpdate.lifetimeLoyaltyPoints = normalizedPoints;
+    }
+
+    const user = await userModel.findOneAndUpdate(
+        {
+            _id: userId,
+            ...(normalizedPoints < 0
+                ? { loyaltyPoints: { $gte: Math.abs(normalizedPoints) } }
+                : {})
+        },
+        { $inc: incUpdate },
+        { new: true }
+    );
+
     if (!user) {
         return null;
     }
 
-    const nextBalance = Number(user.loyaltyPoints || 0) + normalizedPoints;
-    const nextLifetimeBalance =
-        normalizedPoints > 0 ? Number(user.lifetimeLoyaltyPoints || 0) + normalizedPoints : Number(user.lifetimeLoyaltyPoints || 0);
-
-    user.loyaltyPoints = nextBalance;
-    user.lifetimeLoyaltyPoints = nextLifetimeBalance;
-    await user.save();
+    const nextBalance = Number(user.loyaltyPoints || 0);
 
     const transaction = await loyaltyTransactionModel.create({
         userId: String(user._id),
@@ -246,14 +264,21 @@ const releaseUserReservedLoyaltyPoints = async ({ userId, points }) => {
         return null;
     }
 
-    const user = await userModel.findById(userId);
+    const user = await userModel.findOneAndUpdate(
+        { _id: userId, reservedLoyaltyPoints: { $gte: normalizedPoints } },
+        { $inc: { reservedLoyaltyPoints: -normalizedPoints } },
+        { new: true }
+    );
 
     if (!user) {
-        return null;
+        // Fallback: clamp to zero if reserved was already partially released
+        const fallbackUser = await userModel.findOneAndUpdate(
+            { _id: userId, reservedLoyaltyPoints: { $gt: 0 } },
+            { $set: { reservedLoyaltyPoints: 0 } },
+            { new: true }
+        );
+        return fallbackUser || null;
     }
-
-    user.reservedLoyaltyPoints = Math.max(0, Number(user.reservedLoyaltyPoints || 0) - normalizedPoints);
-    await user.save();
 
     return user;
 };
@@ -272,18 +297,27 @@ const finalizeReservedLoyaltyRedemption = async ({ order }) => {
     }
 
     const redeemedPoints = Math.max(0, Math.floor(Number(order.loyaltyPointsRedeemed || 0)));
-    const user = await userModel.findById(order.userId);
+
+    const user = await userModel.findOneAndUpdate(
+        {
+            _id: order.userId,
+            loyaltyPoints: { $gte: redeemedPoints },
+            reservedLoyaltyPoints: { $gte: redeemedPoints }
+        },
+        {
+            $inc: {
+                loyaltyPoints: -redeemedPoints,
+                reservedLoyaltyPoints: -redeemedPoints
+            }
+        },
+        { new: true }
+    );
 
     if (!user) {
         return null;
     }
 
-    const nextBalance = Math.max(0, Number(user.loyaltyPoints || 0) - redeemedPoints);
-    const nextReservedBalance = Math.max(0, Number(user.reservedLoyaltyPoints || 0) - redeemedPoints);
-
-    user.loyaltyPoints = nextBalance;
-    user.reservedLoyaltyPoints = nextReservedBalance;
-    await user.save();
+    const nextBalance = Number(user.loyaltyPoints || 0);
 
     await loyaltyTransactionModel.create({
         userId: String(user._id),
@@ -453,11 +487,11 @@ const awardOrderDeliveryRewards = async (order) => {
             };
         }
 
-        const referrerRewardPoints = getNumericEnvValue(
+        const referrerRewardPoints = getNonNegativeIntEnvValue(
             process.env.REFERRAL_REWARD_REFERRER,
             DEFAULT_REFERRER_REWARD_POINTS
         );
-        const newCustomerRewardPoints = getNumericEnvValue(
+        const newCustomerRewardPoints = getNonNegativeIntEnvValue(
             process.env.REFERRAL_REWARD_NEW_USER,
             DEFAULT_NEW_CUSTOMER_REWARD_POINTS
         );
@@ -510,12 +544,36 @@ const awardOrderDeliveryRewards = async (order) => {
 };
 
 const getReviewRewardPoints = () =>
-    getNumericEnvValue(process.env.REVIEW_REWARD_POINTS, DEFAULT_REVIEW_REWARD_POINTS);
+    getNonNegativeIntEnvValue(process.env.REVIEW_REWARD_POINTS, DEFAULT_REVIEW_REWARD_POINTS);
+
+const cleanupStaleReservations = async ({ staleCutoffMs = 24 * 60 * 60 * 1000 } = {}) => {
+    const cutoffDate = Date.now() - staleCutoffMs;
+
+    // Find orders that have been in 'reserved' state longer than the cutoff
+    const staleOrders = await orderModel.find({
+        loyaltyRedemptionStatus: 'reserved',
+        loyaltyPointsRedeemed: { $gt: 0 },
+        date: { $lt: cutoffDate },
+        payment: false
+    }).lean();
+
+    const results = [];
+
+    for (const order of staleOrders) {
+        const released = await releaseReservedLoyaltyRedemption({ order });
+        if (released) {
+            results.push({ orderId: String(order._id), pointsReleased: order.loyaltyPointsRedeemed });
+        }
+    }
+
+    return results;
+};
 
 export {
     awardLoyaltyPoints,
     awardOrderDeliveryRewards,
     calculateLoyaltyRedemption,
+    cleanupStaleReservations,
     determineLoyaltyTier,
     ensureUserReferralCode,
     finalizeReservedLoyaltyRedemption,

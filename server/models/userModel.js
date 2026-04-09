@@ -69,7 +69,7 @@ const userSchema = new mongoose.Schema({
     },
     successfulReferralCount: { type: Number, default: 0, min: 0 },
     referralRewardUnlocked: { type: Boolean, default: false },
-    loyaltyPoints: { type: Number, default: 0 },
+    loyaltyPoints: { type: Number, default: 0, min: 0 },
     reservedLoyaltyPoints: { type: Number, default: 0, min: 0 },
     lifetimeLoyaltyPoints: { type: Number, default: 0, min: 0 },
     marketingPreferences: {

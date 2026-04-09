@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { notify as toast } from '../utils/notify';
 import { ShopContext } from '../context/ShopContext';
+import { useLocation } from 'react-router-dom';
 
 const GoogleIcon = () => (
   <svg viewBox='0 0 24 24' className='h-5 w-5' aria-hidden='true'>
@@ -98,6 +99,7 @@ const SocialButton = ({ icon, label, onClick }) => (
 const Login = () => {
   const [currentState, setCurrentState] = useState('Login');
   const { token, setToken, navigate, BACKEND_URL, getUserCart } = useContext(ShopContext);
+  const location = useLocation();
   const [formValues, setFormValues] = useState({
     name: '',
     email: '',
@@ -151,8 +153,8 @@ const Login = () => {
           return '';
         }
 
-        if (!/^[A-Z0-9]{4,12}$/.test(trimmed.toUpperCase())) {
-          return 'Use 4-12 letters or numbers only.';
+        if (!/^[A-Z0-9]{6,12}$/.test(trimmed.toUpperCase())) {
+          return 'Use 6-12 letters or numbers only.';
         }
       }
 
@@ -277,6 +279,28 @@ const Login = () => {
     setTouched({});
     setFormErrorMessage('');
   }, [currentState]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search || '');
+    const queryReferralCode =
+      String(params.get('ref') || params.get('referral') || params.get('referralCode') || '')
+        .trim()
+        .toUpperCase();
+
+    if (!queryReferralCode) {
+      return;
+    }
+
+    if (!/^[A-Z0-9]{6,12}$/.test(queryReferralCode)) {
+      return;
+    }
+
+    setCurrentState('Sign Up');
+    setFormValues((current) => ({
+      ...current,
+      referralCode: queryReferralCode,
+    }));
+  }, [location.search]);
 
   return (
     <section className='auth-shell mx-auto w-full max-w-[400px] pb-16 pt-8 sm:pt-12'>

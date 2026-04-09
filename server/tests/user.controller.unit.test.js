@@ -168,6 +168,27 @@ describe('userController unit tests', () => {
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
+    it('returns 400 for invalid referral code format during registration', async () => {
+        findOneMock.mockResolvedValueOnce(null);
+
+        const req = {
+            body: {
+                name: 'User',
+                email: 'user@example.com',
+                password: 'SecurePass123',
+                referralCode: 'AB12'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await registerUser(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({ success: false, message: 'Referral code is invalid' });
+        expect(userModelConstructorMock).not.toHaveBeenCalled();
+    });
+
     it('returns 401 for invalid admin credentials', async () => {
         const req = {
             body: { email: 'wrong@example.com', password: 'wrong-password' },

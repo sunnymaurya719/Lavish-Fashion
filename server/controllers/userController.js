@@ -11,6 +11,8 @@ import {
 } from '../services/loyaltyService.js';
 import { getUserMarketingPreferences, queueAutomationEmail } from '../services/marketingAutomationService.js';
 
+const referralCodeRegex = /^[A-Z0-9]{6,12}$/;
+
 const createToken = (id) =>{
     return jwt.sign({id},process.env.JWT_SECRET, { expiresIn: '7d' })
 }
@@ -112,6 +114,10 @@ const registerUser = async (req,res) =>{
 
         let referredBy = '';
         if (referralCodeInput) {
+            if (!referralCodeRegex.test(referralCodeInput)) {
+                return res.status(400).json({ success: false, message: 'Referral code is invalid' });
+            }
+
             const referrer = await userModel.findOne({ referralCode: referralCodeInput }).select('_id email').lean();
 
             if (!referrer) {

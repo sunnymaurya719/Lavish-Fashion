@@ -40,6 +40,7 @@ const orderModelMock = {
     create: vi.fn(),
     findById: vi.fn(),
     findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
     findByIdAndUpdate: vi.fn()
 };
 
@@ -768,6 +769,7 @@ describe('orderController unit tests', () => {
 
     it('updates a COD order to delivered and triggers loyalty automations', async () => {
         orderModelMock.findById.mockReset();
+        orderModelMock.findOneAndUpdate.mockReset();
         orderModelMock.findByIdAndUpdate.mockReset();
         userModelMock.findById.mockReset();
 
@@ -786,14 +788,14 @@ describe('orderController unit tests', () => {
                     reviewReminderQueuedAt: null
                 })
             });
+        orderModelMock.findOneAndUpdate.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Delivered',
+            paymentMethod: 'COD',
+            payment: true
+        });
         orderModelMock.findByIdAndUpdate
-            .mockResolvedValueOnce({
-                _id: '507f1f77bcf86cd799439011',
-                userId: 'user_1',
-                status: 'Delivered',
-                paymentMethod: 'COD',
-                payment: true
-            })
             .mockResolvedValueOnce({
                 _id: '507f1f77bcf86cd799439011',
                 reviewReminderQueuedAt: Date.now()
@@ -825,9 +827,12 @@ describe('orderController unit tests', () => {
 
         await updateOrderStatus(req, res);
 
-        expect(orderModelMock.findByIdAndUpdate).toHaveBeenNthCalledWith(
+        expect(orderModelMock.findOneAndUpdate).toHaveBeenNthCalledWith(
             1,
-            '507f1f77bcf86cd799439011',
+            expect.objectContaining({
+                _id: '507f1f77bcf86cd799439011',
+                status: { $ne: 'Delivered' }
+            }),
             expect.objectContaining({
                 status: 'Delivered',
                 payment: true,

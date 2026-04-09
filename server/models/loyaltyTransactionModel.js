@@ -32,6 +32,10 @@ const loyaltyTransactionSchema = new mongoose.Schema(
     { timestamps: true, minimize: false, strict: true }
 );
 
+loyaltyTransactionSchema.index({ userId: 1, createdAt: -1 });
+loyaltyTransactionSchema.index({ type: 1, createdAt: -1 });
+loyaltyTransactionSchema.index({ createdAt: -1 });
+
 const loyaltyTransactionModel =
     mongoose.models.loyalty_transaction || mongoose.model('loyalty_transaction', loyaltyTransactionSchema);
 

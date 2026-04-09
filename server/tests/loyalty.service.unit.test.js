@@ -52,7 +52,7 @@ const userModelMock = {
         users.set(String(userId), nextUser);
         return buildUserDocument(nextUser);
     }),
-    findOneAndUpdate: vi.fn(async (query = {}, update = {}) => {
+    findOneAndUpdate: vi.fn(async (query = {}, update = {}, options = {}) => {
         const userId = String(query._id || '');
         const existingUser = users.get(userId);
 
@@ -60,6 +60,7 @@ const userModelMock = {
             return null;
         }
 
+        // Check referral-related query conditions (claimReferralRewardUnlock)
         const referredByMatches =
             query.referredBy === undefined || String(existingUser.referredBy || '') === String(query.referredBy);
         const unlockMatches =
@@ -70,13 +71,47 @@ const userModelMock = {
             return null;
         }
 
-        const nextUser = {
-            ...existingUser,
-            ...(update.$set || {})
-        };
+        // Check loyaltyPoints >= condition (awardLoyaltyPoints deduction guard)
+        if (query.loyaltyPoints && typeof query.loyaltyPoints === 'object' && query.loyaltyPoints.$gte !== undefined) {
+            if (Number(existingUser.loyaltyPoints || 0) < Number(query.loyaltyPoints.$gte)) {
+                return null;
+            }
+        }
+
+        // Check reservedLoyaltyPoints >= condition
+        if (query.reservedLoyaltyPoints && typeof query.reservedLoyaltyPoints === 'object' && query.reservedLoyaltyPoints.$gte !== undefined) {
+            if (Number(existingUser.reservedLoyaltyPoints || 0) < Number(query.reservedLoyaltyPoints.$gte)) {
+                return null;
+            }
+        }
+
+        const returnOld = !options.new;
+        const snapshotBefore = { ...existingUser };
+        const nextUser = { ...existingUser };
+
+        // Apply $set
+        if (update.$set) {
+            Object.entries(update.$set).forEach(([key, value]) => {
+                nextUser[key] = value;
+            });
+        }
+
+        // Apply $inc
+        if (update.$inc) {
+            Object.entries(update.$inc).forEach(([key, value]) => {
+                nextUser[key] = Number(nextUser[key] || 0) + Number(value || 0);
+            });
+        }
+
+        // Apply top-level fields (not operators)
+        Object.entries(update)
+            .filter(([key]) => !key.startsWith('$'))
+            .forEach(([key, value]) => {
+                nextUser[key] = value;
+            });
 
         users.set(userId, nextUser);
-        return buildUserDocument(existingUser);
+        return buildUserDocument(returnOld ? snapshotBefore : nextUser);
     }),
     findOne: vi.fn()
 };
@@ -191,10 +226,9 @@ describe('loyaltyService referral rewards', () => {
             loyaltyPoints: 0,
             lifetimeLoyaltyPoints: 0,
             referredBy: '507f1f77bcf86cd799439011',
-            referralRewardUnlocked: false
+            // Already unlocked — simulates a concurrent claim that already succeeded
+            referralRewardUnlocked: true
         });
-
-        userModelMock.findOneAndUpdate.mockResolvedValueOnce(null);
 
         const result = await awardOrderDeliveryRewards({
             _id: '507f1f77bcf86cd799439021',
@@ -211,7 +245,7 @@ describe('loyaltyService referral rewards', () => {
         expect(updatedReferrer.loyaltyPoints).toBe(0);
         expect(updatedReferrer.successfulReferralCount).toBe(0);
         expect(updatedReferredUser.loyaltyPoints).toBe(10);
-        expect(updatedReferredUser.referralRewardUnlocked).toBe(false);
+        expect(updatedReferredUser.referralRewardUnlocked).toBe(true);
         expect(transactions.map((transaction) => transaction.type)).toEqual(['order_delivered']);
     });
 
@@ -240,6 +274,42 @@ describe('loyaltyService referral rewards', () => {
         expect(result.awardedOrderPoints).toBe(3);
         expect(updatedUser.loyaltyPoints).toBe(3);
         expect(transactions.map((transaction) => transaction.type)).toEqual(['order_delivered']);
+    });
+
+    it('falls back to default referral rewards when env values are negative', async () => {
+        process.env.REFERRAL_REWARD_REFERRER = '-5';
+        process.env.REFERRAL_REWARD_NEW_USER = '-12';
+
+        users.set('507f1f77bcf86cd799439011', {
+            _id: '507f1f77bcf86cd799439011',
+            name: 'Referrer User',
+            loyaltyPoints: 0,
+            lifetimeLoyaltyPoints: 0,
+            successfulReferralCount: 0
+        });
+        users.set('507f1f77bcf86cd799439012', {
+            _id: '507f1f77bcf86cd799439012',
+            name: 'Referred User',
+            loyaltyPoints: 0,
+            lifetimeLoyaltyPoints: 0,
+            referredBy: '507f1f77bcf86cd799439011',
+            referralRewardUnlocked: false
+        });
+
+        const result = await awardOrderDeliveryRewards({
+            _id: '507f1f77bcf86cd799439022',
+            userId: '507f1f77bcf86cd799439012',
+            status: 'Delivered',
+            amount: 400
+        });
+
+        const updatedReferrer = users.get('507f1f77bcf86cd799439011');
+        const updatedReferredUser = users.get('507f1f77bcf86cd799439012');
+
+        expect(result.referralRewards.referrerPoints).toBe(120);
+        expect(result.referralRewards.newCustomerPoints).toBe(60);
+        expect(updatedReferrer.loyaltyPoints).toBe(120);
+        expect(updatedReferredUser.loyaltyPoints).toBe(70);
     });
 });
 
