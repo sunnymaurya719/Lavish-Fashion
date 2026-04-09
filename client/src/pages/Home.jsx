@@ -1,20 +1,23 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import Hero from '../components/Hero'
 import LatestCollection from '../components/LatestCollection'
-import CategoriesProduct from '../components/CategoriesProduct'
-import OurSocialMedia from '../components/OurSocialMedia'
-import NewsletterBox from '../components/NewsletterBox'
+
+const CategoriesProduct = lazy(() => import('../components/CategoriesProduct'))
+const NewsletterBox = lazy(() => import('../components/NewsletterBox'))
+const OurSocialMedia = lazy(() => import('../components/OurSocialMedia'))
 
 const Home = () => {
   return (
     <div>
       <Hero />
       <LatestCollection />
-      <CategoriesProduct catname={'Mens'} cat={'Men'}/>
-      <CategoriesProduct catname={'Womens'} cat={'Women'} />
-      <CategoriesProduct catname={'Kids'} cat={'Kids'} />
-      <NewsletterBox />
-      <OurSocialMedia />
+      <Suspense fallback={null}>
+        <CategoriesProduct catname={'Mens'} cat={'Men'}/>
+        <CategoriesProduct catname={'Womens'} cat={'Women'} />
+        <CategoriesProduct catname={'Kids'} cat={'Kids'} />
+        <NewsletterBox />
+        <OurSocialMedia />
+      </Suspense>
     </div>
   )
 }

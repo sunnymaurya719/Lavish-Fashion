@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 import logger from '../config/logger.js';
 
 const requestLogger = (req, res, next) => {
+    if (req.path === '/health' || req.path === '/') {
+        return next();
+    }
+
     const requestIdHeader = req.headers['x-request-id'];
     const requestId = typeof requestIdHeader === 'string' && requestIdHeader.trim() ? requestIdHeader.trim() : randomUUID();
 

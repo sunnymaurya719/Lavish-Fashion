@@ -5,6 +5,19 @@ import { ShopContext } from '../context/ShopContext';
 
 const FREE_DELIVERY_THRESHOLD = 999;
 
+const loadRazorpayScript = () => {
+  if (typeof window !== 'undefined' && typeof window.Razorpay === 'function') {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
+
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -363,13 +376,14 @@ const PlaceOrder = () => {
     });
   };
 
-  const initPay = (order) => {
+  const initPay = async (order) => {
     if (!razorpayKeyId) {
       toast.error('Razorpay is not configured for this storefront');
       return;
     }
 
-    if (typeof window === 'undefined' || typeof window.Razorpay !== 'function') {
+    const loaded = await loadRazorpayScript();
+    if (!loaded || typeof window === 'undefined' || typeof window.Razorpay !== 'function') {
       toast.error('Razorpay checkout is unavailable right now. Please refresh and try again.');
       return;
     }

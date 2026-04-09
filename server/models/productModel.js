@@ -43,6 +43,13 @@ const productSchema = new mongoose.Schema({
     date: {type:Number, required:true}
 }, { timestamps: true, strict: true })
 
+productSchema.index({ status: 1, isFeatured: 1 });
+productSchema.index({ category: 1, subCategory: 1 });
+productSchema.index({ status: 1, date: -1 });
+productSchema.index({ stock: 1 });
+productSchema.index({ price: 1 });
+productSchema.index({ date: -1 });
+
 const productModel = mongoose.models.product || mongoose.model("product", productSchema);
 
 export default productModel;

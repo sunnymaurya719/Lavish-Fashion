@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { memo, useCallback, useContext, useEffect, useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { assets } from '../assets/assets';
 import { ShopContext } from '../context/ShopContext';
@@ -110,9 +110,13 @@ const Navbar = () => {
     token,
   } = useContext(ShopContext);
 
-  const logOutHandler = () => {
+  const logOutHandler = useCallback(() => {
     clearSession({ message: 'Logged out successfully' });
-  };
+  }, [clearSession]);
+
+  const openMenu = useCallback(() => setVisible(true), []);
+  const closeMenu = useCallback(() => setVisible(false), []);
+  const openSearch = useCallback(() => setShowSearch(true), [setShowSearch]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -185,7 +189,7 @@ const Navbar = () => {
 
       <div className='flex items-center gap-6'>
         <img
-          onClick={() => setShowSearch(true)}
+          onClick={openSearch}
           src={assets.search_icon}
           alt='search_icon'
           className='w-5 cursor-pointer'
@@ -263,7 +267,7 @@ const Navbar = () => {
         </Link>
 
         <img
-          onClick={() => setVisible(true)}
+          onClick={openMenu}
           src={assets.menu_icon}
           alt='menu_icon'
           aria-label='Open navigation menu'
@@ -274,7 +278,7 @@ const Navbar = () => {
       <div className={`sm:hidden fixed inset-0 z-[120] ${visible ? 'pointer-events-auto' : 'pointer-events-none'}`}>
         <button
           type='button'
-          onClick={() => setVisible(false)}
+          onClick={closeMenu}
           aria-label='Close navigation menu'
           className={`absolute inset-0 bg-slate-900/30 transition-opacity duration-300 ${
             visible ? 'opacity-100' : 'opacity-0'
@@ -296,7 +300,7 @@ const Navbar = () => {
             </p>
             <button
               type='button'
-              onClick={() => setVisible(false)}
+              onClick={closeMenu}
               aria-label='Close menu'
               className='rounded-full p-1 text-slate-600 hover:bg-slate-100'
             >
@@ -402,4 +406,4 @@ const Navbar = () => {
   );
 };
 
-export default Navbar;
+export default memo(Navbar);

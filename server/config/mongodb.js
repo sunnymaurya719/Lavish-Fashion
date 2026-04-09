@@ -27,8 +27,14 @@ const attachConnectionListeners = () => {
 const connectDB = async () => {
     try {
         attachConnectionListeners();
+        const isProduction = process.env.NODE_ENV === 'production';
         await mongoose.connect(buildMongoUri(), {
-            serverSelectionTimeoutMS: 10000
+            serverSelectionTimeoutMS: 10000,
+            maxPoolSize: 50,
+            minPoolSize: 5,
+            socketTimeoutMS: 45000,
+            connectTimeoutMS: 10000,
+            autoIndex: !isProduction
         });
         return mongoose.connection;
     }

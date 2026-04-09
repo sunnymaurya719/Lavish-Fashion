@@ -101,6 +101,11 @@ const userSchema = new mongoose.Schema({
     }
 },{minimize: false, strict: true, timestamps: true})
 
+userSchema.index({ loyaltyPoints: -1 });
+userSchema.index({ successfulReferralCount: -1 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ lifetimeLoyaltyPoints: -1 });
+
 const userModel = mongoose.models.user || mongoose.model("user",userSchema);
 
 export default userModel;

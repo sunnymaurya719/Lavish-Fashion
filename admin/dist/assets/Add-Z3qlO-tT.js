@@ -1,1 +1,0 @@
-import{j as m}from"./index-DrMBTQn_.js";import"./vendor-router-DxfYz8gd.js";import{P as e}from"./ProductForm-GG0R3isw.js";import"./vendor-react-BzrpNAyj.js";import"./vendor-axios-ngrFHoWO.js";const u=({token:r,serverBootstrap:o,serverStatus:t})=>m.jsx(e,{token:r,mode:"create",serverBootstrap:o,serverStatus:t});export{u as default};

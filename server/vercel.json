@@ -7,10 +7,17 @@
             "config": {
                 "includeFiles": [
                     "dist/**"
-                ]
+                ],
+                "maxLambdaSize": "50mb"
             }
         }
     ],
+    "functions": {
+        "server.js": {
+            "maxDuration": 30,
+            "memory": 1024
+        }
+    },
     "routes": [
         {
             "src": "/(.*)",

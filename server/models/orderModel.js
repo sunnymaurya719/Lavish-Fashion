@@ -99,6 +99,14 @@ const orderSchema = new mongoose.Schema({
 
 })
 
+orderSchema.index({ userId: 1, date: -1 });
+orderSchema.index({ status: 1 });
+orderSchema.index({ payment: 1 });
+orderSchema.index({ date: -1 });
+orderSchema.index({ status: 1, date: -1 });
+orderSchema.index({ userId: 1, payment: 1 });
+orderSchema.index({ paymentMethod: 1 });
+
 const orderModel = mongoose.models.order || mongoose.model('order',orderSchema)
 
 export default orderModel;

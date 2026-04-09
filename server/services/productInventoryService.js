@@ -46,13 +46,14 @@ const releaseInventoryForItems = async (items = []) => {
         return;
     }
 
-    await Promise.all(
-        items.map((item) =>
-            productModel.findByIdAndUpdate(item._id, {
-                $inc: { stock: Number(item.quantity) }
-            })
-        )
-    );
+    const bulkOps = items.map((item) => ({
+        updateOne: {
+            filter: { _id: item._id },
+            update: { $inc: { stock: Number(item.quantity) } }
+        }
+    }));
+
+    await productModel.bulkWrite(bulkOps, { ordered: false });
 };
 
 const reserveInventoryForItems = async (items = []) => {

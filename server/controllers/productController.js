@@ -74,7 +74,10 @@ const uploadImage = async (file) => {
     }
 
     try {
-        const result = await cloudinary.uploader.upload(file.path, { resource_type: 'image' });
+        const result = await cloudinary.uploader.upload(file.path, {
+            resource_type: 'image',
+            transformation: [{ quality: 'auto', fetch_format: 'auto' }]
+        });
         return result.secure_url;
     } finally {
         await safeUnlink(file.path);
@@ -119,23 +122,23 @@ const buildReviewSummaryMap = async (productIds = []) => {
         return new Map();
     }
 
-    const publishedReviews = await reviewModel.find({
-        productId: { $in: normalizedProductIds },
-        status: 'published'
-    }).lean();
+    const summaries = await reviewModel.aggregate([
+        { $match: { productId: { $in: normalizedProductIds }, status: 'published' } },
+        {
+            $group: {
+                _id: '$productId',
+                reviewCount: { $sum: 1 },
+                averageRating: { $avg: '$rating' }
+            }
+        }
+    ]);
 
     const reviewSummaryMap = new Map();
-
-    normalizedProductIds.forEach((productId) => {
-        const productReviews = publishedReviews.filter((review) => review.productId === productId);
-        const reviewCount = productReviews.length;
-        const averageRating = reviewCount > 0
-            ? Number((productReviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / reviewCount).toFixed(1))
-            : 0;
-
-        reviewSummaryMap.set(productId, {
-            reviewCount,
-            averageRating
+    normalizedProductIds.forEach((productId) => reviewSummaryMap.set(productId, { reviewCount: 0, averageRating: 0 }));
+    summaries.forEach((row) => {
+        reviewSummaryMap.set(row._id, {
+            reviewCount: row.reviewCount,
+            averageRating: Number((row.averageRating || 0).toFixed(1))
         });
     });
 
@@ -345,6 +348,7 @@ const listProducts = async (req , res) =>{
             withReviewSummary(normalizeProductDocument(product), reviewSummaryMap)
         );
 
+        res.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=60');
         res.status(200).json({success:true,products: normalizedProducts});
     }
     catch(error){

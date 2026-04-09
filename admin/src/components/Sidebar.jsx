@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { assets } from '../assets/assets';
 import { adminNavigationSections, isNavItemActive } from '../config/navigation';
@@ -226,4 +226,4 @@ const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
   );
 };
 
-export default Sidebar;
+export default memo(Sidebar);

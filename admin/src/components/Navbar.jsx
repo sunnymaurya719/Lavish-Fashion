@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { resolveAdminPageMeta } from '../config/navigation';
 
@@ -98,4 +98,4 @@ const Navbar = ({ onOpenSidebar, setToken, serverStatus, serverBootstrap, lastSe
   );
 };
 
-export default Navbar;
+export default memo(Navbar);

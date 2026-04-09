@@ -33,7 +33,8 @@ const uploadReviewMediaFiles = async (files = []) => {
         try {
             const result = await cloudinary.uploader.upload(file.path, {
                 folder: 'lavish-fashion/reviews',
-                resource_type: 'image'
+                resource_type: 'image',
+                transformation: [{ quality: 'auto', fetch_format: 'auto' }]
             });
 
             uploadedMedia.push({

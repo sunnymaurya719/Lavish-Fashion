@@ -65,12 +65,10 @@ a.active hr{
 }
 
 .hero-shell .hero-kicker {
-  --track-end: 0.28em;
   animation-delay: 0.1s;
 }
 
 .hero-shell .hero-lookbook {
-  --track-end: 0.18em;
   animation-delay: 0.24s;
 }
 
@@ -455,11 +453,11 @@ a.active hr{
 @keyframes heroTrackingIn {
   from {
     opacity: 0;
-    letter-spacing: calc(var(--track-end, 0.2em) + 0.16em);
+    transform: scaleX(1.08);
   }
   to {
     opacity: 1;
-    letter-spacing: var(--track-end, 0.2em);
+    transform: scaleX(1);
   }
 }
 

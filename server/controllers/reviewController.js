@@ -34,6 +34,7 @@ const listProductReviews = async (req, res) => {
 
         const reviews = await reviewModel.find({ productId, status: 'published' }).sort({ createdAt: -1 }).lean();
 
+        res.set('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=60');
         return res.status(200).json({
             success: true,
             summary: buildReviewSummary(reviews),

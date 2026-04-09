@@ -1,4 +1,4 @@
-import React, { useContext, useMemo, useState } from 'react'
+import React, { useCallback, useContext, useMemo, useState } from 'react'
 import { ShopContext } from '../context/ShopContext'
 import { assets } from '../assets/assets';
 import ProductItem from '../components/ProductItem';
@@ -33,27 +33,17 @@ const Collection = () => {
     return result;
   }, [products, showSearch, search, category, subCategory]);
 
-  const toggleCategory = (value) => {
-    if (category.includes(value)) {
-      setCategory((prev) => prev.filter((item) => item !== value));
-    }
-    else {
-      setCategory((prev) => [...prev, value]);
-    }
-  };
+  const toggleCategory = useCallback((value) => {
+    setCategory((prev) => prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]);
+  }, []);
 
-  const toggleSubCategory = (value) => {
-    if (subCategory.includes(value)) {
-      setSubCategory((prev) => prev.filter((item) => item !== value));
-    }
-    else {
-      setSubCategory((prev) => [...prev, value]);
-    }
-  };
+  const toggleSubCategory = useCallback((value) => {
+    setSubCategory((prev) => prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]);
+  }, []);
 
-  const toggleSection = (sectionKey) => {
+  const toggleSection = useCallback((sectionKey) => {
     setOpenSections((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
-  };
+  }, []);
 
   const renderFilterChips = (options, selectedItems, onToggle) => (
     <div className='flex flex-wrap gap-2.5 pt-3'>

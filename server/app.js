@@ -86,7 +86,7 @@ const createApp = () => {
     app.set('trust proxy', 1);
 
     app.use(helmet());
-    app.use(compression());
+    app.use(compression({ threshold: 1024, level: 6 }));
     app.use(requestLogger);
     app.use(cors(corsOptions));
     app.options(/.*/, cors(corsOptions));

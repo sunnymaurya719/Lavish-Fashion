@@ -53,6 +53,10 @@ const reviewSchema = new mongoose.Schema(
 );
 
 reviewSchema.index({ productId: 1, userId: 1 }, { unique: true });
+reviewSchema.index({ productId: 1, status: 1 });
+reviewSchema.index({ userId: 1 });
+reviewSchema.index({ orderId: 1 });
+reviewSchema.index({ status: 1, createdAt: -1 });
 
 const reviewModel = mongoose.models.review || mongoose.model('review', reviewSchema);
 

@@ -1,4 +1,4 @@
-import React, { useContext, useMemo } from 'react';
+import React, { memo, useContext, useMemo } from 'react';
 import { ShopContext } from '../context/ShopContext';
 import ProductItem from './ProductItem';
 import ProductShimmer from './ProductShimmer';
@@ -44,4 +44,4 @@ const LatestCollection = () => {
   );
 };
 
-export default LatestCollection;
+export default memo(LatestCollection);

@@ -1,1 +1,0 @@
-import{j as s}from"./index-DrMBTQn_.js";import{d}from"./vendor-router-DxfYz8gd.js";import{P as i}from"./ProductForm-GG0R3isw.js";import"./vendor-react-BzrpNAyj.js";import"./vendor-axios-ngrFHoWO.js";const f=({token:o,serverBootstrap:r,serverStatus:t})=>{const{productId:m}=d();return s.jsx(i,{token:o,mode:"edit",productId:m,serverBootstrap:r,serverStatus:t})};export{f as default};

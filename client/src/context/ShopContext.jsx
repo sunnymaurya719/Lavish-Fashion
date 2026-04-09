@@ -430,8 +430,7 @@ const ShopContextProvider = (props) => {
     }
 
     authExpiryHandledRef.current = false;
-    getUserCart(token);
-    getUserWishlist(token);
+    Promise.all([getUserCart(token), getUserWishlist(token)]);
   }, [token, getUserCart, getUserWishlist]);
 
   useEffect(() => {
@@ -460,7 +459,7 @@ const ShopContextProvider = (props) => {
     };
   }, [clearSession, token]);
 
-  const value = {
+  const value = useMemo(() => ({
     products,
     currency,
     delivery_fee,
@@ -496,7 +495,14 @@ const ShopContextProvider = (props) => {
     serverStatus,
     lastServerSyncAt,
     bootstrapServer,
-  };
+  }), [
+    products, search, showSearch, cartItems, token, loadingProductsData,
+    wishlistItems, loadingWishlist, fitSelections, serverBootstrap, serverStatus,
+    lastServerSyncAt, addToCart, getCartCount, updateQuantity, getCartAmount,
+    getCartLineItems, getCheckoutItems, clearSession, clearCartState,
+    clearCartFitSelections, getUserCart, toggleWishlist, isWishlisted,
+    bootstrapServer, navigate, BACKEND_URL, currency, delivery_fee
+  ]);
 
   return <ShopContext.Provider value={value}>{props.children}</ShopContext.Provider>;
 };

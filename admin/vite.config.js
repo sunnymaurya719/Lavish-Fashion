@@ -9,12 +9,22 @@ export default defineConfig({
   build: {
     target: 'es2020',
     cssCodeSplit: true,
+    reportCompressedSize: false,
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true,
+        drop_debugger: true,
+        passes: 2,
+      },
+    },
     rollupOptions: {
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom'],
           'vendor-router': ['react-router-dom'],
           'vendor-axios': ['axios'],
+          'vendor-toast': ['react-toastify'],
         },
       },
     },

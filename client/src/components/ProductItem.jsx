@@ -2,6 +2,7 @@ import React, { memo, useContext } from 'react';
 import { ShopContext } from '../context/ShopContext';
 import { Link } from 'react-router-dom';
 import { prefetchRoute } from '../utils/prefetchRoutes';
+import { cloudinaryUrl } from '../utils/cloudinaryUrl';
 
 const HeartIcon = ({ filled = false }) => (
   <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
@@ -49,7 +50,7 @@ const ProductItem = ({ id, image, name, price, averageRating = 0, reviewCount = 
 
       <Link className='text-gray-700 cursor-pointer block' to={`/product/${id}`} onMouseEnter={() => prefetchRoute('/product')}>
         <div className='overflow-hidden rounded-2xl bg-slate-50'>
-          <img className='hover:scale-110 transition ease-in-out' src={image[0]} alt={name} loading='lazy' />
+          <img className='hover:scale-110 transition ease-in-out' src={cloudinaryUrl(image[0], { width: 400 })} alt={name} loading='lazy' width={300} height={400} />
         </div>
         <p className='pt-3 pb-1 text-sm'>{name}</p>
         <p className='text-sm font-medium'>
