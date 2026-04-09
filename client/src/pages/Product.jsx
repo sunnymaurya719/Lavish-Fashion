@@ -1,11 +1,13 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
-import RelatedProducts from '../components/RelatedProducts';
 import FitAssistantModal from '../components/fit/FitAssistantModal';
 import { ShopContext } from '../context/ShopContext';
 import { getFitInsights as getFitInsightsRequest } from '../services/fitApi';
 import { isFitRolloutActiveForProduct } from '../utils/fitRollout';
+import useScrollToTop from '../hooks/useScrollToTop';
+
+const RelatedProducts = lazy(() => import('../components/RelatedProducts'));
 
 const HeartIcon = ({ filled = false }) => (
   <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
@@ -120,6 +122,9 @@ const Product = () => {
   const imageTouchDeltaXRef = useRef(0);
   const swipeHintTimerRef = useRef(null);
   const reviewMediaInputRef = useRef(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  useScrollToTop([productId]);
 
   const fetchReviews = useCallback(async () => {
     setIsLoadingReviews(true);
@@ -230,6 +235,7 @@ const Product = () => {
     setIsImageZoomed(false);
     setIsFitAssistantOpen(false);
     setAppliedFitSelection(null);
+    setImageLoaded(false);
     setSize((currentSize) => (matchedProduct.sizes?.includes(currentSize) ? currentSize : ''));
   }, [productId, products]);
 
@@ -365,6 +371,7 @@ const Product = () => {
       setActiveImageIndex((index + imageList.length) % imageList.length);
       setIsImageZoomed(false);
       setShowSwipeHint(false);
+      setImageLoaded(false);
     },
     [imageList.length]
   );
@@ -485,25 +492,44 @@ const Product = () => {
   if (!productData) {
     if (loadingProductsData) {
       return (
-        <div className='pt-6 animate-pulse'>
+        <div className='pt-6'>
           <div className='grid gap-7 lg:grid-cols-[1.03fr_0.97fr]'>
             <div className='space-y-3'>
-              <div className='aspect-[4/5] rounded-[32px] bg-slate-100'></div>
+              <div className='relative aspect-[4/5] overflow-hidden rounded-[32px] bg-slate-100'>
+                <div className='absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent'></div>
+              </div>
               <div className='flex gap-2 overflow-hidden'>
                 {Array.from({ length: 4 }).map((_, index) => (
-                  <div key={index} className='h-20 w-20 rounded-2xl bg-slate-100'></div>
+                  <div key={index} className='relative h-20 w-20 overflow-hidden rounded-2xl bg-slate-100'>
+                    <div className='absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent'></div>
+                  </div>
                 ))}
               </div>
             </div>
 
-            <div className='space-y-4'>
-              <div className='h-3 w-24 rounded-full bg-slate-200'></div>
-              <div className='h-11 w-[82%] rounded-2xl bg-slate-200'></div>
+            <div className='space-y-5 pt-2'>
+              <div className='space-y-3'>
+                <div className='h-3 w-24 rounded-full bg-slate-200'></div>
+                <div className='h-11 w-[82%] rounded-2xl bg-slate-200'></div>
+              </div>
               <div className='h-5 w-36 rounded-full bg-slate-200'></div>
               <div className='h-10 w-32 rounded-full bg-slate-200'></div>
-              <div className='space-y-2'>
+              <div className='space-y-2 pt-2'>
                 <div className='h-4 w-full rounded-full bg-slate-100'></div>
                 <div className='h-4 w-[88%] rounded-full bg-slate-100'></div>
+                <div className='h-4 w-[74%] rounded-full bg-slate-100'></div>
+              </div>
+              <div className='space-y-3 pt-2'>
+                <div className='h-3 w-20 rounded-full bg-slate-200'></div>
+                <div className='flex gap-2.5'>
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className='h-10 w-16 rounded-full bg-slate-100'></div>
+                  ))}
+                </div>
+              </div>
+              <div className='grid grid-cols-2 gap-3 pt-2'>
+                <div className='h-12 rounded-full bg-slate-100'></div>
+                <div className='h-12 rounded-full bg-slate-200'></div>
               </div>
             </div>
           </div>
@@ -540,9 +566,17 @@ const Product = () => {
             onTouchMove={handleImageTouchMove}
             onTouchEnd={handleImageTouchEnd}
           >
+            {!imageLoaded && (
+              <div className='absolute inset-0 z-[1] bg-slate-100'>
+                <div className='absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent'></div>
+              </div>
+            )}
             <img
               src={activeImage}
               alt={productData.name}
+              loading='eager'
+              fetchpriority='high'
+              onLoad={() => setImageLoaded(true)}
               onClick={() => setIsImageZoomed((current) => !current)}
               className={`w-full aspect-[4/5] object-cover cursor-zoom-in transition-transform duration-500 ${
                 isImageZoomed ? 'scale-110' : 'scale-100'
@@ -599,6 +633,7 @@ const Product = () => {
                   <img
                     src={item}
                     alt={`${productData.name} thumbnail ${index + 1}`}
+                    loading='lazy'
                     className='aspect-square h-full w-full object-cover bg-[#f5f5f5]'
                   />
                 </button>
@@ -637,8 +672,6 @@ const Product = () => {
             {currency}
             {productData.price}
           </p>
-
-          <p className='text-[15px] leading-7 text-slate-600'>{productData.description}</p>
 
           <div className='space-y-3'>
             <p className='text-[11px] uppercase tracking-[0.24em] text-[#777]'>Select Size</p>
@@ -731,6 +764,8 @@ const Product = () => {
             <span className={`h-2 w-2 rounded-full ${isOutOfStock ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
             {isOutOfStock ? 'Out of stock' : `${productData.stock ?? 'Limited'} in stock`}
           </div>
+
+          <p className='text-[15px] leading-7 text-slate-600'>{productData.description}</p>
         </div>
       </section>
 
@@ -849,6 +884,7 @@ const Product = () => {
                           <img
                             src={item.url}
                             alt={`${review.title} media ${index + 1}`}
+                            loading='lazy'
                             className='h-36 w-full object-cover'
                           />
                         </a>
@@ -1002,31 +1038,46 @@ const Product = () => {
         </article>
       </section>
 
-      <div className='fixed bottom-3 left-4 right-4 z-40 sm:hidden'>
-        <div className='flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white/95 px-3 py-3 shadow-[0_12px_28px_rgba(15,23,42,0.15)] backdrop-blur'>
-          <div>
-            <p className='text-[10px] uppercase tracking-[0.22em] text-slate-500'>Price</p>
+      <div className='fixed bottom-0 left-0 right-0 z-40 sm:hidden'>
+        <div className='flex items-center gap-3 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-4px_20px_rgba(15,23,42,0.08)] backdrop-blur-lg'>
+          <div className='min-w-0 flex-1'>
             <p className='text-xl font-semibold leading-none text-[#111]'>
               {currency}
               {productData.price}
             </p>
-            <p className='mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500'>
-              {size ? `Size ${size}` : 'Select size'}
+            <p className='mt-1.5 truncate text-[10px] uppercase tracking-[0.18em] text-slate-500'>
+              {size ? `Size ${size}` : 'Select size above'}
             </p>
           </div>
 
           <button
             type='button'
+            onClick={() =>
+              addToCart(
+                productData._id,
+                size,
+                appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
+              )
+            }
+            disabled={isOutOfStock}
+            className='rounded-full border border-[#111] bg-white px-4 py-2.5 text-xs font-medium uppercase tracking-[0.1em] text-[#111] disabled:opacity-45'
+          >
+            Add to Cart
+          </button>
+          <button
+            type='button'
             onClick={buyNow}
             disabled={isOutOfStock}
-            className='rounded-full bg-[#111] px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-white disabled:opacity-45'
+            className='rounded-full bg-[#111] px-5 py-2.5 text-xs font-medium uppercase tracking-[0.1em] text-white disabled:opacity-45'
           >
             Buy Now
           </button>
         </div>
       </div>
 
-      <RelatedProducts category={productData.category} subCategory={productData.subCategory} />
+      <Suspense fallback={<div className='my-20 text-center text-sm text-slate-400'>Loading recommendations...</div>}>
+        <RelatedProducts category={productData.category} subCategory={productData.subCategory} />
+      </Suspense>
 
       <FitAssistantModal
         isOpen={isFitAssistantOpen}

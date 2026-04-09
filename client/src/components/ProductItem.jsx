@@ -48,7 +48,7 @@ const ProductItem = ({ id, image, name, price, averageRating = 0, reviewCount = 
 
       <Link className='text-gray-700 cursor-pointer block' to={`/product/${id}`}>
         <div className='overflow-hidden rounded-2xl bg-slate-50'>
-          <img className='hover:scale-110 transition ease-in-out' src={image[0]} alt={name} />
+          <img className='hover:scale-110 transition ease-in-out' src={image[0]} alt={name} loading='lazy' />
         </div>
         <p className='pt-3 pb-1 text-sm'>{name}</p>
         <p className='text-sm font-medium'>

@@ -1,23 +1,30 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import {Routes, Route, useLocation} from 'react-router-dom'
 import Home from './pages/Home'
-import About from './pages/About'
 import Collection from './pages/Collection'
-import Contact from './pages/Contact'
 import Product from './pages/Product'
 import Cart from './pages/Cart'
 import Login from './pages/Login'
-import Profile from './pages/Profile'
-import Rewards from './pages/Rewards'
-import PlaceOrder from './pages/PlaceOrder'
 import Navbar from './components/Navbar'
-import Orders from './pages/Orders'
-import Wishlist from './pages/Wishlist'
 import Footer from './components/Footer'
 import SearchBar from './components/SearchBar'
-import Verify from './pages/Verify'
+import ScrollToTop from './components/ScrollToTop'
 import MobileToastContainer from './components/MobileToastContainer'
 
+const About = lazy(() => import('./pages/About'))
+const Contact = lazy(() => import('./pages/Contact'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Rewards = lazy(() => import('./pages/Rewards'))
+const PlaceOrder = lazy(() => import('./pages/PlaceOrder'))
+const Orders = lazy(() => import('./pages/Orders'))
+const Wishlist = lazy(() => import('./pages/Wishlist'))
+const Verify = lazy(() => import('./pages/Verify'))
+
+const RouteFallback = () => (
+  <div className='min-h-[60vh] flex items-center justify-center'>
+    <div className='h-8 w-8 animate-spin rounded-full border-[3px] border-slate-200 border-t-slate-900'></div>
+  </div>
+)
 
 const App = () => {
   const location = useLocation()
@@ -25,24 +32,27 @@ const App = () => {
 
   return (
     <div className='px-4 sm:px-[5vw] md:px-[7vw] lg:px-[9vw]'>
+      <ScrollToTop />
       <MobileToastContainer />
       <Navbar />
       {isAuthRoute ? null : <SearchBar />}
-      <Routes>
-        <Route path='/' element={<Home />} />
-        <Route path='/about' element={<About/>} />
-        <Route path='/collection' element={<Collection/>} />
-        <Route path='/contact' element={<Contact />} />
-        <Route path='/product/:productId' element={<Product />} />
-        <Route path='/cart' element={<Cart/>} />
-        <Route path='/wishlist' element={<Wishlist/>} />
-        <Route path='/login' element={<Login/>} />
-        <Route path='/profile' element={<Profile/>} />
-        <Route path='/rewards' element={<Rewards/>} />
-        <Route path='/place-order' element={<PlaceOrder/>} />
-        <Route path='/orders' element={<Orders/>} />
-        <Route path='/verify' element={<Verify/>} />
-      </Routes>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path='/' element={<Home />} />
+          <Route path='/about' element={<About/>} />
+          <Route path='/collection' element={<Collection/>} />
+          <Route path='/contact' element={<Contact />} />
+          <Route path='/product/:productId' element={<Product />} />
+          <Route path='/cart' element={<Cart/>} />
+          <Route path='/wishlist' element={<Wishlist/>} />
+          <Route path='/login' element={<Login/>} />
+          <Route path='/profile' element={<Profile/>} />
+          <Route path='/rewards' element={<Rewards/>} />
+          <Route path='/place-order' element={<PlaceOrder/>} />
+          <Route path='/orders' element={<Orders/>} />
+          <Route path='/verify' element={<Verify/>} />
+        </Routes>
+      </Suspense>
       {isAuthRoute ? null : <Footer />}
     </div>
   )
