@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { notify as toast } from '../utils/notify';
 import { useNavigate } from 'react-router-dom';
@@ -347,11 +347,22 @@ const ShopContextProvider = (props) => {
     [BACKEND_URL]
   );
 
-  const toggleWishlist = async (itemId) => {
+  const toggleWishlist = useCallback(async (itemId) => {
     if (!token) {
       toast.info('Please login to save items to your wishlist');
       navigate('/login');
       return false;
+    }
+
+    const wasWishlisted = wishlistItems.includes(itemId);
+
+    // Optimistic update — instant UI response before server replies
+    if (wasWishlisted) {
+      setWishlistItems((prev) => prev.filter((id) => id !== itemId));
+      toast.success('Removed from wishlist', { showCloseButton: false });
+    } else {
+      setWishlistItems((prev) => [...prev, itemId]);
+      toast.wishlistAdded();
     }
 
     try {
@@ -362,19 +373,24 @@ const ShopContextProvider = (props) => {
       );
 
       if (!response.data.success) {
+        // Revert optimistic update
+        setWishlistItems((prev) =>
+          wasWishlisted ? [...prev, itemId] : prev.filter((id) => id !== itemId)
+        );
         toast.error(response.data.message || 'Failed to update wishlist');
         return false;
       }
 
+      // Sync with server's authoritative state
       setWishlistItems(response.data.wishlist || []);
-      if (response.data.message) {
-        toast.success(response.data.message, { showCloseButton: false });
-      } else {
-        toast.wishlistAdded();
-      }
       return true;
     } catch (error) {
       const statusCode = Number(error?.response?.status || 0);
+
+      // Revert optimistic update on failure
+      setWishlistItems((prev) =>
+        wasWishlisted ? [...prev, itemId] : prev.filter((id) => id !== itemId)
+      );
 
       if (statusCode === 401) {
         return false;
@@ -383,9 +399,11 @@ const ShopContextProvider = (props) => {
       toast.error(error?.response?.data?.message || 'Failed to update wishlist');
       return false;
     }
-  };
+  }, [token, wishlistItems, BACKEND_URL, navigate]);
 
-  const isWishlisted = (itemId) => wishlistItems.includes(itemId);
+  // O(1) Set derived from wishlistItems — rebuilt only when the array changes
+  const wishlistSet = useMemo(() => new Set(wishlistItems), [wishlistItems]);
+  const isWishlisted = useCallback((itemId) => wishlistSet.has(itemId), [wishlistSet]);
   const getWishlistCount = () => wishlistItems.length;
 
   useEffect(() => {
