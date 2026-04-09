@@ -104,6 +104,7 @@ const FitAssistantModal = ({
   const [bodyScanMeta, setBodyScanMeta] = useState(null);
   const [cameraError, setCameraError] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
   const [isStartingCamera, setIsStartingCamera] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -200,8 +201,6 @@ const FitAssistantModal = ({
     [bodyFeatures?.scanQuality]
   );
 
-  const [isCameraReady, setIsCameraReady] = useState(false);
-
   const startCamera = async () => {
     if (isStartingCamera || isSubmitting) {
       return;
@@ -256,12 +255,16 @@ const FitAssistantModal = ({
 
     video.srcObject = stream;
 
-    const onLoadedMetadata = () => setIsCameraReady(true);
-    video.addEventListener('loadedmetadata', onLoadedMetadata);
+    const markReady = () => setIsCameraReady(true);
+    video.addEventListener('playing', markReady);
     video.play().catch(() => undefined);
 
+    if (video.videoWidth > 0 && !video.paused) {
+      markReady();
+    }
+
     return () => {
-      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+      video.removeEventListener('playing', markReady);
     };
   }, [isCameraActive]);
 
@@ -586,22 +589,24 @@ const FitAssistantModal = ({
                   <div className='aspect-[4/5] bg-gradient-to-b from-slate-900 to-slate-800'>
                     {capturedImage ? (
                       <img src={capturedImage} alt='Captured body scan preview' className='h-full w-full object-cover' />
-                    ) : isCameraActive ? (
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        muted
-                        playsInline
-                        webkit-playsinline="true"
-                        className='h-full w-full object-cover'
-                      />
                     ) : (
-                      <div className='flex h-full flex-col items-center justify-center px-6 text-center text-slate-200'>
-                        <p className='text-[11px] uppercase tracking-[0.24em] text-slate-400'>Camera preview</p>
-                        <p className='mt-3 max-w-xs text-sm leading-6 text-slate-300'>
-                          Start the camera, center your upper body, and capture a single portrait frame.
-                        </p>
-                      </div>
+                      <>
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className={`h-full w-full object-cover ${isCameraActive ? 'block' : 'hidden'}`}
+                        />
+                        {!isCameraActive && (
+                          <div className='flex h-full flex-col items-center justify-center px-6 text-center text-slate-200'>
+                            <p className='text-[11px] uppercase tracking-[0.24em] text-slate-400'>Camera preview</p>
+                            <p className='mt-3 max-w-xs text-sm leading-6 text-slate-300'>
+                              Start the camera, center your upper body, and capture a single portrait frame.
+                            </p>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
 
