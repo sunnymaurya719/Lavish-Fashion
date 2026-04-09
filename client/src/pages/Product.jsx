@@ -89,6 +89,7 @@ const Product = () => {
     products,
     currency,
     addToCart,
+    cartItems,
     isWishlisted,
     navigate,
     toast,
@@ -123,19 +124,25 @@ const Product = () => {
   const swipeHintTimerRef = useRef(null);
   const reviewMediaInputRef = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
-  const [addedToCart, setAddedToCart] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);
+
+  const isInCart = productData && size ? (cartItems[productData._id]?.[size] || 0) > 0 : false;
 
   const handleAddToCart = useCallback(async () => {
+    if (isInCart && !justAdded) {
+      navigate('/cart');
+      return;
+    }
     const success = await addToCart(
       productData._id,
       size,
       appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
     );
     if (success) {
-      setAddedToCart(true);
-      setTimeout(() => setAddedToCart(false), 2000);
+      setJustAdded(true);
+      setTimeout(() => setJustAdded(false), 1500);
     }
-  }, [addToCart, productData, size, appliedFitSelection]);
+  }, [addToCart, productData, size, appliedFitSelection, isInCart, justAdded, navigate]);
 
   useScrollToTop([productId]);
 
@@ -748,21 +755,28 @@ const Product = () => {
             </div>
           ) : null}
 
-          <div className='grid grid-cols-2 gap-3'>
+          <div className='hidden grid-cols-2 gap-3 sm:grid'>
             <button
               type='button'
               onClick={handleAddToCart}
-              disabled={isOutOfStock || addedToCart}
+              disabled={isOutOfStock || justAdded}
               className={`rounded-full border px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                addedToCart
+                justAdded
                   ? 'border-emerald-500 bg-emerald-500 text-white'
-                  : 'border-[#111] bg-white text-[#111] hover:bg-[#111] hover:text-white'
+                  : isInCart
+                    ? 'border-[#111] bg-[#111] text-white hover:bg-[#262626]'
+                    : 'border-[#111] bg-white text-[#111] hover:bg-[#111] hover:text-white'
               }`}
             >
-              {addedToCart ? (
+              {justAdded ? (
                 <span className='flex items-center justify-center gap-1.5'>
                   <svg width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
                   Added
+                </span>
+              ) : isInCart ? (
+                <span className='flex items-center justify-center gap-1.5'>
+                  <svg width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
+                  Go to Cart
                 </span>
               ) : 'Add To Cart'}
             </button>
@@ -1069,17 +1083,24 @@ const Product = () => {
           <button
             type='button'
             onClick={handleAddToCart}
-            disabled={isOutOfStock || addedToCart}
+            disabled={isOutOfStock || justAdded}
             className={`rounded-full border px-4 py-2.5 text-xs font-medium uppercase tracking-[0.1em] transition disabled:opacity-45 ${
-              addedToCart
+              justAdded
                 ? 'border-emerald-500 bg-emerald-500 text-white'
-                : 'border-[#111] bg-white text-[#111]'
+                : isInCart
+                  ? 'border-[#111] bg-[#111] text-white'
+                  : 'border-[#111] bg-white text-[#111]'
             }`}
           >
-            {addedToCart ? (
+            {justAdded ? (
               <span className='flex items-center justify-center gap-1'>
                 <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
                 Added
+              </span>
+            ) : isInCart ? (
+              <span className='flex items-center justify-center gap-1'>
+                <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
+                Go to Cart
               </span>
             ) : 'Add to Cart'}
           </button>
