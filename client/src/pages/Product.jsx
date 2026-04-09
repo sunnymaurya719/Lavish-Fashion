@@ -123,6 +123,17 @@ const Product = () => {
   const swipeHintTimerRef = useRef(null);
   const reviewMediaInputRef = useRef(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [addedToCart, setAddedToCart] = useState(false);
+
+  const handleAddToCart = useCallback(() => {
+    addToCart(
+      productData._id,
+      size,
+      appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
+    );
+    setAddedToCart(true);
+    setTimeout(() => setAddedToCart(false), 2000);
+  }, [addToCart, productData, size, appliedFitSelection]);
 
   useScrollToTop([productId]);
 
@@ -738,17 +749,20 @@ const Product = () => {
           <div className='grid grid-cols-2 gap-3'>
             <button
               type='button'
-              onClick={() =>
-                addToCart(
-                  productData._id,
-                  size,
-                  appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
-                )
-              }
-              disabled={isOutOfStock}
-              className='rounded-full border border-[#111] bg-white px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase text-[#111] transition hover:bg-[#111] hover:text-white disabled:cursor-not-allowed disabled:opacity-50'
+              onClick={handleAddToCart}
+              disabled={isOutOfStock || addedToCart}
+              className={`rounded-full border px-5 py-3 text-sm font-medium tracking-[0.08em] uppercase transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                addedToCart
+                  ? 'border-emerald-500 bg-emerald-500 text-white'
+                  : 'border-[#111] bg-white text-[#111] hover:bg-[#111] hover:text-white'
+              }`}
             >
-              Add To Cart
+              {addedToCart ? (
+                <span className='flex items-center justify-center gap-1.5'>
+                  <svg width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
+                  Added
+                </span>
+              ) : 'Add To Cart'}
             </button>
             <button
               type='button'
@@ -1052,17 +1066,20 @@ const Product = () => {
 
           <button
             type='button'
-            onClick={() =>
-              addToCart(
-                productData._id,
-                size,
-                appliedFitSelection?.selectedSize === size ? appliedFitSelection.fitAssistant : null
-              )
-            }
-            disabled={isOutOfStock}
-            className='rounded-full border border-[#111] bg-white px-4 py-2.5 text-xs font-medium uppercase tracking-[0.1em] text-[#111] disabled:opacity-45'
+            onClick={handleAddToCart}
+            disabled={isOutOfStock || addedToCart}
+            className={`rounded-full border px-4 py-2.5 text-xs font-medium uppercase tracking-[0.1em] transition disabled:opacity-45 ${
+              addedToCart
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : 'border-[#111] bg-white text-[#111]'
+            }`}
           >
-            Add to Cart
+            {addedToCart ? (
+              <span className='flex items-center justify-center gap-1'>
+                <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='20 6 9 17 4 12'/></svg>
+                Added
+              </span>
+            ) : 'Add to Cart'}
           </button>
           <button
             type='button'
