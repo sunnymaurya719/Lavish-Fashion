@@ -68,6 +68,77 @@ const formatFitBiasLabel = (value) => {
 const formatRecommendationLabel = (result) =>
   result?.meta?.lowConfidence && result?.recommendation?.range ? 'Best-fit suggestion' : 'Recommended size';
 
+const parseMetricValue = (value) => {
+  const normalizedValue = String(value ?? '').trim();
+
+  if (!normalizedValue) {
+    return {
+      empty: true,
+      value: null,
+    };
+  }
+
+  const parsedValue = Number(normalizedValue);
+
+  return {
+    empty: false,
+    value: Number.isFinite(parsedValue) ? parsedValue : null,
+  };
+};
+
+const getMetricsValidation = ({ heightCm, weightKg }) => {
+  const parsedHeight = parseMetricValue(heightCm);
+  const parsedWeight = parseMetricValue(weightKg);
+
+  if (parsedHeight.empty) {
+    return {
+      isValid: false,
+      field: 'height',
+      message: 'Enter your height in cm before analyzing your fit.',
+      parsedHeight: null,
+      parsedWeight: null,
+    };
+  }
+
+  if (parsedHeight.value === null || parsedHeight.value < 50 || parsedHeight.value > 260) {
+    return {
+      isValid: false,
+      field: 'height',
+      message: 'Enter a valid height between 50 cm and 260 cm.',
+      parsedHeight: null,
+      parsedWeight: null,
+    };
+  }
+
+  if (parsedWeight.empty) {
+    return {
+      isValid: false,
+      field: 'weight',
+      message: 'Enter your weight in kg before analyzing your fit.',
+      parsedHeight: parsedHeight.value,
+      parsedWeight: null,
+    };
+  }
+
+  if (parsedWeight.value === null || parsedWeight.value < 20 || parsedWeight.value > 350) {
+    return {
+      isValid: false,
+      field: 'weight',
+      message: 'Enter a valid weight between 20 kg and 350 kg.',
+      parsedHeight: parsedHeight.value,
+      parsedWeight: null,
+    };
+  }
+
+  return {
+    isValid: true,
+    field: '',
+    message: '',
+    parsedHeight: parsedHeight.value,
+    parsedWeight: parsedWeight.value,
+  };
+};
+
 const buildFitAssistantSelection = ({ result, selectedMethod, appliedSize }) => {
   if (!result?.recommendation?.size || !appliedSize) {
     return null;
@@ -93,6 +164,8 @@ const FitAssistantModal = ({
 }) => {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const heightInputRef = useRef(null);
+  const weightInputRef = useRef(null);
   const [selectedMethod, setSelectedMethod] = useState('manual');
   const [heightCm, setHeightCm] = useState('');
   const [weightKg, setWeightKg] = useState('');
@@ -133,20 +206,21 @@ const FitAssistantModal = ({
     setErrorMessage('');
   }, []);
 
-  const validateMetrics = () => {
-    const parsedHeight = Number(heightCm);
-    const parsedWeight = Number(weightKg);
+  const metricsValidation = useMemo(() => getMetricsValidation({ heightCm, weightKg }), [heightCm, weightKg]);
 
-    if (!Number.isFinite(parsedHeight) || parsedHeight < 50 || parsedHeight > 260) {
-      return 'Enter a valid height between 50 cm and 260 cm.';
+  const focusMetricField = useCallback((field) => {
+    const targetInput = field === 'weight' ? weightInputRef.current : heightInputRef.current;
+
+    if (!targetInput) {
+      return;
     }
 
-    if (!Number.isFinite(parsedWeight) || parsedWeight < 20 || parsedWeight > 350) {
-      return 'Enter a valid weight between 20 kg and 350 kg.';
-    }
-
-    return '';
-  };
+    targetInput.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+    targetInput.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     if (!isOpen) {
@@ -300,9 +374,9 @@ const FitAssistantModal = ({
       return;
     }
 
-    const validationMessage = validateMetrics();
-    if (validationMessage) {
-      setErrorMessage(validationMessage);
+    if (!metricsValidation.isValid) {
+      setErrorMessage(metricsValidation.message);
+      focusMetricField(metricsValidation.field);
       return;
     }
 
@@ -317,8 +391,8 @@ const FitAssistantModal = ({
         productId: product._id,
         mode: 'manual',
         userMetrics: {
-          heightCm: Number(heightCm),
-          weightKg: Number(weightKg),
+          heightCm: metricsValidation.parsedHeight,
+          weightKg: metricsValidation.parsedWeight,
           preferredFit,
         },
       });
@@ -341,9 +415,9 @@ const FitAssistantModal = ({
       return;
     }
 
-    const validationMessage = validateMetrics();
-    if (validationMessage) {
-      setErrorMessage(validationMessage);
+    if (!metricsValidation.isValid) {
+      setErrorMessage(metricsValidation.message);
+      focusMetricField(metricsValidation.field);
       return;
     }
 
@@ -360,8 +434,8 @@ const FitAssistantModal = ({
       const scanResponse = await analyzeBodyScan({
         backendUrl,
         token,
-        heightCm: Number(heightCm),
-        weightKg: Number(weightKg),
+        heightCm: metricsValidation.parsedHeight,
+        weightKg: metricsValidation.parsedWeight,
         imageBase64: capturedImage,
       });
 
@@ -379,8 +453,8 @@ const FitAssistantModal = ({
         productId: product._id,
         mode: 'camera',
         userMetrics: {
-          heightCm: Number(heightCm),
-          weightKg: Number(weightKg),
+          heightCm: metricsValidation.parsedHeight,
+          weightKg: metricsValidation.parsedWeight,
           preferredFit,
         },
         bodyFeatures: scanResponse.bodyFeatures || null,
@@ -516,10 +590,13 @@ const FitAssistantModal = ({
               <div>
                 <label className='mb-2 block text-sm font-medium text-slate-700'>Height (cm)</label>
                 <input
+                  ref={heightInputRef}
                   type='number'
                   min='50'
                   max='260'
                   step='1'
+                  inputMode='numeric'
+                  enterKeyHint='next'
                   value={heightCm}
                   onChange={(event) => {
                     setHeightCm(event.target.value);
@@ -534,10 +611,13 @@ const FitAssistantModal = ({
               <div>
                 <label className='mb-2 block text-sm font-medium text-slate-700'>Weight (kg)</label>
                 <input
+                  ref={weightInputRef}
                   type='number'
                   min='20'
                   max='350'
                   step='0.5'
+                  inputMode='decimal'
+                  enterKeyHint='done'
                   value={weightKg}
                   onChange={(event) => {
                     setWeightKg(event.target.value);
@@ -675,10 +755,10 @@ const FitAssistantModal = ({
                       <button
                         type='button'
                         onClick={handleCameraAnalyze}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || !metricsValidation.isValid}
                         className='rounded-full bg-slate-950 px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-white disabled:opacity-60'
                       >
-                        {isSubmitting ? 'Analyzing your fit...' : 'Analyze Fit'}
+                        {isSubmitting ? 'Analyzing your fit...' : metricsValidation.isValid ? 'Analyze Fit' : 'Add Height & Weight'}
                       </button>
                       <button
                         type='button'
@@ -695,6 +775,14 @@ const FitAssistantModal = ({
                 {cameraError ? (
                   <div className='rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
                     {cameraError}
+                  </div>
+                ) : null}
+
+                {!metricsValidation.isValid ? (
+                  <div className='rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600'>
+                    {capturedImage
+                      ? 'Add your height and weight above before analyzing the captured scan.'
+                      : 'Add your height and weight above before running camera-based fit analysis.'}
                   </div>
                 ) : null}
               </div>

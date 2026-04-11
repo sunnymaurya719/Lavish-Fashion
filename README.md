@@ -132,6 +132,12 @@ Default local ports:
 
 This repository is intended to be deployed as four separate Vercel projects from the same GitHub repo.
 
+Important:
+
+- the Vercel `ml-service` runtime is intentionally slim and does not install `xgboost`
+- that means body analysis and heuristic recommendations can run there, but the trained XGBoost model will not load
+- if you want true `xgboost_regressor` predictions in production, deploy `ml-service` on a Docker-friendly host instead of Vercel
+
 Create one Vercel project for each folder and set its Root Directory:
 
 - `client` project -> `client`
@@ -155,6 +161,21 @@ Notes:
 - `ml-service/app/models/size_recommender.joblib` is intentionally allowed in git so the trained model can be deployed with the service
 - `ml-service/requirements.txt` is intentionally slim for Vercel deployment
 - `ml-service/requirements.local.txt` keeps the full local ML stack including `xgboost`
+
+## Production XGBoost Deployment
+
+If you want the real trained model in production, deploy only `ml-service` somewhere that supports a Python container, such as Render, Railway, Fly.io, or Google Cloud Run.
+
+Use this setup:
+
+1. Keep `client`, `admin`, and `server` on Vercel if you want.
+2. Deploy `ml-service` with the included `ml-service/Dockerfile`.
+3. Set `ML_APP_ENV=production`, `MODEL_VERSION=xgb-fit-v1`, `MODEL_PATH=app/models/size_recommender.joblib`, and `ML_SERVICE_SHARED_SECRET` on that host.
+4. Point `server` to the deployed Python service with `ML_SERVICE_URL=https://your-ml-service-host`.
+5. Use the same `ML_SERVICE_SHARED_SECRET` value in both `server` and `ml-service`.
+6. Open `https://your-ml-service-host/health` and confirm `modelLoaded` is `true`.
+
+If `/health` shows `modelLoaded: false`, the site will still run, but fit recommendations will fall back to heuristics and camera-based AI will be limited.
 
 ## Useful Commands
 

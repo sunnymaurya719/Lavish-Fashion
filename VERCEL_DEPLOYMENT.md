@@ -2,6 +2,12 @@
 
 This repository is deployed as four separate Vercel projects from the same GitHub repo.
 
+Important:
+
+- deploying `ml-service` to Vercel does not give you the full XGBoost runtime
+- the Vercel Python setup here is for body analysis plus heuristic fit recommendations
+- if you want `predictionSource: "xgboost_regressor"` with `modelLoaded: true`, deploy `ml-service` on a Docker-capable host instead
+
 ## Project Map
 
 | Project | Root Directory | Talks to |
@@ -95,6 +101,24 @@ The full local ML stack remains in:
 - `ml-service/requirements.local.txt`
 
 That file is for local development and non-Vercel hosting where the trained XGBoost artifact can actually run.
+
+In practice, this means the Vercel `ml-service` health endpoint can be up while `/health` still reports `modelLoaded: false`.
+
+## If You Need Real XGBoost
+
+Deploy only `ml-service` outside Vercel using the included `ml-service/Dockerfile`, then point the Vercel `server` project at that URL with:
+
+```env
+ML_SERVICE_URL=https://your-ml-service-host
+ML_SERVICE_SHARED_SECRET=replace-with-the-same-secret-used-by-ml-service
+ML_SERVICE_TIMEOUT_MS=4000
+```
+
+Then verify:
+
+1. `https://your-ml-service-host/health` returns `modelLoaded: true`
+2. `server` has the same shared secret
+3. storefront products are `fitEnabled` and have enough fit measurements to be marked ready
 
 ## Deployment Order
 
