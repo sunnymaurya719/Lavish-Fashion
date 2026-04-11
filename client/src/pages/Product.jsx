@@ -355,7 +355,9 @@ const Product = () => {
   const fitCameraEnabled =
     fitAssistantEnabled &&
     (serverStatus === 'online'
-      ? Boolean(serverBootstrap?.features?.fitCameraEnabled) && Boolean(serverBootstrap?.integrations?.mlServiceEnabled)
+      ? Boolean(serverBootstrap?.features?.fitCameraEnabled) &&
+        Boolean(serverBootstrap?.integrations?.mlServiceEnabled) &&
+        Boolean(serverBootstrap?.integrations?.mlServiceHealthy)
       : false);
   const fitInsightsEnabled =
     fitAssistantEnabled &&

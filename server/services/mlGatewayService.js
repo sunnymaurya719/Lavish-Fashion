@@ -1,11 +1,26 @@
 import { normalizeProductFitData } from './productFitProfileService.js';
 
 const DEFAULT_TIMEOUT_MS = 4000;
+const DEFAULT_HEALTH_TIMEOUT_MS = 2500;
+const DEFAULT_HEALTH_CACHE_TTL_MS = 30_000;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_OPEN_WINDOW_MS = 30_000;
 
 let consecutiveFailureCount = 0;
 let circuitOpenUntil = 0;
+let cachedMlHealth = {
+    configured: false,
+    healthy: false,
+    reachable: false,
+    modelLoaded: false,
+    modelVersion: '',
+    environment: '',
+    appName: '',
+    reason: 'ml_not_checked',
+    latencyMs: null,
+    checkedAt: '',
+    expiresAt: 0
+};
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 const normalizeOptionalNumber = (value) => {
@@ -22,6 +37,16 @@ const isMlServiceConfigured = () => Boolean(normalizeUrl(process.env.ML_SERVICE_
 const getMlTimeoutMs = () => {
     const parsedTimeout = Number(process.env.ML_SERVICE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
     return Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_TIMEOUT_MS;
+};
+
+const getMlHealthTimeoutMs = () => {
+    const parsedTimeout = Number(process.env.ML_SERVICE_HEALTH_TIMEOUT_MS || DEFAULT_HEALTH_TIMEOUT_MS);
+    return Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_HEALTH_TIMEOUT_MS;
+};
+
+const getMlHealthCacheTtlMs = () => {
+    const parsedTtl = Number(process.env.ML_SERVICE_HEALTH_CACHE_TTL_MS || DEFAULT_HEALTH_CACHE_TTL_MS);
+    return Number.isFinite(parsedTtl) && parsedTtl >= 0 ? parsedTtl : DEFAULT_HEALTH_CACHE_TTL_MS;
 };
 
 const createMlGatewayError = (message, fallbackReason, metadata = {}) => {
@@ -47,6 +72,32 @@ const buildMlHeaders = ({ requestId = '' } = {}) => {
 
     return headers;
 };
+
+const createMlHealthSnapshot = ({
+    configured = false,
+    healthy = false,
+    reachable = false,
+    modelLoaded = false,
+    modelVersion = '',
+    environment = '',
+    appName = '',
+    reason = '',
+    latencyMs = null,
+    checkedAt = new Date().toISOString(),
+    ttlMs = getMlHealthCacheTtlMs()
+} = {}) => ({
+    configured,
+    healthy,
+    reachable,
+    modelLoaded,
+    modelVersion,
+    environment,
+    appName,
+    reason,
+    latencyMs,
+    checkedAt,
+    expiresAt: Date.now() + ttlMs
+});
 
 const sanitizeBodyFeatures = (bodyFeatures = null) => {
     if (!bodyFeatures || typeof bodyFeatures !== 'object') {
@@ -143,6 +194,96 @@ const ensureMlGatewayAvailable = () => {
 
     if (Date.now() < circuitOpenUntil) {
         throw createMlGatewayError('ML service circuit is temporarily open', 'ml_circuit_open', { statusCode: 503 });
+    }
+};
+
+const probeMlServiceHealth = async ({ force = false, requestId = '', log = null } = {}) => {
+    if (!isMlServiceConfigured()) {
+        cachedMlHealth = createMlHealthSnapshot({
+            configured: false,
+            healthy: false,
+            reachable: false,
+            modelLoaded: false,
+            reason: 'ml_not_configured'
+        });
+        return { ...cachedMlHealth };
+    }
+
+    if (!force && cachedMlHealth.expiresAt > Date.now()) {
+        return { ...cachedMlHealth };
+    }
+
+    const serviceUrl = `${normalizeUrl(process.env.ML_SERVICE_URL)}/health`;
+    const timeoutMs = getMlHealthTimeoutMs();
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(() => abortController.abort(), timeoutMs);
+    const startedAt = Date.now();
+
+    try {
+        const response = await fetch(serviceUrl, {
+            method: 'GET',
+            headers: requestId ? { 'x-request-id': requestId } : {},
+            signal: abortController.signal
+        });
+        const latencyMs = Date.now() - startedAt;
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok) {
+            cachedMlHealth = createMlHealthSnapshot({
+                configured: true,
+                healthy: false,
+                reachable: false,
+                modelLoaded: false,
+                reason: response.status >= 500 ? 'ml_health_http_5xx' : 'ml_health_http_4xx',
+                latencyMs
+            });
+            log?.warn?.(
+                {
+                    event: 'fit.ml.health.http_error',
+                    requestId,
+                    latencyMs,
+                    statusCode: response.status
+                },
+                'ML health probe returned an unsuccessful response'
+            );
+            return { ...cachedMlHealth };
+        }
+
+        cachedMlHealth = createMlHealthSnapshot({
+            configured: true,
+            healthy: true,
+            reachable: true,
+            modelLoaded: Boolean(payload?.modelLoaded),
+            modelVersion: String(payload?.modelVersion || '').trim(),
+            environment: String(payload?.environment || '').trim(),
+            appName: String(payload?.appName || '').trim(),
+            reason: '',
+            latencyMs
+        });
+
+        return { ...cachedMlHealth };
+    } catch (error) {
+        const latencyMs = Date.now() - startedAt;
+        cachedMlHealth = createMlHealthSnapshot({
+            configured: true,
+            healthy: false,
+            reachable: false,
+            modelLoaded: false,
+            reason: error?.name === 'AbortError' ? 'ml_health_timeout' : 'ml_health_request_failed',
+            latencyMs
+        });
+        log?.warn?.(
+            {
+                event: 'fit.ml.health.failure',
+                requestId,
+                latencyMs,
+                message: error?.message || 'Unknown ML health probe error'
+            },
+            'ML health probe failed'
+        );
+        return { ...cachedMlHealth };
+    } finally {
+        clearTimeout(timeoutHandle);
     }
 };
 
@@ -378,4 +519,4 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
     }
 };
 
-export { isMlServiceConfigured, requestMlBodyScanAnalysis, requestMlSizeRecommendation };
+export { isMlServiceConfigured, probeMlServiceHealth, requestMlBodyScanAnalysis, requestMlSizeRecommendation };

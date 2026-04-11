@@ -4,6 +4,7 @@ import {
     isFitAssistantGloballyEnabled,
     isFitCameraGloballyEnabled
 } from '../services/fitRuntimeService.js';
+import { probeMlServiceHealth } from '../services/mlGatewayService.js';
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 const toPublicUrl = (value) => (/^https?:\/\/.+/i.test(normalizeUrl(value)) ? normalizeUrl(value) : '');
@@ -24,7 +25,11 @@ const getSystemBootstrap = async (req, res) => {
     const fitCameraEnabled = isFitCameraGloballyEnabled();
     const fitRolloutPercent = getFitRolloutPercent();
     const fitConfidenceMin = getFitConfidenceMin();
-    const mlServiceEnabled = isConfigured(process.env.ML_SERVICE_URL);
+    const mlServiceHealth = await probeMlServiceHealth({
+        requestId: req.requestId,
+        log: req.log
+    });
+    const mlServiceEnabled = Boolean(mlServiceHealth.configured);
     const redisConfigured = isConfigured(process.env.REDIS_URL);
 
     return res.status(200).json({
@@ -64,6 +69,12 @@ const getSystemBootstrap = async (req, res) => {
             integrations: {
                 cloudinaryConfigured,
                 mlServiceEnabled,
+                mlServiceHealthy: Boolean(mlServiceHealth.healthy),
+                mlServiceReachable: Boolean(mlServiceHealth.reachable),
+                mlServiceModelLoaded: Boolean(mlServiceHealth.modelLoaded),
+                mlServiceModelVersion: mlServiceHealth.modelVersion || '',
+                mlServiceHealthReason: mlServiceHealth.reason || '',
+                mlServiceLatencyMs: mlServiceHealth.latencyMs,
                 redisConfigured,
                 marketingEmailMode,
                 marketingEmailProvider,
