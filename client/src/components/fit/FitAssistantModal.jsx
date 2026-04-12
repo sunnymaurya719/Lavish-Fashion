@@ -952,6 +952,7 @@ const FitAssistantModal = ({
                             muted
                             playsInline
                             className={`h-full w-full object-cover ${isCameraActive ? 'block' : 'hidden'}`}
+                            style={{ transform: 'scaleX(-1)' }}
                           />
                           {!isCameraActive && (
                             <div className='flex h-full flex-col items-center justify-center px-6 text-center text-slate-200'>
