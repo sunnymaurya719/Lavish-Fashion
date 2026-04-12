@@ -362,6 +362,17 @@ const Product = () => {
   const fitInsightsEnabled =
     fitAssistantEnabled &&
     (serverStatus === 'online' ? Boolean(serverBootstrap?.features?.fitInsightsEnabled) : false);
+  const appliedFitConfidence = useMemo(() => {
+    const confidence = Number(appliedFitSelection?.fitAssistant?.confidence || 0);
+    return confidence > 0 ? Math.round(confidence * 100) : null;
+  }, [appliedFitSelection?.fitAssistant?.confidence]);
+  const fitAssistantSteps = useMemo(
+    () =>
+      fitCameraEnabled
+        ? ['Add your details', 'Take an optional quick scan', 'Review the best size']
+        : ['Add your details', 'Choose your fit preference', 'Review the best size'],
+    [fitCameraEnabled]
+  );
   const descriptionPoints = useMemo(
     () => [
       productData?.description,
@@ -716,12 +727,21 @@ const Product = () => {
           </div>
 
           {fitAssistantEnabled ? (
-            <div className='rounded-[28px] border border-slate-200 bg-slate-50 p-4'>
-              <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-                <div>
-                  <p className='text-[11px] uppercase tracking-[0.24em] text-slate-500'>Need fit help?</p>
+            <div className='rounded-[30px] border border-slate-200 bg-slate-50 p-4 sm:p-5'>
+              <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
+                <div className='max-w-2xl'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <p className='text-[11px] uppercase tracking-[0.24em] text-slate-500'>Need fit help?</p>
+                    <span className='rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600 ring-1 ring-slate-200'>
+                      {fitCameraEnabled ? 'Guided with optional scan' : 'Guided measurements only'}
+                    </span>
+                  </div>
+                  <p className='mt-2 text-lg font-semibold text-slate-900'>Get a step-by-step size recommendation</p>
                   <p className='mt-2 text-sm leading-6 text-slate-600'>
-                    Get a size recommendation from manual measurements and, when enabled, a guided camera scan.
+                    The assistant now walks shoppers through each step clearly, so they always know what comes next.
+                    {fitCameraEnabled
+                      ? ' You can start with your details and add a quick camera scan only if you want extra precision.'
+                      : ' It uses your measurements and fit preference to recommend the best size.'}
                   </p>
                 </div>
 
@@ -730,9 +750,35 @@ const Product = () => {
                   onClick={() => setIsFitAssistantOpen(true)}
                   className='rounded-full bg-white px-5 py-3 text-sm font-medium uppercase tracking-[0.12em] text-slate-900 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-100'
                 >
-                  Find My Size
+                  {appliedFitSelection ? 'Refine My Size' : 'Start Guided Fit'}
                 </button>
               </div>
+
+              <div className='mt-4 grid gap-3 sm:grid-cols-3'>
+                {fitAssistantSteps.map((step, index) => (
+                  <div key={step} className='rounded-[22px] bg-white px-4 py-4 ring-1 ring-slate-200/80'>
+                    <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>{`Step 0${index + 1}`}</p>
+                    <p className='mt-2 text-sm font-medium leading-6 text-slate-700'>{step}</p>
+                  </div>
+                ))}
+              </div>
+
+              {appliedFitSelection ? (
+                <div className='mt-4 rounded-[22px] bg-white px-4 py-4 ring-1 ring-slate-200/80'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <p className='text-[11px] uppercase tracking-[0.22em] text-slate-500'>Assistant selected</p>
+                    <span className='rounded-full bg-slate-950 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-white'>
+                      Size {appliedFitSelection.selectedSize}
+                    </span>
+                  </div>
+                  <p className='mt-3 text-sm leading-6 text-slate-600'>
+                    {appliedFitSelection.fitAssistant?.source === 'hybrid'
+                      ? 'Recommended from your measurements and scan.'
+                      : 'Recommended from your measurements.'}
+                    {appliedFitConfidence ? ` Confidence: ${appliedFitConfidence}%.` : ''}
+                  </p>
+                </div>
+              ) : null}
 
               {fitInsightsEnabled && (fitInsights?.crowdSignal || fitInsights?.fitBias) ? (
                 <div className='mt-4 rounded-[22px] bg-white px-4 py-4 ring-1 ring-slate-200/80'>
