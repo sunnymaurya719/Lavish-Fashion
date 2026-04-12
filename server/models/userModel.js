@@ -33,13 +33,35 @@ const isValidWishlist = (wishlist) =>
     Array.isArray(wishlist) && wishlist.every((itemId) => objectIdStringRegex.test(String(itemId || '')));
 
 const referralCodeRegex = /^[A-Z0-9]{6,12}$/;
+const hasLocalPassword = (value) => String(value || '').length >= 8;
 
 const userSchema = new mongoose.Schema({
 
     name: {type:String, required:true, trim:true, minlength:2, maxlength:60},
     email: {type:String, required:true, unique:true, lowercase:true, trim:true},
     phone: {type:String, default:'', trim:true, maxlength:20},
-    password: {type:String, required:true, minlength:8, maxlength:128},
+    password: {
+        type:String,
+        default:'',
+        maxlength:128,
+        validate: {
+            validator(value) {
+                return hasLocalPassword(value) || Boolean(String(this.googleId || '').trim());
+            },
+            message: 'Password must be at least 8 characters when Google sign-in is not linked'
+        }
+    },
+    authProvider: {
+        type: String,
+        enum: ['local', 'google', 'hybrid'],
+        default: 'local'
+    },
+    avatarUrl: { type: String, default: '', trim: true, maxlength: 500 },
+    googleId: { type: String, trim: true, unique: true, sparse: true, maxlength: 255 },
+    googleEmailVerified: { type: Boolean, default: false },
+    googlePicture: { type: String, default: '', trim: true, maxlength: 500 },
+    googleLinkedAt: { type: Date, default: null },
+    googleLastLoginAt: { type: Date, default: null },
     wishlist: {
         type: [String],
         default: [],

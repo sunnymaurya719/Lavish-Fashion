@@ -54,6 +54,7 @@ CLIENT_URL=http://localhost:5173
 ADMIN_URL=http://localhost:5174
 FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173,http://localhost:5174
+GOOGLE_CLIENT_ID=your_google_web_client_id.apps.googleusercontent.com
 
 STRIPE_SECRET_KEY=your_stripe_secret
 STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret

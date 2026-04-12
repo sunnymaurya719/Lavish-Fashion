@@ -166,6 +166,11 @@ const userRegisterSchema = z.object({
     referralCode: optionalReferralCodeSchema
 });
 
+const userGoogleAuthSchema = z.object({
+    credential: z.string().trim().min(1),
+    referralCode: optionalReferralCodeSchema
+});
+
 const userProfileUpdateSchema = z.object({
     name: z.string().trim().min(2).max(60),
     phone: optionalPhoneSchema,
@@ -185,8 +190,6 @@ const marketingPreferencesUpdateSchema = marketingPreferencesSchema.refine(
 const wishlistToggleSchema = z.object({
     itemId: objectIdSchema
 });
-
-console.log("hii");
 
 const adminLoginSchema = z.object({
     email: z.string().trim().email(),
@@ -492,6 +495,7 @@ export {
     razorpayWebhookEventSchema,
     stripeVerifySchema,
     stripeWebhookEventSchema,
+    userGoogleAuthSchema,
     userLoginSchema,
     userProfileUpdateSchema,
     userRegisterSchema,

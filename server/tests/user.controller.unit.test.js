@@ -37,6 +37,11 @@ const getUserMarketingPreferencesMock = vi.fn((user = {}) => ({
     ...(user.marketingPreferences || {})
 }));
 const queueAutomationEmailMock = vi.fn();
+const verifyGoogleIdTokenMock = vi.fn();
+const isGoogleEmailAuthoritativeMock = vi.fn(() => true);
+
+class GoogleAuthConfigurationErrorMock extends Error {}
+class GoogleTokenVerificationErrorMock extends Error {}
 
 vi.mock('bcrypt', () => ({
     default: {
@@ -65,10 +70,18 @@ vi.mock('../services/marketingAutomationService.js', () => ({
     queueAutomationEmail: queueAutomationEmailMock
 }));
 
+vi.mock('../services/googleAuthService.js', () => ({
+    GoogleAuthConfigurationError: GoogleAuthConfigurationErrorMock,
+    GoogleTokenVerificationError: GoogleTokenVerificationErrorMock,
+    isGoogleEmailAuthoritative: isGoogleEmailAuthoritativeMock,
+    verifyGoogleIdToken: verifyGoogleIdTokenMock
+}));
+
 const {
     adminLogin,
     getUserProfile,
     getUserWishlist,
+    googleAuthUser,
     loginUser,
     registerUser,
     toggleUserWishlist,
@@ -102,6 +115,7 @@ describe('userController unit tests', () => {
             reviewReminders: true,
             ...(user.marketingPreferences || {})
         }));
+        isGoogleEmailAuthoritativeMock.mockReturnValue(true);
     });
 
     it('returns 400 for missing login credentials', async () => {
@@ -126,7 +140,7 @@ describe('userController unit tests', () => {
     });
 
     it('returns 401 for incorrect password', async () => {
-        findOneMock.mockResolvedValueOnce({ _id: 'user_1', password: 'hash' });
+        findOneMock.mockResolvedValueOnce({ _id: 'user_1', password: 'hashed_password' });
         compareMock.mockResolvedValueOnce(false);
 
         const req = { body: { email: 'user@example.com', password: 'WrongPass123' }, log: { error: vi.fn() } };
@@ -136,6 +150,26 @@ describe('userController unit tests', () => {
 
         expect(res.status).toHaveBeenCalledWith(401);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('returns 400 when local login is attempted for a Google-only account', async () => {
+        findOneMock.mockResolvedValueOnce({
+            _id: 'user_1',
+            password: '',
+            googleId: 'google_sub_1'
+        });
+
+        const req = { body: { email: 'user@example.com', password: 'SecurePass123' }, log: { error: vi.fn() } };
+        const res = createRes();
+
+        await loginUser(req, res);
+
+        expect(compareMock).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+            success: false,
+            message: 'This account uses Google sign-in. Please continue with Google.'
+        });
     });
 
     it('returns 409 when registering an existing user', async () => {
@@ -187,6 +221,141 @@ describe('userController unit tests', () => {
         expect(res.status).toHaveBeenCalledWith(400);
         expect(res.json).toHaveBeenCalledWith({ success: false, message: 'Referral code is invalid' });
         expect(userModelConstructorMock).not.toHaveBeenCalled();
+    });
+
+    it('creates a new user from a Google credential', async () => {
+        verifyGoogleIdTokenMock.mockResolvedValueOnce({
+            sub: 'google_sub_1',
+            email: 'googleuser@example.com',
+            email_verified: true,
+            name: 'Google User',
+            picture: 'https://example.com/avatar.png'
+        });
+        findOneMock.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+        saveMock.mockResolvedValueOnce({ _id: 'google_user_1', referralCode: 'LAVI1234' });
+
+        const req = {
+            body: { credential: 'google_credential' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await googleAuthUser(req, res);
+
+        expect(verifyGoogleIdTokenMock).toHaveBeenCalledWith('google_credential');
+        expect(userModelConstructorMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                email: 'googleuser@example.com',
+                googleId: 'google_sub_1',
+                authProvider: 'google',
+                avatarUrl: 'https://example.com/avatar.png'
+            })
+        );
+        expect(queueAutomationEmailMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                automationKey: 'welcome_signup',
+                context: { referralCode: 'LAVI1234' }
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(201);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                token: 'signed_token',
+                isNewUser: true,
+                provider: 'google'
+            })
+        );
+    });
+
+    it('links Google auth to an existing local account when the email is authoritative', async () => {
+        verifyGoogleIdTokenMock.mockResolvedValueOnce({
+            sub: 'google_sub_2',
+            email: 'user@example.com',
+            email_verified: true,
+            name: 'User Example',
+            picture: 'https://example.com/avatar-2.png'
+        });
+        findOneMock
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({
+                _id: 'user_1',
+                email: 'user@example.com',
+                password: 'hashed_password',
+                googleId: '',
+                googleLinkedAt: null,
+                avatarUrl: '',
+                name: 'User Example'
+            });
+        findByIdAndUpdateMock.mockResolvedValueOnce({ _id: 'user_1' });
+
+        const req = {
+            body: { credential: 'google_credential' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await googleAuthUser(req, res);
+
+        expect(isGoogleEmailAuthoritativeMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                sub: 'google_sub_2',
+                email: 'user@example.com'
+            })
+        );
+        expect(findByIdAndUpdateMock).toHaveBeenCalledWith(
+            'user_1',
+            expect.objectContaining({
+                googleId: 'google_sub_2',
+                googleEmailVerified: true,
+                googlePicture: 'https://example.com/avatar-2.png',
+                avatarUrl: 'https://example.com/avatar-2.png',
+                authProvider: 'hybrid'
+            }),
+            { new: true, runValidators: true }
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                token: 'signed_token',
+                isNewUser: false,
+                provider: 'google'
+            })
+        );
+    });
+
+    it('blocks Google linking when the email is not authoritative for an existing local account', async () => {
+        verifyGoogleIdTokenMock.mockResolvedValueOnce({
+            sub: 'google_sub_3',
+            email: 'user@example.com',
+            email_verified: true,
+            name: 'User Example'
+        });
+        isGoogleEmailAuthoritativeMock.mockReturnValueOnce(false);
+        findOneMock
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({
+                _id: 'user_1',
+                email: 'user@example.com',
+                password: 'hashed_password',
+                googleId: ''
+            });
+
+        const req = {
+            body: { credential: 'google_credential' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await googleAuthUser(req, res);
+
+        expect(findByIdAndUpdateMock).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({
+            success: false,
+            message: 'This email already has an account. Please sign in with email and password first.'
+        });
     });
 
     it('returns 401 for invalid admin credentials', async () => {

@@ -4,6 +4,7 @@ import {
     isFitAssistantGloballyEnabled,
     isFitCameraGloballyEnabled
 } from '../services/fitRuntimeService.js';
+import { getGoogleClientId, isGoogleAuthConfigured } from '../services/googleAuthService.js';
 import { probeMlServiceHealth } from '../services/mlGatewayService.js';
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
@@ -29,6 +30,7 @@ const getSystemBootstrap = async (req, res) => {
         requestId: req.requestId,
         log: req.log
     });
+    const googleAuthConfigured = isGoogleAuthConfigured();
     const mlServiceEnabled = Boolean(mlServiceHealth.configured);
     const redisConfigured = isConfigured(process.env.REDIS_URL);
 
@@ -48,6 +50,7 @@ const getSystemBootstrap = async (req, res) => {
             features: {
                 codEnabled: true,
                 wishlistEnabled: true,
+                googleAuthEnabled: googleAuthConfigured,
                 loyaltyEnabled: true,
                 loyaltyRedemptionEnabled: true,
                 reviewsEnabled: true,
@@ -79,6 +82,10 @@ const getSystemBootstrap = async (req, res) => {
                 marketingEmailMode,
                 marketingEmailProvider,
                 liveEmailEnabled: marketingEmailMode === 'live'
+            },
+            auth: {
+                googleEnabled: googleAuthConfigured,
+                googleClientId: googleAuthConfigured ? getGoogleClientId() : ''
             },
             rollout: {
                 fitRolloutPercent,

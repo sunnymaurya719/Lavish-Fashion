@@ -69,6 +69,9 @@ const ShopContextProvider = (props) => {
   const clearSession = useCallback(
     ({ message = '', redirectTo = '/login' } = {}) => {
       localStorage.removeItem('token');
+      if (typeof window !== 'undefined') {
+        window.google?.accounts?.id?.disableAutoSelect?.();
+      }
       setToken(null);
       clearCartState();
       setWishlistItems([]);
@@ -443,6 +446,7 @@ const ShopContextProvider = (props) => {
           requestUrl.includes('/api/') &&
           !requestUrl.includes('/api/user/login') &&
           !requestUrl.includes('/api/user/register') &&
+          !requestUrl.includes('/api/user/google') &&
           !requestUrl.includes('/api/user/admin');
 
         if (token && statusCode === 401 && isUserApiRequest && !authExpiryHandledRef.current) {

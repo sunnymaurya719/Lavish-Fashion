@@ -1,8 +1,9 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { notify as toast } from '../utils/notify';
 import { ShopContext } from '../context/ShopContext';
 import { useLocation } from 'react-router-dom';
+import { loadGoogleIdentityScript } from '../utils/googleIdentity';
 
 const GoogleIcon = () => (
   <svg viewBox='0 0 24 24' className='h-5 w-5' aria-hidden='true'>
@@ -85,11 +86,16 @@ const AuthField = ({
   </div>
 );
 
-const SocialButton = ({ icon, label, onClick }) => (
+const SocialButton = ({ icon, label, onClick, disabled = false }) => (
   <button
     type='button'
     onClick={onClick}
-    className='inline-flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#e5e5e5] bg-white text-sm font-medium text-slate-800 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 active:scale-[0.985]'
+    disabled={disabled}
+    className={`inline-flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#e5e5e5] bg-white text-sm font-medium text-slate-800 transition-all duration-200 ${
+      disabled
+        ? 'cursor-not-allowed opacity-60'
+        : 'hover:border-slate-300 hover:bg-slate-50 active:scale-[0.985]'
+    }`}
   >
     {icon}
     <span>{label}</span>
@@ -98,8 +104,11 @@ const SocialButton = ({ icon, label, onClick }) => (
 
 const Login = () => {
   const [currentState, setCurrentState] = useState('Login');
-  const { token, setToken, navigate, BACKEND_URL, getUserCart } = useContext(ShopContext);
+  const { token, setToken, navigate, BACKEND_URL, getUserCart, serverBootstrap, serverStatus } = useContext(ShopContext);
   const location = useLocation();
+  const googleButtonRef = useRef(null);
+  const googleAuthContextRef = useRef({ isLogin: true, referralCode: '' });
+  const googleInitializedClientIdRef = useRef('');
   const [formValues, setFormValues] = useState({
     name: '',
     email: '',
@@ -109,8 +118,12 @@ const Login = () => {
   const [touched, setTouched] = useState({});
   const [formErrors, setFormErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
   const [formErrorMessage, setFormErrorMessage] = useState('');
+  const [googleButtonStatus, setGoogleButtonStatus] = useState('idle');
   const isLogin = currentState === 'Login';
+  const googleClientId = String(serverBootstrap?.auth?.googleClientId || '').trim();
+  const isGoogleAuthEnabled = Boolean(serverBootstrap?.auth?.googleEnabled && googleClientId);
 
   const validateField = useMemo(
     () => (field, value, mode) => {
@@ -162,6 +175,110 @@ const Login = () => {
     },
     [currentState]
   );
+
+  useEffect(() => {
+    googleAuthContextRef.current = {
+      isLogin,
+      referralCode: String(formValues.referralCode || '').trim().toUpperCase(),
+    };
+  }, [formValues.referralCode, isLogin]);
+
+  const handleGoogleCredential = useCallback(
+    async (googleResponse) => {
+      const credential = String(googleResponse?.credential || '').trim();
+      const { isLogin: loginMode, referralCode } = googleAuthContextRef.current;
+
+      if (!credential) {
+        setFormErrorMessage('Google did not return a valid credential. Please try again.');
+        toast.error('Google did not return a valid credential');
+        return;
+      }
+
+      setIsGoogleSubmitting(true);
+      setFormErrorMessage('');
+
+      try {
+        const response = await axios.post(BACKEND_URL + '/api/user/google', {
+          credential,
+          ...(!loginMode && referralCode ? { referralCode } : {}),
+        });
+
+        if (response.data.success) {
+          setToken(response.data.token);
+          localStorage.setItem('token', response.data.token);
+          return;
+        }
+
+        const message = response.data.message || 'Unable to continue with Google right now.';
+        setFormErrorMessage(message);
+        toast.error(message);
+      } catch (error) {
+        const message = error?.response?.data?.message || 'Unable to continue with Google right now.';
+        setFormErrorMessage(message);
+        toast.error(message);
+      } finally {
+        setIsGoogleSubmitting(false);
+      }
+    },
+    [BACKEND_URL, setToken]
+  );
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const renderGoogleButton = async () => {
+      if (!isGoogleAuthEnabled || !googleButtonRef.current) {
+        setGoogleButtonStatus('unavailable');
+        return;
+      }
+
+      setGoogleButtonStatus('loading');
+
+      try {
+        await loadGoogleIdentityScript();
+
+        if (isCancelled || !googleButtonRef.current || !window.google?.accounts?.id) {
+          return;
+        }
+
+        if (googleInitializedClientIdRef.current !== googleClientId) {
+          window.google.accounts.id.initialize({
+            client_id: googleClientId,
+            callback: handleGoogleCredential,
+            ux_mode: 'popup',
+            itp_support: true,
+            use_fedcm_for_button: true,
+          });
+          googleInitializedClientIdRef.current = googleClientId;
+        }
+
+        googleButtonRef.current.innerHTML = '';
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: isLogin ? 'continue_with' : 'signup_with',
+          shape: 'rectangular',
+          logo_alignment: 'left',
+          width: 368,
+        });
+
+        if (!isCancelled) {
+          setGoogleButtonStatus('ready');
+        }
+      } catch {
+        if (!isCancelled) {
+          setGoogleButtonStatus('error');
+        }
+      }
+    };
+
+    renderGoogleButton();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [googleClientId, handleGoogleCredential, isGoogleAuthEnabled, isLogin]);
 
   const buildErrors = (values, mode) => {
     const fields = mode === 'Login' ? ['email', 'password'] : ['name', 'email', 'password', 'referralCode'];
@@ -319,11 +436,33 @@ const Login = () => {
       </div>
 
       <div className='space-y-3'>
-        <SocialButton
-          icon={<GoogleIcon />}
-          label={isLogin ? 'Continue with Google' : 'Sign up with Google'}
-          onClick={() => toast.info('Google sign-in will be available soon.')}
-        />
+        {isGoogleAuthEnabled ? (
+          <div className='space-y-2'>
+            <div
+              className={`flex min-h-12 items-center justify-center rounded-xl border border-[#e5e5e5] bg-white px-3 py-2 ${
+                isGoogleSubmitting ? 'pointer-events-none opacity-70' : ''
+              }`}
+            >
+              <div ref={googleButtonRef} className='flex w-full justify-center' />
+            </div>
+            {googleButtonStatus === 'loading' ? (
+              <p className='text-sm text-slate-500'>Loading Google sign-in...</p>
+            ) : null}
+            {googleButtonStatus === 'error' ? (
+              <p className='text-sm text-rose-600'>Google sign-in could not load right now. Please refresh and try again.</p>
+            ) : null}
+            {isGoogleSubmitting ? (
+              <p className='text-sm text-slate-500'>Finishing Google sign-in...</p>
+            ) : null}
+          </div>
+        ) : (
+          <SocialButton
+            icon={<GoogleIcon />}
+            label={serverStatus === 'checking' ? 'Loading Google sign-in...' : 'Google sign-in unavailable'}
+            onClick={() => {}}
+            disabled
+          />
+        )}
         <SocialButton
           icon={<AppleIcon />}
           label={isLogin ? 'Continue with Apple' : 'Sign up with Apple'}

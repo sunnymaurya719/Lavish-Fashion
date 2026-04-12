@@ -10,8 +10,30 @@ import {
     getUserAvailableLoyaltyPoints
 } from '../services/loyaltyService.js';
 import { getUserMarketingPreferences, queueAutomationEmail } from '../services/marketingAutomationService.js';
+import {
+    GoogleAuthConfigurationError,
+    GoogleTokenVerificationError,
+    isGoogleEmailAuthoritative,
+    verifyGoogleIdToken
+} from '../services/googleAuthService.js';
 
 const referralCodeRegex = /^[A-Z0-9]{6,12}$/;
+const hasLocalPassword = (value) => String(value || '').length >= 8;
+
+const resolveAuthProvider = ({ password = '', googleId = '' } = {}) => {
+    const hasPassword = hasLocalPassword(password);
+    const hasGoogle = Boolean(String(googleId || '').trim());
+
+    if (hasPassword && hasGoogle) {
+        return 'hybrid';
+    }
+
+    if (hasGoogle) {
+        return 'google';
+    }
+
+    return 'local';
+};
 
 const createToken = (id) =>{
     return jwt.sign({id},process.env.JWT_SECRET, { expiresIn: '7d' })
@@ -29,6 +51,9 @@ const buildUserProfile = (user) => ({
     name: user.name,
     email: user.email,
     phone: user.phone || '',
+    avatarUrl: user.avatarUrl || '',
+    authProvider: resolveAuthProvider(user),
+    googleLinked: Boolean(String(user.googleId || '').trim()),
     wishlistCount: Array.isArray(user.wishlist) ? user.wishlist.length : 0,
     referralCode: user.referralCode || '',
     successfulReferralCount: Number(user.successfulReferralCount || 0),
@@ -46,6 +71,28 @@ const buildUserProfile = (user) => ({
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null
 });
+
+const resolveReferralCodeInput = async ({ referralCodeInput = '', email = '' }) => {
+    if (!referralCodeInput) {
+        return '';
+    }
+
+    if (!referralCodeRegex.test(referralCodeInput)) {
+        throw new Error('Referral code is invalid');
+    }
+
+    const referrer = await userModel.findOne({ referralCode: referralCodeInput }).select('_id email').lean();
+
+    if (!referrer) {
+        throw new Error('Referral code is invalid');
+    }
+
+    if (String(referrer.email || '').toLowerCase() === String(email || '').toLowerCase()) {
+        throw new Error('You cannot use your own referral code');
+    }
+
+    return String(referrer._id);
+};
 
 
 //Route for user login
@@ -66,7 +113,12 @@ const loginUser = async (req,res) =>{
             return res.status(404).json({success:false, message:"User doesn't exist"});
         }
 
-        
+        if (!hasLocalPassword(user.password)) {
+            return res.status(400).json({
+                success: false,
+                message: 'This account uses Google sign-in. Please continue with Google.'
+            });
+        }
 
         //comparing password
         const isPasswordCorrect = await bcrypt.compare(password,user.password);
@@ -101,7 +153,12 @@ const registerUser = async (req,res) =>{
         //checking user already exist or not
         const existingUser = await userModel.findOne({email});
         if(existingUser){
-            return res.status(409).json({success:false, message:"User already exists"});
+            return res.status(409).json({
+                success:false,
+                message: hasLocalPassword(existingUser.password)
+                    ? 'User already exists'
+                    : 'This account already exists with Google. Please continue with Google.'
+            });
         }
 
         // validating email format and password
@@ -113,22 +170,10 @@ const registerUser = async (req,res) =>{
         }
 
         let referredBy = '';
-        if (referralCodeInput) {
-            if (!referralCodeRegex.test(referralCodeInput)) {
-                return res.status(400).json({ success: false, message: 'Referral code is invalid' });
-            }
-
-            const referrer = await userModel.findOne({ referralCode: referralCodeInput }).select('_id email').lean();
-
-            if (!referrer) {
-                return res.status(400).json({ success: false, message: 'Referral code is invalid' });
-            }
-
-            if (String(referrer.email || '').toLowerCase() === email) {
-                return res.status(400).json({ success: false, message: 'You cannot use your own referral code' });
-            }
-
-            referredBy = String(referrer._id);
+        try {
+            referredBy = await resolveReferralCodeInput({ referralCodeInput, email });
+        } catch (referralError) {
+            return res.status(400).json({ success: false, message: referralError.message || 'Referral code is invalid' });
         }
 
         //hashing user password
@@ -146,6 +191,7 @@ const registerUser = async (req,res) =>{
                     name,
                     email,
                     password:hashedPassword,
+                    authProvider: 'local',
                     referredBy,
                     referralCode
                 });
@@ -182,6 +228,163 @@ const registerUser = async (req,res) =>{
     }
     
 
+}
+
+const googleAuthUser = async (req, res) => {
+    try {
+        const credential = String(req.body.credential || '').trim();
+        const referralCodeInput = String(req.body.referralCode || '').trim().toUpperCase();
+
+        if (!credential) {
+            return res.status(400).json({ success: false, message: 'Google credential is required' });
+        }
+
+        const googlePayload = await verifyGoogleIdToken(credential);
+        const googleId = String(googlePayload.sub || '').trim();
+        const email = String(googlePayload.email || '').trim().toLowerCase();
+        const name = String(googlePayload.name || '').trim() || email.split('@')[0] || 'Google User';
+        const avatarUrl = String(googlePayload.picture || '').trim();
+        const emailVerified =
+            googlePayload.email_verified === true || String(googlePayload.email_verified || '').trim().toLowerCase() === 'true';
+
+        if (!googleId || !email || !validator.isEmail(email)) {
+            return res.status(400).json({ success: false, message: 'Google account details are incomplete' });
+        }
+
+        if (!emailVerified) {
+            return res.status(400).json({ success: false, message: 'Your Google email must be verified to continue' });
+        }
+
+        const now = new Date();
+        let user = await userModel.findOne({ googleId });
+        let isNewUser = false;
+
+        if (!user) {
+            user = await userModel.findOne({ email });
+        }
+
+        if (user) {
+            const existingGoogleId = String(user.googleId || '').trim();
+
+            if (existingGoogleId && existingGoogleId !== googleId) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'This email is already linked to another Google account'
+                });
+            }
+
+            if (!existingGoogleId && !isGoogleEmailAuthoritative(googlePayload)) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'This email already has an account. Please sign in with email and password first.'
+                });
+            }
+
+            const updatedUser = await userModel.findByIdAndUpdate(
+                user._id,
+                {
+                    ...(user.name ? {} : { name }),
+                    googleId,
+                    googleEmailVerified: true,
+                    googlePicture: avatarUrl,
+                    googleLinkedAt: user.googleLinkedAt || now,
+                    googleLastLoginAt: now,
+                    avatarUrl: avatarUrl || user.avatarUrl || '',
+                    authProvider: resolveAuthProvider({
+                        password: user.password,
+                        googleId
+                    })
+                },
+                { new: true, runValidators: true }
+            );
+
+            const token = createToken(updatedUser._id);
+
+            return res.status(200).json({
+                success: true,
+                token,
+                isNewUser: false,
+                provider: 'google'
+            });
+        }
+
+        let referredBy = '';
+        try {
+            referredBy = await resolveReferralCodeInput({ referralCodeInput, email });
+        } catch (referralError) {
+            return res.status(400).json({ success: false, message: referralError.message || 'Referral code is invalid' });
+        }
+
+        let newUser = null;
+        let referralCode = '';
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            referralCode = await generateUniqueReferralCode(name);
+
+            try {
+                const nextUser = new userModel({
+                    name,
+                    email,
+                    password: '',
+                    authProvider: 'google',
+                    avatarUrl,
+                    googleId,
+                    googleEmailVerified: true,
+                    googlePicture: avatarUrl,
+                    googleLinkedAt: now,
+                    googleLastLoginAt: now,
+                    referredBy,
+                    referralCode
+                });
+
+                newUser = await nextUser.save();
+                break;
+            } catch (saveError) {
+                const isReferralCodeConflict =
+                    saveError?.code === 11000 &&
+                    (saveError?.keyPattern?.referralCode || String(saveError?.message || '').includes('referralCode'));
+
+                if (!isReferralCodeConflict || attempt === 2) {
+                    throw saveError;
+                }
+            }
+        }
+
+        await queueAutomationEmail({
+            userId: newUser,
+            automationKey: 'welcome_signup',
+            context: {
+                referralCode
+            }
+        });
+
+        isNewUser = true;
+        const token = createToken(newUser._id);
+
+        return res.status(201).json({
+            success: true,
+            token,
+            isNewUser,
+            provider: 'google'
+        });
+    } catch (error) {
+        if (error instanceof GoogleAuthConfigurationError) {
+            return res.status(503).json({
+                success: false,
+                message: 'Google sign-in is not configured right now'
+            });
+        }
+
+        if (error instanceof GoogleTokenVerificationError) {
+            return res.status(401).json({
+                success: false,
+                message: error.message || 'Unable to verify Google credential'
+            });
+        }
+
+        req.log?.error({ err: error }, 'Error in Google user authentication');
+        return res.status(500).json({ success: false, message: 'Unable to continue with Google' });
+    }
 }
 
 //Route for admin login
@@ -372,4 +575,14 @@ const toggleUserWishlist = async (req, res) => {
     }
 };
 
-export {adminLogin, getUserProfile, getUserWishlist, loginUser, registerUser, toggleUserWishlist, updateMarketingPreferences, updateUserProfile}
+export {
+    adminLogin,
+    getUserProfile,
+    getUserWishlist,
+    googleAuthUser,
+    loginUser,
+    registerUser,
+    toggleUserWishlist,
+    updateMarketingPreferences,
+    updateUserProfile
+}

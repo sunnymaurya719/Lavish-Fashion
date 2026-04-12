@@ -10,6 +10,7 @@ const optionalButRecommendedEnvVars = [
     'ADMIN_URL',
     'FRONTEND_URL',
     'CORS_ORIGINS',
+    'GOOGLE_CLIENT_ID',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
     'RAZORPAY_KEY_ID',

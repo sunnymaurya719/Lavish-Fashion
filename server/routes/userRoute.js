@@ -2,6 +2,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import {
     adminLogin,
+    googleAuthUser,
     getUserProfile,
     getUserWishlist,
     loginUser,
@@ -15,6 +16,7 @@ import validateRequest from '../middleware/validateRequest.js';
 import {
     adminLoginSchema,
     marketingPreferencesUpdateSchema,
+    userGoogleAuthSchema,
     userLoginSchema,
     userProfileUpdateSchema,
     userRegisterSchema,
@@ -33,6 +35,7 @@ const authLimiter = rateLimit({
 
 userRouter.post('/login',authLimiter,validateRequest(userLoginSchema),loginUser);
 userRouter.post('/register',authLimiter,validateRequest(userRegisterSchema),registerUser);
+userRouter.post('/google', authLimiter, validateRequest(userGoogleAuthSchema), googleAuthUser);
 userRouter.post('/admin',authLimiter,validateRequest(adminLoginSchema),adminLogin);
 userRouter.get('/profile', authUser, getUserProfile);
 userRouter.put('/profile', authUser, validateRequest(userProfileUpdateSchema), updateUserProfile);
