@@ -5,7 +5,9 @@ import { ShopContext } from '../context/ShopContext';
 
 const FREE_DELIVERY_THRESHOLD = 999;
 const STEP_QUERY_KEY = 'step';
+const CHECKOUT_MODE_QUERY_KEY = 'checkout';
 const STEP_QUERY_VALUES = ['address', 'payment', 'review'];
+const BUY_NOW_CHECKOUT_MODE = 'buy-now';
 const CHECKOUT_DRAFT_STORAGE_KEY = 'lf_checkout_draft_v1';
 const CHECKOUT_DRAFT_TTL_MS = 1000 * 60 * 60 * 24;
 
@@ -126,6 +128,8 @@ const PlaceOrder = () => {
     BACKEND_URL,
     token,
     clearCartState,
+    buyNowCheckout,
+    clearBuyNowCheckout,
     getCartAmount,
     delivery_fee,
     getCheckoutItems,
@@ -136,8 +140,18 @@ const PlaceOrder = () => {
 
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isBuyNow = location.state?.buyNow;
-  const buyNowProduct = location.state?.product;
+  const checkoutMode = String(searchParams.get(CHECKOUT_MODE_QUERY_KEY) || '').trim().toLowerCase();
+  const routeBuyNowProduct = location.state?.buyNow ? location.state?.product : null;
+  const isBuyNowCheckout = Boolean(
+    checkoutMode === BUY_NOW_CHECKOUT_MODE || location.state?.buyNow || routeBuyNowProduct?._id
+  );
+  const resolvedBuyNowProduct = useMemo(() => {
+    if (!isBuyNowCheckout) {
+      return null;
+    }
+
+    return routeBuyNowProduct?._id ? routeBuyNowProduct : buyNowCheckout;
+  }, [buyNowCheckout, isBuyNowCheckout, routeBuyNowProduct]);
   const initialDraftRef = useRef(readCheckoutDraft());
   const initialStepFromUrl = getStepIndexFromParam(searchParams.get(STEP_QUERY_KEY));
 
@@ -172,8 +186,8 @@ const PlaceOrder = () => {
   }, []);
 
   const checkoutItems = useMemo(
-    () => getCheckoutItems({ isBuyNow, buyNowProduct }),
-    [buyNowProduct, getCheckoutItems, isBuyNow]
+    () => getCheckoutItems({ isBuyNow: isBuyNowCheckout, buyNowProduct: resolvedBuyNowProduct }),
+    [getCheckoutItems, isBuyNowCheckout, resolvedBuyNowProduct]
   );
   const checkoutItemsKey = useMemo(() => JSON.stringify(checkoutItems), [checkoutItems]);
 
@@ -183,7 +197,9 @@ const PlaceOrder = () => {
   }));
 
   const baseSubtotal =
-    isBuyNow && buyNowProduct ? Number(buyNowProduct.price || 0) * Number(buyNowProduct.quantity || 1) : getCartAmount();
+    isBuyNowCheckout && resolvedBuyNowProduct
+      ? Number(resolvedBuyNowProduct.price || 0) * Number(resolvedBuyNowProduct.quantity || 1)
+      : getCartAmount();
 
   const defaultPricingSummary = useMemo(
     () => ({
@@ -415,8 +431,8 @@ const PlaceOrder = () => {
       nextParams.delete(STEP_QUERY_KEY);
     }
 
-    setSearchParams(nextParams, { replace: true });
-  }, [currentStep, searchParams, setSearchParams]);
+    setSearchParams(nextParams, { replace: true, state: location.state });
+  }, [currentStep, location.state, searchParams, setSearchParams]);
 
   const onChangeHandler = (event) => {
     const { name, value } = event.target;
@@ -522,9 +538,12 @@ const PlaceOrder = () => {
   };
 
   const resetLocalCartIfNeeded = () => {
-    if (!isBuyNow) {
-      clearCartState();
+    if (isBuyNowCheckout) {
+      clearBuyNowCheckout();
+      return;
     }
+
+    clearCartState();
   };
 
   const applyCouponHandler = async () => {
@@ -656,7 +675,7 @@ const PlaceOrder = () => {
   const buildOrderData = () => ({
     address: sanitizeAddressData(formData),
     items: checkoutItems,
-    checkoutSource: isBuyNow && buyNowProduct ? 'buy_now' : 'cart',
+    checkoutSource: isBuyNowCheckout && resolvedBuyNowProduct ? 'buy_now' : 'cart',
     couponCode: appliedCouponCode,
     pointsToRedeem: Number(pricingSummary.loyaltyPointsRedeemed || 0),
   });
@@ -756,8 +775,13 @@ const PlaceOrder = () => {
     for (const p of products) {
       map[p._id] = p;
     }
+
+    if (isBuyNowCheckout && resolvedBuyNowProduct?._id && !map[resolvedBuyNowProduct._id]) {
+      map[resolvedBuyNowProduct._id] = resolvedBuyNowProduct;
+    }
+
     return map;
-  }, [products]);
+  }, [isBuyNowCheckout, products, resolvedBuyNowProduct]);
 
   if (!token) {
     return (
@@ -780,7 +804,11 @@ const PlaceOrder = () => {
       <div className='checkout-shell checkout-entrance checkout-delay-0 min-h-[70vh] flex flex-col items-center justify-center text-center px-4'>
         <h2 className='text-3xl font-semibold text-slate-900'>Checkout</h2>
         <p className='mt-2 text-base text-slate-600'>No items to review</p>
-        <p className='mt-4 max-w-md text-sm text-slate-500'>Add products to your cart or use Buy Now before placing an order.</p>
+        <p className='mt-4 max-w-md text-sm text-slate-500'>
+          {isBuyNowCheckout
+            ? 'Your Buy Now selection is no longer available. Please return to the product page and choose the item again.'
+            : 'Add products to your cart or use Buy Now before placing an order.'}
+        </p>
         <button
           onClick={() => navigate('/collection')}
           className='mt-6 rounded-full bg-slate-950 px-8 py-3 text-sm font-medium text-white transition hover:bg-slate-800'

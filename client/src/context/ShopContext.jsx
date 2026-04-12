@@ -9,6 +9,35 @@ export const ShopContext = createContext();
 const normalizeUrl = (value) => String(value || '').trim().replace(/^['"]|['"]$/g, '').replace(/\/$/, '');
 const DEFAULT_BACKEND_URL = 'http://localhost:4000';
 const FIT_SELECTIONS_STORAGE_KEY = 'lf-fit-selections';
+const BUY_NOW_CHECKOUT_STORAGE_KEY = 'lf-buy-now-checkout-v1';
+const BUY_NOW_CHECKOUT_TTL_MS = 1000 * 60 * 60 * 12;
+
+const sanitizeBuyNowCheckout = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const productId = String(value._id || value.productId || '').trim();
+  const size = String(value.size || '').trim();
+
+  if (!productId || !size) {
+    return null;
+  }
+
+  const quantity = Math.max(1, Math.min(99, Math.floor(Number(value.quantity || 1))));
+  const price = Number(value.price || 0);
+
+  return {
+    _id: productId,
+    size,
+    quantity,
+    name: String(value.name || '').trim(),
+    price: Number.isFinite(price) ? price : 0,
+    image: Array.isArray(value.image) ? value.image.filter(Boolean) : [],
+    ...(value.fitAssistant && typeof value.fitAssistant === 'object' ? { fitAssistant: value.fitAssistant } : {}),
+  };
+};
+
 const readStoredFitSelections = () => {
   if (typeof window === 'undefined') {
     return {};
@@ -33,6 +62,53 @@ const writeStoredFitSelections = (value) => {
     // Ignore client storage write failures and keep the in-memory state as the source of truth.
   }
 };
+const readStoredBuyNowCheckout = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(BUY_NOW_CHECKOUT_STORAGE_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    const updatedAt = Number(parsedValue?.updatedAt || 0);
+    const isExpired = updatedAt && Date.now() - updatedAt > BUY_NOW_CHECKOUT_TTL_MS;
+
+    if (isExpired) {
+      window.sessionStorage.removeItem(BUY_NOW_CHECKOUT_STORAGE_KEY);
+      return null;
+    }
+
+    return sanitizeBuyNowCheckout(parsedValue?.item);
+  } catch {
+    return null;
+  }
+};
+const writeStoredBuyNowCheckout = (value) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    if (!value) {
+      window.sessionStorage.removeItem(BUY_NOW_CHECKOUT_STORAGE_KEY);
+      return;
+    }
+
+    window.sessionStorage.setItem(
+      BUY_NOW_CHECKOUT_STORAGE_KEY,
+      JSON.stringify({
+        item: sanitizeBuyNowCheckout(value),
+        updatedAt: Date.now(),
+      })
+    );
+  } catch {
+    // Ignore client storage write failures and keep the in-memory state as the source of truth.
+  }
+};
 
 const ShopContextProvider = (props) => {
   const currency = '\u20B9';
@@ -46,6 +122,7 @@ const ShopContextProvider = (props) => {
   const [loadingWishlist, setLoadingWishlist] = useState(false);
   const [wishlistItems, setWishlistItems] = useState([]);
   const [fitSelections, setFitSelections] = useState(() => readStoredFitSelections());
+  const [buyNowCheckout, setBuyNowCheckout] = useState(() => readStoredBuyNowCheckout());
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [serverBootstrap, setServerBootstrap] = useState(null);
   const [serverStatus, setServerStatus] = useState('checking');
@@ -57,6 +134,10 @@ const ShopContextProvider = (props) => {
     writeStoredFitSelections(fitSelections);
   }, [fitSelections]);
 
+  useEffect(() => {
+    writeStoredBuyNowCheckout(buyNowCheckout);
+  }, [buyNowCheckout]);
+
   const clearCartState = useCallback(() => {
     setCartItems({});
     setFitSelections({});
@@ -64,6 +145,16 @@ const ShopContextProvider = (props) => {
 
   const clearCartFitSelections = useCallback(() => {
     setFitSelections({});
+  }, []);
+
+  const startBuyNowCheckout = useCallback((value) => {
+    const sanitizedValue = sanitizeBuyNowCheckout(value);
+    setBuyNowCheckout(sanitizedValue);
+    return sanitizedValue;
+  }, []);
+
+  const clearBuyNowCheckout = useCallback(() => {
+    setBuyNowCheckout(null);
   }, []);
 
   const clearSession = useCallback(
@@ -74,6 +165,7 @@ const ShopContextProvider = (props) => {
       }
       setToken(null);
       clearCartState();
+      clearBuyNowCheckout();
       setWishlistItems([]);
       setLoadingWishlist(false);
 
@@ -85,7 +177,7 @@ const ShopContextProvider = (props) => {
         navigate(redirectTo);
       }
     },
-    [clearCartState, navigate]
+    [clearBuyNowCheckout, clearCartState, navigate]
   );
 
   const bootstrapServer = useCallback(
@@ -495,17 +587,21 @@ const ShopContextProvider = (props) => {
     isWishlisted,
     getWishlistCount,
     fitSelections,
+    buyNowCheckout,
     serverBootstrap,
     serverStatus,
     lastServerSyncAt,
     bootstrapServer,
+    startBuyNowCheckout,
+    clearBuyNowCheckout,
   }), [
     products, search, showSearch, cartItems, token, loadingProductsData,
-    wishlistItems, loadingWishlist, fitSelections, serverBootstrap, serverStatus,
+    wishlistItems, loadingWishlist, fitSelections, buyNowCheckout, serverBootstrap, serverStatus,
     lastServerSyncAt, addToCart, getCartCount, updateQuantity, getCartAmount,
     getCartLineItems, getCheckoutItems, clearSession, clearCartState,
     clearCartFitSelections, getUserCart, toggleWishlist, isWishlisted,
-    bootstrapServer, navigate, BACKEND_URL, currency, delivery_fee
+    bootstrapServer, navigate, BACKEND_URL, currency, delivery_fee,
+    startBuyNowCheckout, clearBuyNowCheckout
   ]);
 
   return <ShopContext.Provider value={value}>{props.children}</ShopContext.Provider>;

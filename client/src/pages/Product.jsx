@@ -95,6 +95,7 @@ const Product = () => {
     toast,
     toggleWishlist,
     token,
+    startBuyNowCheckout,
     serverBootstrap,
     serverStatus,
     loadingProductsData,
@@ -231,14 +232,20 @@ const Product = () => {
       return;
     }
 
-    navigate('/place-order', {
+    const buyNowPayload = startBuyNowCheckout({
+      _id: productData._id,
+      name: productData.name,
+      price: productData.price,
+      image: productData.image,
+      size,
+      quantity: 1,
+      ...(appliedFitSelection?.selectedSize === size ? { fitAssistant: appliedFitSelection.fitAssistant } : {}),
+    });
+
+    navigate('/place-order?checkout=buy-now', {
       state: {
         buyNow: true,
-        product: {
-          ...productData,
-          size,
-          ...(appliedFitSelection?.selectedSize === size ? { fitAssistant: appliedFitSelection.fitAssistant } : {}),
-        },
+        product: buyNowPayload,
       },
     });
   };
