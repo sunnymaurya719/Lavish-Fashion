@@ -29,12 +29,9 @@ const RouteFallback = () => (
 const App = () => {
   const location = useLocation()
   const isAuthRoute = location.pathname === '/login'
-  const shellClassName = isAuthRoute
-    ? 'min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(235,214,195,0.45),transparent_28%),radial-gradient(circle_at_top_right,rgba(15,23,42,0.07),transparent_24%),linear-gradient(180deg,#fffdf8_0%,#fffaf4_100%)] px-4 sm:px-6 lg:px-8'
-    : 'px-4 sm:px-[5vw] md:px-[7vw] lg:px-[9vw]'
 
   return (
-    <div className={shellClassName}>
+    <div className='px-4 sm:px-[5vw] md:px-[7vw] lg:px-[9vw]'>
       <ScrollToTop />
       <MobileToastContainer />
       <Navbar />

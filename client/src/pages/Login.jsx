@@ -54,7 +54,7 @@ const AuthField = ({
   className = '',
 }) => (
   <div className='space-y-2'>
-    <label htmlFor={id} className='block text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500'>
+    <label htmlFor={id} className='block text-[12px] font-medium uppercase tracking-[0.18em] text-slate-500'>
       {label}
     </label>
     <input
@@ -66,10 +66,10 @@ const AuthField = ({
       placeholder={placeholder}
       maxLength={maxLength}
       autoComplete={autoComplete}
-      className={`h-14 w-full rounded-[20px] border px-4 text-[16px] text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.04)] outline-none transition-all duration-200 placeholder:text-slate-400 ${
+      className={`h-13 w-full rounded-xl border px-4 text-[16px] text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 ${
         error
-          ? 'border-rose-300 bg-rose-50/90 focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
-          : 'border-[#e7dfda] bg-white/95 focus:border-[#d6b494] focus:bg-white focus:ring-4 focus:ring-[#e7d4c4]/40'
+          ? 'border-rose-400 bg-rose-50 focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
+          : 'border-[#e5e5e5] bg-[#fafafa] focus:border-[#111] focus:bg-white focus:ring-4 focus:ring-black/5'
       } ${className}`}
       aria-invalid={Boolean(error)}
       aria-describedby={error ? `${id}-error` : helper ? `${id}-helper` : undefined}
@@ -79,7 +79,7 @@ const AuthField = ({
         {error}
       </p>
     ) : helper ? (
-      <p id={`${id}-helper`} className='text-sm leading-6 text-slate-500'>
+      <p id={`${id}-helper`} className='text-sm text-slate-500'>
         {helper}
       </p>
     ) : null}
@@ -91,10 +91,10 @@ const SocialButton = ({ icon, label, onClick, disabled = false }) => (
     type='button'
     onClick={onClick}
     disabled={disabled}
-    className={`inline-flex h-14 w-full items-center justify-center gap-3 rounded-[20px] border border-[#e5ddd7] bg-white/90 px-4 text-sm font-medium text-slate-800 shadow-[0_10px_24px_rgba(15,23,42,0.04)] transition-all duration-200 ${
+    className={`inline-flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#e5e5e5] bg-white text-sm font-medium text-slate-800 transition-all duration-200 ${
       disabled
         ? 'cursor-not-allowed opacity-60'
-        : 'hover:border-[#d6b494] hover:bg-white active:scale-[0.985]'
+        : 'hover:border-slate-300 hover:bg-slate-50 active:scale-[0.985]'
     }`}
   >
     {icon}
@@ -106,6 +106,7 @@ const Login = () => {
   const [currentState, setCurrentState] = useState('Login');
   const { token, setToken, navigate, BACKEND_URL, getUserCart, serverBootstrap, serverStatus } = useContext(ShopContext);
   const location = useLocation();
+  const googleButtonWrapperRef = useRef(null);
   const googleButtonRef = useRef(null);
   const googleAuthContextRef = useRef({ isLogin: true, referralCode: '' });
   const googleInitializedClientIdRef = useRef('');
@@ -121,12 +122,10 @@ const Login = () => {
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
   const [formErrorMessage, setFormErrorMessage] = useState('');
   const [googleButtonStatus, setGoogleButtonStatus] = useState('idle');
+  const [googleButtonWidth, setGoogleButtonWidth] = useState(0);
   const isLogin = currentState === 'Login';
   const googleClientId = String(serverBootstrap?.auth?.googleClientId || '').trim();
   const isGoogleAuthEnabled = Boolean(serverBootstrap?.auth?.googleEnabled && googleClientId);
-  const authHighlights = isLogin
-    ? ['Wishlist sync', 'Faster checkout', 'Order tracking']
-    : ['Save favorites', 'Member rewards', 'Easy reorders'];
 
   const validateField = useMemo(
     () => (field, value, mode) => {
@@ -186,6 +185,30 @@ const Login = () => {
     };
   }, [formValues.referralCode, isLogin]);
 
+  useEffect(() => {
+    const wrapperElement = googleButtonWrapperRef.current;
+
+    if (!wrapperElement || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(240, Math.min(400, Math.floor(wrapperElement.clientWidth || 0)));
+      setGoogleButtonWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
+    };
+
+    updateWidth();
+
+    if (typeof window.ResizeObserver === 'function') {
+      const observer = new window.ResizeObserver(() => updateWidth());
+      observer.observe(wrapperElement);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, []);
+
   const handleGoogleCredential = useCallback(
     async (googleResponse) => {
       const credential = String(googleResponse?.credential || '').trim();
@@ -230,7 +253,7 @@ const Login = () => {
     let isCancelled = false;
 
     const renderGoogleButton = async () => {
-      if (!isGoogleAuthEnabled || !googleButtonRef.current) {
+      if (!isGoogleAuthEnabled || !googleButtonRef.current || googleButtonWidth === 0) {
         setGoogleButtonStatus('unavailable');
         return;
       }
@@ -256,18 +279,14 @@ const Login = () => {
         }
 
         googleButtonRef.current.innerHTML = '';
-        const buttonWidth = Math.max(
-          240,
-          Math.min(392, Math.floor(googleButtonRef.current.offsetWidth || googleButtonRef.current.parentElement?.offsetWidth || 320))
-        );
         window.google.accounts.id.renderButton(googleButtonRef.current, {
           type: 'standard',
           theme: 'outline',
           size: 'large',
           text: isLogin ? 'continue_with' : 'signup_with',
-          shape: 'pill',
+          shape: 'rectangular',
           logo_alignment: 'left',
-          width: buttonWidth,
+          width: googleButtonWidth,
         });
 
         if (!isCancelled) {
@@ -285,7 +304,7 @@ const Login = () => {
     return () => {
       isCancelled = true;
     };
-  }, [googleClientId, handleGoogleCredential, isGoogleAuthEnabled, isLogin]);
+  }, [googleButtonWidth, googleClientId, handleGoogleCredential, isGoogleAuthEnabled, isLogin]);
 
   const buildErrors = (values, mode) => {
     const fields = mode === 'Login' ? ['email', 'password'] : ['name', 'email', 'password', 'referralCode'];
@@ -427,211 +446,163 @@ const Login = () => {
   }, [location.search]);
 
   return (
-    <section className='auth-shell mx-auto w-full max-w-[460px] pb-16 pt-5 sm:pt-10'>
-      <div className='relative overflow-hidden rounded-[34px] border border-[#efe5df] bg-[linear-gradient(180deg,#fffdf9_0%,#ffffff_42%,#fff8f0_100%)] px-5 py-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:px-8 sm:py-8'>
-        <div className='pointer-events-none absolute inset-x-0 top-0 h-44 bg-[radial-gradient(circle_at_top_left,_rgba(225,197,173,0.45),_transparent_58%),radial-gradient(circle_at_top_right,_rgba(15,23,42,0.08),_transparent_46%)]'></div>
-        <div className='pointer-events-none absolute -right-14 top-24 h-32 w-32 rounded-full bg-[#ead6c4]/25 blur-3xl'></div>
-        <div className='pointer-events-none absolute -left-14 bottom-18 h-36 w-36 rounded-full bg-[#f3e8dc] blur-3xl'></div>
-
-        <div className='relative'>
-          <div className='inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-600 shadow-[0_8px_20px_rgba(15,23,42,0.05)]'>
-            <span className='h-2 w-2 rounded-full bg-[#d8b89c]'></span>
-            Lavish Members
-          </div>
-
-          <div className='mt-6 text-center'>
-            <div className='flex items-center justify-center gap-3'>
-              <span className='hidden h-px w-10 bg-[#d7cec7] sm:block'></span>
-              <h1 className='prata-regular text-[44px] leading-[0.92] tracking-[-0.04em] text-[#0f172a] sm:text-[56px]'>
-                {isLogin ? 'Login' : 'Sign Up'}
-              </h1>
-              <span className='h-px w-9 bg-[#d7cec7]'></span>
-            </div>
-            <p className='mx-auto mt-4 max-w-[320px] text-[15px] leading-7 text-slate-500 sm:text-base'>
-              {isLogin
-                ? 'Welcome back. Step into your saved wishlist, order updates, and a smoother checkout flow.'
-                : 'Create your Lavish account to save favorites, unlock member perks, and checkout faster.'}
-            </p>
-            <div className='mt-5 flex flex-wrap justify-center gap-2'>
-              {authHighlights.map((highlight) => (
-                <span
-                  key={highlight}
-                  className='rounded-full border border-white/90 bg-white/88 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-600 shadow-[0_10px_24px_rgba(15,23,42,0.04)]'
-                >
-                  {highlight}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className='mt-8 rounded-[28px] border border-[#ece2dc] bg-white/88 p-4 shadow-[0_16px_34px_rgba(15,23,42,0.06)] backdrop-blur'>
-            <div className='flex items-start justify-between gap-4'>
-              <div>
-                <p className='text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500'>Quick Access</p>
-                <p className='mt-2 text-sm leading-6 text-slate-600'>
-                  {isLogin ? 'Use a linked account and get back to shopping instantly.' : 'Start with your preferred account and finish setup in seconds.'}
-                </p>
-              </div>
-              <div className='rounded-full bg-[#f6ede5] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8d6c54]'>
-                Fast lane
-              </div>
-            </div>
-
-            <div className='mt-4 space-y-3'>
-              {isGoogleAuthEnabled ? (
-                <div className='space-y-2'>
-                  <div
-                    className={`flex min-h-14 items-center justify-center rounded-[20px] border border-[#e5ddd7] bg-[#fcfaf7] px-2 py-2 shadow-[0_10px_24px_rgba(15,23,42,0.04)] ${
-                      isGoogleSubmitting ? 'pointer-events-none opacity-70' : ''
-                    }`}
-                  >
-                    <div ref={googleButtonRef} className='flex w-full justify-center' />
-                  </div>
-                  {googleButtonStatus === 'loading' ? (
-                    <p className='text-sm text-slate-500'>Loading Google sign-in...</p>
-                  ) : null}
-                  {googleButtonStatus === 'error' ? (
-                    <p className='text-sm text-rose-600'>Google sign-in could not load right now. Please refresh and try again.</p>
-                  ) : null}
-                  {isGoogleSubmitting ? (
-                    <p className='text-sm text-slate-500'>Finishing Google sign-in...</p>
-                  ) : null}
-                </div>
-              ) : (
-                <SocialButton
-                  icon={<GoogleIcon />}
-                  label={serverStatus === 'checking' ? 'Loading Google sign-in...' : 'Google sign-in unavailable'}
-                  onClick={() => {}}
-                  disabled
-                />
-              )}
-
-              <SocialButton
-                icon={<AppleIcon />}
-                label={isLogin ? 'Continue with Apple' : 'Sign up with Apple'}
-                onClick={() => toast.info('Apple sign-in will be available soon.')}
-              />
-            </div>
-          </div>
-
-          <div className='my-6 flex items-center gap-3'>
-            <span className='h-px flex-1 bg-[#e5ddd7]'></span>
-            <span className='rounded-full border border-[#eadfd7] bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400'>
-              Use email instead
-            </span>
-            <span className='h-px flex-1 bg-[#e5ddd7]'></span>
-          </div>
-
-          <form onSubmit={onSubmitHandler} className='space-y-4'>
-            <div className='rounded-[28px] border border-[#ece2dc] bg-white/88 p-4 shadow-[0_16px_34px_rgba(15,23,42,0.05)] backdrop-blur sm:p-5'>
-              <div className='space-y-4'>
-                {isLogin ? null : (
-                  <AuthField
-                    id='name'
-                    label='Full Name'
-                    value={formValues.name}
-                    onChange={(event) => handleFieldChange('name', event.target.value)}
-                    onBlur={() => handleFieldBlur('name')}
-                    placeholder='Enter your full name'
-                    autoComplete='name'
-                    error={touched.name ? formErrors.name : ''}
-                  />
-                )}
-
-                <AuthField
-                  id='email'
-                  label='Email'
-                  type='email'
-                  value={formValues.email}
-                  onChange={(event) => handleFieldChange('email', event.target.value)}
-                  onBlur={() => handleFieldBlur('email')}
-                  placeholder='you@example.com'
-                  autoComplete='email'
-                  error={touched.email ? formErrors.email : ''}
-                />
-
-                <AuthField
-                  id='password'
-                  label='Password'
-                  type='password'
-                  value={formValues.password}
-                  onChange={(event) => handleFieldChange('password', event.target.value)}
-                  onBlur={() => handleFieldBlur('password')}
-                  placeholder='Enter your password'
-                  autoComplete={isLogin ? 'current-password' : 'new-password'}
-                  error={touched.password ? formErrors.password : ''}
-                />
-
-                {isLogin ? null : (
-                  <AuthField
-                    id='referralCode'
-                    label='Referral Code (Optional)'
-                    type='text'
-                    value={formValues.referralCode}
-                    onChange={(event) => handleFieldChange('referralCode', event.target.value.toUpperCase())}
-                    onBlur={() => handleFieldBlur('referralCode')}
-                    placeholder='Add a friend code for welcome perks'
-                    maxLength='12'
-                    autoComplete='off'
-                    className='uppercase'
-                    error={touched.referralCode ? formErrors.referralCode : ''}
-                    helper='Add a friend code now to unlock new-customer rewards from your very first order.'
-                  />
-                )}
-              </div>
-            </div>
-
-            {formErrorMessage ? (
-              <div className='rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 shadow-[0_10px_24px_rgba(244,63,94,0.08)]'>
-                {formErrorMessage}
-              </div>
-            ) : null}
-
-            <div className='rounded-[24px] border border-[#ece2dc] bg-white/88 p-4 shadow-[0_16px_34px_rgba(15,23,42,0.05)] backdrop-blur'>
-              <div className='flex items-center justify-between gap-4 text-sm'>
-                {isLogin ? (
-                  <button
-                    type='button'
-                    onClick={() => toast.info('Password reset support is coming soon.')}
-                    className='font-medium text-slate-500 transition-colors hover:text-slate-900'
-                  >
-                    Forgot password?
-                  </button>
-                ) : (
-                  <span className='max-w-[220px] text-slate-500'>Your referral code can be added now for a smooth first checkout.</span>
-                )}
-
-                {isLogin ? (
-                  <button
-                    type='button'
-                    onClick={() => setCurrentState('Sign Up')}
-                    className='font-semibold text-slate-900 transition-colors hover:text-[#8d6c54]'
-                  >
-                    Create account
-                  </button>
-                ) : (
-                  <button
-                    type='button'
-                    onClick={() => setCurrentState('Login')}
-                    className='font-semibold text-slate-900 transition-colors hover:text-[#8d6c54]'
-                  >
-                    Login here
-                  </button>
-                )}
-              </div>
-
-              <button
-                type='submit'
-                disabled={isSubmitting}
-                className='mt-4 inline-flex h-14 w-full items-center justify-center gap-2 rounded-[20px] bg-[linear-gradient(135deg,#111827_0%,#1f2937_48%,#b79577_135%)] text-base font-medium text-white shadow-[0_16px_34px_rgba(15,23,42,0.18)] transition-all duration-200 hover:scale-[1.01] hover:brightness-[1.02] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-70'
-              >
-                {isSubmitting ? <ButtonSpinner /> : null}
-                <span>{isSubmitting ? 'Please wait...' : isLogin ? 'Sign In' : 'Create Account'}</span>
-              </button>
-            </div>
-          </form>
+    <section className='auth-shell mx-auto w-full max-w-[400px] pb-16 pt-8 sm:pt-12'>
+      <div className='mb-7 text-center'>
+        <div className='inline-flex items-center gap-3'>
+          <h1 className='prata-regular text-[52px] leading-none tracking-[-0.02em] text-slate-900'>
+            {isLogin ? 'Login' : 'Sign Up'}
+          </h1>
+          <span className='mt-2 h-px w-9 bg-slate-300'></span>
         </div>
+        <p className='mt-4 text-[15px] leading-6 text-slate-500'>
+          {isLogin
+            ? 'Welcome back. Sign in to continue your curated shopping journey.'
+            : 'Create your account to save favorites, track orders, and checkout faster.'}
+        </p>
       </div>
+
+      <div className='space-y-3'>
+        {isGoogleAuthEnabled ? (
+          <div className='space-y-2'>
+            <div
+              ref={googleButtonWrapperRef}
+              className={`overflow-hidden rounded-xl border border-[#e5e5e5] bg-white shadow-[0_6px_16px_rgba(15,23,42,0.04)] ${
+                isGoogleSubmitting ? 'pointer-events-none opacity-70' : ''
+              }`}
+            >
+              <div ref={googleButtonRef} className='min-h-[48px] w-full' />
+            </div>
+            {googleButtonStatus === 'loading' ? (
+              <p className='text-sm text-slate-500'>Loading Google sign-in...</p>
+            ) : null}
+            {googleButtonStatus === 'error' ? (
+              <p className='text-sm text-rose-600'>Google sign-in could not load right now. Please refresh and try again.</p>
+            ) : null}
+            {isGoogleSubmitting ? (
+              <p className='text-sm text-slate-500'>Finishing Google sign-in...</p>
+            ) : null}
+          </div>
+        ) : (
+          <SocialButton
+            icon={<GoogleIcon />}
+            label={serverStatus === 'checking' ? 'Loading Google sign-in...' : 'Google sign-in unavailable'}
+            onClick={() => {}}
+            disabled
+          />
+        )}
+        <SocialButton
+          icon={<AppleIcon />}
+          label={isLogin ? 'Continue with Apple' : 'Sign up with Apple'}
+          onClick={() => toast.info('Apple sign-in will be available soon.')}
+        />
+      </div>
+
+      <div className='my-5 flex items-center gap-3'>
+        <span className='h-px flex-1 bg-slate-200'></span>
+        <span className='text-xs uppercase tracking-[0.22em] text-slate-400'>Or</span>
+        <span className='h-px flex-1 bg-slate-200'></span>
+      </div>
+
+      <form onSubmit={onSubmitHandler} className='space-y-4'>
+        {isLogin ? null : (
+          <AuthField
+            id='name'
+            label='Full Name'
+            value={formValues.name}
+            onChange={(event) => handleFieldChange('name', event.target.value)}
+            onBlur={() => handleFieldBlur('name')}
+            placeholder='Enter your full name'
+            autoComplete='name'
+            error={touched.name ? formErrors.name : ''}
+          />
+        )}
+
+        <AuthField
+          id='email'
+          label='Email'
+          type='email'
+          value={formValues.email}
+          onChange={(event) => handleFieldChange('email', event.target.value)}
+          onBlur={() => handleFieldBlur('email')}
+          placeholder='you@example.com'
+          autoComplete='email'
+          error={touched.email ? formErrors.email : ''}
+        />
+
+        <AuthField
+          id='password'
+          label='Password'
+          type='password'
+          value={formValues.password}
+          onChange={(event) => handleFieldChange('password', event.target.value)}
+          onBlur={() => handleFieldBlur('password')}
+          placeholder='Enter your password'
+          autoComplete={isLogin ? 'current-password' : 'new-password'}
+          error={touched.password ? formErrors.password : ''}
+        />
+
+        {isLogin ? null : (
+          <AuthField
+            id='referralCode'
+            label='Referral Code (Optional)'
+            type='text'
+            value={formValues.referralCode}
+            onChange={(event) => handleFieldChange('referralCode', event.target.value.toUpperCase())}
+            onBlur={() => handleFieldBlur('referralCode')}
+            placeholder='Add a friend code for welcome perks'
+            maxLength='12'
+            autoComplete='off'
+            className='uppercase'
+            error={touched.referralCode ? formErrors.referralCode : ''}
+            helper='If you have a referral code, add it now to unlock new-customer rewards.'
+          />
+        )}
+
+        {formErrorMessage ? (
+          <div className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{formErrorMessage}</div>
+        ) : null}
+
+        <div className='flex items-center justify-between gap-4 pt-1 text-sm'>
+          {isLogin ? (
+            <button
+              type='button'
+              onClick={() => toast.info('Password reset support is coming soon.')}
+              className='font-medium text-slate-500 transition-colors hover:text-slate-900'
+            >
+              Forgot password?
+            </button>
+          ) : (
+            <span className='text-slate-500'>Your referral code can be added now for a smooth first checkout.</span>
+          )}
+
+          {isLogin ? (
+            <button
+              type='button'
+              onClick={() => setCurrentState('Sign Up')}
+              className='font-semibold text-slate-900 transition-colors hover:text-slate-600'
+            >
+              Create account
+            </button>
+          ) : (
+            <button
+              type='button'
+              onClick={() => setCurrentState('Login')}
+              className='font-semibold text-slate-900 transition-colors hover:text-slate-600'
+            >
+              Login here
+            </button>
+          )}
+        </div>
+
+        <button
+          type='submit'
+          disabled={isSubmitting}
+          className='mt-1 inline-flex h-14 w-full items-center justify-center gap-2 rounded-[14px] bg-[#111] text-base font-medium text-white transition-all duration-200 hover:scale-[1.01] hover:bg-black active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-70'
+        >
+          {isSubmitting ? <ButtonSpinner /> : null}
+          <span>{isSubmitting ? 'Please wait...' : isLogin ? 'Sign In' : 'Create Account'}</span>
+        </button>
+      </form>
     </section>
   );
 };
