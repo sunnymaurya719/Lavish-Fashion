@@ -280,6 +280,10 @@ const FitAssistantModal = ({
   const isCameraMode = selectedMethod === 'camera';
   const hasCapturedScan = Boolean(capturedImage);
   const hasRecommendation = Boolean(result);
+  const availableMethodOptions = useMemo(
+    () => methodOptions.filter((option) => option.value !== 'camera' || cameraEnabled),
+    [cameraEnabled]
+  );
   const selectedFitLabel = useMemo(
     () => fitOptions.find((option) => option.value === preferredFit)?.label || 'Regular',
     [preferredFit]
@@ -830,45 +834,54 @@ const FitAssistantModal = ({
           </div>
 
           <div className='px-6 py-7 sm:px-8'>
-            <div className='grid gap-3 sm:grid-cols-2'>
-              {methodOptions.map((option) => {
-                const isDisabled = option.value === 'camera' && !cameraEnabled;
+            {availableMethodOptions.length > 1 ? (
+              <div className='grid gap-3 sm:grid-cols-2'>
+                {availableMethodOptions.map((option) => {
+                  const isDisabled = option.value === 'camera' && !cameraEnabled;
 
-                return (
-                  <button
-                    key={option.value}
-                    type='button'
-                    disabled={isDisabled || isSubmitting}
-                    onClick={() => {
-                      if (option.value !== selectedMethod) {
-                        setSelectedMethod(option.value);
-                        resetResultState();
-                        setCameraError('');
-                        if (option.value !== 'camera') {
-                          resetCameraState();
+                  return (
+                    <button
+                      key={option.value}
+                      type='button'
+                      disabled={isDisabled || isSubmitting}
+                      onClick={() => {
+                        if (option.value !== selectedMethod) {
+                          setSelectedMethod(option.value);
+                          resetResultState();
+                          setCameraError('');
+                          if (option.value !== 'camera') {
+                            resetCameraState();
+                          }
                         }
-                      }
-                    }}
-                    className={`rounded-[24px] border px-4 py-4 text-left transition ${
-                      selectedMethod === option.value
-                        ? 'border-slate-900 bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)]'
-                        : isDisabled
-                          ? 'border-slate-200 bg-slate-100 text-slate-400'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <p className='text-sm font-semibold uppercase tracking-[0.12em]'>{option.label}</p>
-                    <p
-                      className={`mt-2 text-sm leading-6 ${
-                        selectedMethod === option.value ? 'text-slate-200' : 'text-slate-500'
+                      }}
+                      className={`rounded-[24px] border px-4 py-4 text-left transition ${
+                        selectedMethod === option.value
+                          ? 'border-slate-900 bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)]'
+                          : isDisabled
+                            ? 'border-slate-200 bg-slate-100 text-slate-400'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
-                      {isDisabled ? 'Camera scan needs the store camera feature and ML service enabled.' : option.description}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
+                      <p className='text-sm font-semibold uppercase tracking-[0.12em]'>{option.label}</p>
+                      <p
+                        className={`mt-2 text-sm leading-6 ${
+                          selectedMethod === option.value ? 'text-slate-200' : 'text-slate-500'
+                        }`}
+                      >
+                        {isDisabled ? 'Camera scan needs the store camera feature and ML service enabled.' : option.description}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className='rounded-[24px] border border-slate-200 bg-white px-4 py-4'>
+                <p className='text-sm font-semibold uppercase tracking-[0.12em] text-slate-900'>Manual input</p>
+                <p className='mt-2 text-sm leading-6 text-slate-500'>
+                  Camera scan is not available on this store right now, so this assistant will use your measurements and fit preference only.
+                </p>
+              </div>
+            )}
 
             <div className='mt-5 rounded-[30px] bg-slate-950 px-5 py-5 text-white shadow-[0_18px_42px_rgba(15,23,42,0.18)]'>
               <p className='text-[11px] uppercase tracking-[0.24em] text-slate-300'>{guideContent.eyebrow}</p>
