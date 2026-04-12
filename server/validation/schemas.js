@@ -201,11 +201,13 @@ const cartRemoveSchema = z.object({
     size: z.string().trim().min(1).max(10)
 });
 
+//cart update
+
 const cartUpdateSchema = z.object({
     itemId: objectIdSchema,
     size: z.string().trim().min(1).max(10),
     quantity: z.number().int().min(0).max(99)
-});
+})
 
 const productAddSchema = z.object({
     name: z.string().trim().min(2).max(150),
