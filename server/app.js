@@ -120,6 +120,7 @@ const createApp = () => {
     app.use('/api/review', reviewRouter);
     app.use('/api/cart',cartRouter);
     app.use('/api/order',orderRouter);
+    app.use('/api/orders', orderRouter);
 
     app.get('/health', (req, res) => {
         res.status(200).json({

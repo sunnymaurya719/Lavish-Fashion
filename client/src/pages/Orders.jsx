@@ -1,6 +1,7 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { ShopContext } from '../context/ShopContext';
+import ConfirmModal from '../components/ConfirmModal';
 import { getFitFeedbackHistory, submitFitFeedback as submitFitFeedbackRequest } from '../services/fitApi';
 
 const STATUS_STYLES = {
@@ -47,6 +48,41 @@ const FIT_FEEDBACK_LABELS = {
   perfect: 'Perfect fit',
   too_large: 'Too large',
 };
+const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
+const ORDER_CANCELLATION_ERROR_MESSAGE = 'Order can only be cancelled within 6 hours of placing it.';
+const ORDER_CANCELLATION_REFUND_MESSAGE = 'Refund will be processed within 2 working days';
+const ORDER_CANCELLATION_CONFIRM_MESSAGE =
+  'Are you sure you want to cancel this order?\nThe payment will be refunded to your account within 2 working days.';
+
+const normalizeOrderStatus = (status) => String(status || '').trim().toLowerCase();
+
+const getOrderPlacedAtMs = (order) => {
+  const createdAtValue = order?.createdAt ?? order?.date ?? 0;
+
+  if (createdAtValue instanceof Date) {
+    return createdAtValue.getTime();
+  }
+
+  const numericValue = Number(createdAtValue);
+  if (Number.isFinite(numericValue) && numericValue > 0) {
+    return numericValue;
+  }
+
+  const parsedValue = new Date(createdAtValue).getTime();
+  return Number.isFinite(parsedValue) ? parsedValue : 0;
+};
+
+const isOrderCancellationEligible = (order, now = Date.now()) => {
+  const placedAtMs = getOrderPlacedAtMs(order);
+
+  if (normalizeOrderStatus(order?.status) !== 'order placed' || !placedAtMs) {
+    return false;
+  }
+
+  return now - placedAtMs <= ORDER_CANCELLATION_WINDOW_MS;
+};
+
+const shouldShowCancelOrderAction = (order) => normalizeOrderStatus(order?.status) === 'order placed';
 
 const formatMoney = (currency, value) => {
   const amount = Number(value || 0);
@@ -97,6 +133,14 @@ const getStatusStyle = (status) => {
 const getPaymentMeta = (order) => {
   const method = order.paymentMethod || 'Payment';
   const paymentState = String(order.paymentStatus || '').toLowerCase();
+  const orderStatus = normalizeOrderStatus(order.status);
+
+  if (paymentState === 'cancelled' || orderStatus === 'cancelled') {
+    return {
+      summary: order.payment ? 'Refund pending' : 'Payment cancelled',
+      badgeClass: 'bg-rose-50 text-rose-700',
+    };
+  }
 
   if (order.payment || paymentState === 'paid') {
     return {
@@ -163,7 +207,11 @@ const calculateItemsValue = (items = []) =>
 const getOrderCode = (orderId = '') => `LF-${String(orderId).slice(-8).toUpperCase()}`;
 
 const getTimelineIndex = (status) => {
-  const normalizedStatus = String(status || '').trim().toLowerCase();
+  const normalizedStatus = normalizeOrderStatus(status);
+
+  if (normalizedStatus === 'cancelled') {
+    return -1;
+  }
 
   if (normalizedStatus === 'delivered') {
     return 2;
@@ -197,6 +245,9 @@ const Orders = () => {
   const [expandedAddresses, setExpandedAddresses] = useState({});
   const [fitFeedbackMap, setFitFeedbackMap] = useState({});
   const [submittingFitFeedbackKey, setSubmittingFitFeedbackKey] = useState('');
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [activeCancelOrder, setActiveCancelOrder] = useState(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState('');
 
   const refreshFitFeedbackHistory = useCallback(
     async ({ silent = true } = {}) => {
@@ -288,6 +339,16 @@ const Orders = () => {
     fetchOrders();
   }, [fetchOrders]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 60 * 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const toggleOrderDetails = (orderId) => {
     setExpandedOrders((current) => ({
       ...current,
@@ -301,6 +362,92 @@ const Orders = () => {
       [orderId]: !current[orderId],
     }));
   };
+
+  const closeCancelModal = () => {
+    if (cancellingOrderId) {
+      return;
+    }
+
+    setActiveCancelOrder(null);
+  };
+
+  const handleOpenCancelModal = (order) => {
+    if (!shouldShowCancelOrderAction(order)) {
+      return;
+    }
+
+    if (!isOrderCancellationEligible(order, Date.now())) {
+      toast.error(ORDER_CANCELLATION_ERROR_MESSAGE);
+      return;
+    }
+
+    setActiveCancelOrder({
+      _id: order._id,
+    });
+  };
+
+  const handleConfirmCancelOrder = useCallback(async () => {
+    const orderId = String(activeCancelOrder?._id || '');
+
+    if (!orderId || cancellingOrderId) {
+      return;
+    }
+
+    const previousOrder = orderData.find((order) => String(order._id) === orderId);
+
+    if (!previousOrder) {
+      setActiveCancelOrder(null);
+      return;
+    }
+
+    if (!isOrderCancellationEligible(previousOrder, Date.now())) {
+      toast.error(ORDER_CANCELLATION_ERROR_MESSAGE);
+      setActiveCancelOrder(null);
+      return;
+    }
+
+    const optimisticOrder = {
+      ...previousOrder,
+      status: 'Cancelled',
+      paymentStatus: 'cancelled',
+      cancelledAt: Date.now(),
+      inventoryReserved: false,
+    };
+
+    setCancellingOrderId(orderId);
+    setOrderData((current) =>
+      current.map((order) => (String(order._id) === orderId ? optimisticOrder : order))
+    );
+
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/orders/${orderId}/cancel`, {}, { headers: { token } });
+
+      if (!response.data.success) {
+        throw new Error(response.data.message || 'Failed to cancel order. Please try again.');
+      }
+
+      setOrderData((current) =>
+        current.map((order) =>
+          String(order._id) === orderId
+            ? {
+                ...order,
+                ...(response.data.order || optimisticOrder),
+              }
+            : order
+        )
+      );
+      toast.success(`Order cancelled successfully. ${ORDER_CANCELLATION_REFUND_MESSAGE}.`);
+    } catch (error) {
+      setOrderData((current) =>
+        current.map((order) => (String(order._id) === orderId ? previousOrder : order))
+      );
+      toast.error(error?.response?.data?.message || 'Failed to cancel order. Please try again.');
+      fetchOrders({ silent: true });
+    } finally {
+      setCancellingOrderId('');
+      setActiveCancelOrder(null);
+    }
+  }, [BACKEND_URL, activeCancelOrder, cancellingOrderId, fetchOrders, orderData, toast, token]);
 
   const handleSubmitFitFeedback = async ({ orderId, item, feedback }) => {
     const feedbackKey = buildFitFeedbackKey(orderId, item._id);
@@ -466,7 +613,13 @@ const Orders = () => {
             const isExpanded = Boolean(expandedOrders[order._id]);
             const isAddressExpanded = Boolean(expandedAddresses[order._id]);
             const addressData = getAddressData(order.address);
-            const isDelivered = String(order.status || '').trim().toLowerCase() === 'delivered';
+            const normalizedStatus = normalizeOrderStatus(order.status);
+            const isDelivered = normalizedStatus === 'delivered';
+            const isCancelled = normalizedStatus === 'cancelled';
+            const showCancelOrderAction = shouldShowCancelOrderAction(order);
+            const isCancelEligible = showCancelOrderAction && isOrderCancellationEligible(order, nowMs);
+            const isCancellingOrder = cancellingOrderId === String(order._id);
+            const orderPlacedAtValue = order.createdAt || order.date;
             const fitFeedbackItems = isDelivered
               ? (order.items || []).filter(
                   (item) => item?.size && String(item?.fitAssistant?.recommendedSize || '').trim()
@@ -485,7 +638,9 @@ const Orders = () => {
                     <p className='mt-1 text-[1.7rem] sm:text-3xl font-semibold tracking-[-0.015em] text-slate-900'>
                       {getOrderCode(order._id)}
                     </p>
-                    <p className='mt-1 text-sm text-slate-500'>Placed on {formatDate(order.date, { includeTime: true })}</p>
+                    <p className='mt-1 text-sm text-slate-500'>
+                      Placed on {formatDate(orderPlacedAtValue, { includeTime: true })}
+                    </p>
                   </div>
                   <p className='text-base sm:text-lg font-semibold text-slate-900'>{formatMoney(currency, amount)}</p>
                 </header>
@@ -525,13 +680,18 @@ const Orders = () => {
                   </div>
                 </div>
 
-                <div className='mt-4 grid grid-cols-2 gap-2.5'>
+                <div className='mt-4 flex flex-wrap gap-2.5'>
                   <button
                     type='button'
-                    onClick={() => setExpandedOrders((current) => ({ ...current, [order._id]: true }))}
-                    className='rounded-full bg-slate-950 px-4 py-3 text-sm font-medium text-white'
+                    disabled={isCancelled}
+                    onClick={() => {
+                      if (!isCancelled) {
+                        setExpandedOrders((current) => ({ ...current, [order._id]: true }));
+                      }
+                    }}
+                    className='min-w-[150px] flex-1 rounded-full bg-slate-950 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300'
                   >
-                    Track order
+                    {isCancelled ? 'Tracking unavailable' : 'Track order'}
                   </button>
                   <button
                     type='button'
@@ -543,28 +703,73 @@ const Orders = () => {
 
                       toggleOrderDetails(order._id);
                     }}
-                    className='rounded-full border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
+                    className='min-w-[150px] flex-1 rounded-full border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
                   >
                     {isDelivered ? 'Reorder' : isExpanded ? 'Hide details' : 'View details'}
                   </button>
+
+                  {showCancelOrderAction ? (
+                    <button
+                      type='button'
+                      aria-disabled={!isCancelEligible || isCancellingOrder}
+                      onClick={() => {
+                        if (isCancellingOrder) {
+                          return;
+                        }
+
+                        if (!isCancelEligible) {
+                          toast.error(ORDER_CANCELLATION_ERROR_MESSAGE);
+                          return;
+                        }
+
+                        handleOpenCancelModal(order);
+                      }}
+                      className={`min-w-[150px] flex-1 rounded-full border px-4 py-3 text-sm font-medium transition ${
+                        isCancelEligible && !isCancellingOrder
+                          ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                          : 'cursor-not-allowed border-rose-100 bg-rose-50/80 text-rose-400'
+                      }`}
+                    >
+                      {isCancellingOrder ? 'Cancelling...' : 'Cancel order'}
+                    </button>
+                  ) : null}
                 </div>
 
                 <div className='mt-4'>
-                  <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Delivery timeline</p>
-                  <div className='mt-2 grid grid-cols-3 gap-2'>
-                    {DELIVERY_STEPS.map((step, index) => {
-                      const active = index <= timelineIndex;
+                  {showCancelOrderAction ? (
+                    <p className={`text-xs ${isCancelEligible ? 'text-slate-500' : 'text-rose-600'}`}>
+                      {isCancelEligible
+                        ? 'You can cancel this order within 6 hours of placing it.'
+                        : ORDER_CANCELLATION_ERROR_MESSAGE}
+                    </p>
+                  ) : null}
 
-                      return (
-                        <div key={`${order._id}-${step}`} className='flex flex-col items-center text-center'>
-                          <span
-                            className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-slate-900' : 'bg-slate-300'}`}
-                          ></span>
-                          <p className={`mt-1 text-[11px] ${active ? 'text-slate-800' : 'text-slate-400'}`}>{step}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {isCancelled ? (
+                    <div className='rounded-2xl bg-rose-50 px-4 py-3'>
+                      <p className='text-[10px] uppercase tracking-[0.2em] text-rose-600'>Cancelled</p>
+                      <p className='mt-1 text-sm font-medium text-rose-700'>{ORDER_CANCELLATION_REFUND_MESSAGE}</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Delivery timeline</p>
+                      <div className='mt-2 grid grid-cols-3 gap-2'>
+                        {DELIVERY_STEPS.map((step, index) => {
+                          const active = index <= timelineIndex;
+
+                          return (
+                            <div key={`${order._id}-${step}`} className='flex flex-col items-center text-center'>
+                              <span
+                                className={`h-2.5 w-2.5 rounded-full ${active ? 'bg-slate-900' : 'bg-slate-300'}`}
+                              ></span>
+                              <p className={`mt-1 text-[11px] ${active ? 'text-slate-800' : 'text-slate-400'}`}>
+                                {step}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {isExpanded && (
@@ -700,6 +905,17 @@ const Orders = () => {
           })}
         </div>
       )}
+
+      <ConfirmModal
+        open={Boolean(activeCancelOrder)}
+        title='Cancel Order'
+        message={ORDER_CANCELLATION_CONFIRM_MESSAGE}
+        confirmLabel='Confirm'
+        cancelLabel='Cancel'
+        isLoading={Boolean(cancellingOrderId)}
+        onConfirm={handleConfirmCancelOrder}
+        onClose={closeCancelModal}
+      />
     </section>
   );
 };

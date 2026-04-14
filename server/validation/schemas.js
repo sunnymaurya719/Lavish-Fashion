@@ -152,7 +152,7 @@ const marketingPreferencesSchema = z.object({
     reviewReminders: booleanLikeSchema.optional()
 });
 
-const statusValues = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered'];
+const statusValues = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered', 'Cancelled'];
 
 const userLoginSchema = z.object({
     email: z.string().trim().email(),
@@ -273,6 +273,10 @@ const orderPricingPreviewSchema = z.object({
     items: z.array(orderItemSchema).min(1),
     couponCode: z.string().trim().max(30).optional(),
     pointsToRedeem: nonNegativeIntSchema.optional()
+});
+
+const orderCancelParamsSchema = z.object({
+    orderId: objectIdSchema
 });
 
 const couponValidateSchema = z.object({
@@ -475,6 +479,7 @@ export {
     fitInsightsParamsSchema,
     fitRecommendSchema,
     orderCreateSchema,
+    orderCancelParamsSchema,
     orderPricingPreviewSchema,
     orderStatusSchema,
     marketingCampaignCreateSchema,

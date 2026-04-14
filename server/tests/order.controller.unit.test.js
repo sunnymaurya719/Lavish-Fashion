@@ -164,6 +164,7 @@ vi.mock('../services/marketingAutomationService.js', () => ({
 }));
 
 const {
+    cancelUserOrder,
     placeOrderStripe,
     placeOrderRazorpay,
     verifyStripe,
@@ -475,6 +476,154 @@ describe('orderController unit tests', () => {
 
         expect(res.status).toHaveBeenCalledWith(400);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('cancels an order for the owning user within the six-hour window', async () => {
+        const createdAt = new Date(Date.now() - 60 * 60 * 1000);
+
+        orderModelMock.findById
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Order Placed',
+                payment: true,
+                paymentStatus: 'paid',
+                inventoryReserved: true,
+                createdAt,
+                loyaltyPointsRedeemed: 50,
+                loyaltyRedemptionStatus: 'reserved',
+                items: [{ _id: '507f1f77bcf86cd799439099', quantity: 1 }]
+            })
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Cancelled',
+                payment: true,
+                paymentStatus: 'cancelled',
+                inventoryReserved: false,
+                cancelledAt: Date.now()
+            });
+        orderModelMock.findOneAndUpdate.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            status: 'Cancelled'
+        });
+
+        const req = {
+            userId: 'user_1',
+            params: { orderId: '507f1f77bcf86cd799439011' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await cancelUserOrder(req, res);
+
+        expect(orderModelMock.findOneAndUpdate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                _id: '507f1f77bcf86cd799439011',
+                status: { $ne: 'Cancelled' }
+            }),
+            expect.objectContaining({
+                status: 'Cancelled',
+                paymentStatus: 'cancelled',
+                cancelledAt: expect.any(Number)
+            }),
+            { new: true }
+        );
+        expect(releaseReservedLoyaltyRedemptionMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                order: expect.objectContaining({
+                    _id: '507f1f77bcf86cd799439011'
+                })
+            })
+        );
+        expect(releaseInventoryForItemsMock).toHaveBeenCalledWith(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    _id: '507f1f77bcf86cd799439099'
+                })
+            ])
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                message: 'Order cancelled successfully',
+                order: expect.objectContaining({
+                    status: 'Cancelled',
+                    paymentStatus: 'cancelled'
+                })
+            })
+        );
+    });
+
+    it('rejects user cancellation requests after the six-hour window', async () => {
+        orderModelMock.findById.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Order Placed',
+            createdAt: new Date(Date.now() - 7 * 60 * 60 * 1000)
+        });
+
+        const req = {
+            userId: 'user_1',
+            params: { orderId: '507f1f77bcf86cd799439011' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await cancelUserOrder(req, res);
+
+        expect(orderModelMock.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+            success: false,
+            message: 'Order can only be cancelled within 6 hours of placing it.'
+        });
+    });
+
+    it('does not release inventory twice when cancellation loses a concurrent race', async () => {
+        orderModelMock.findById
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Order Placed',
+                payment: true,
+                paymentStatus: 'paid',
+                inventoryReserved: true,
+                createdAt: new Date(Date.now() - 30 * 60 * 1000),
+                loyaltyPointsRedeemed: 50,
+                loyaltyRedemptionStatus: 'reserved',
+                items: [{ _id: '507f1f77bcf86cd799439099', quantity: 1 }]
+            })
+            .mockResolvedValueOnce({
+                _id: '507f1f77bcf86cd799439011',
+                userId: 'user_1',
+                status: 'Cancelled',
+                paymentStatus: 'cancelled',
+                inventoryReserved: false
+            });
+        orderModelMock.findOneAndUpdate.mockResolvedValueOnce(null);
+
+        const req = {
+            userId: 'user_1',
+            params: { orderId: '507f1f77bcf86cd799439011' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await cancelUserOrder(req, res);
+
+        expect(releaseReservedLoyaltyRedemptionMock).not.toHaveBeenCalled();
+        expect(releaseInventoryForItemsMock).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                order: expect.objectContaining({
+                    status: 'Cancelled'
+                })
+            })
+        );
     });
 
     it('returns 400 when Stripe session does not belong to order/user', async () => {
@@ -865,5 +1014,63 @@ describe('orderController unit tests', () => {
             })
         );
         expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('rejects admin attempts to cancel delivered orders', async () => {
+        orderModelMock.findById.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Delivered',
+            paymentMethod: 'COD',
+            payment: true
+        });
+
+        const req = {
+            body: {
+                orderId: '507f1f77bcf86cd799439011',
+                status: 'Cancelled'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await updateOrderStatus(req, res);
+
+        expect(orderModelMock.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(orderModelMock.findByIdAndUpdate).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+            success: false,
+            message: 'Delivered orders cannot be cancelled.'
+        });
+    });
+
+    it('rejects admin attempts to reopen cancelled orders', async () => {
+        orderModelMock.findById.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Cancelled',
+            paymentMethod: 'COD',
+            payment: false
+        });
+
+        const req = {
+            body: {
+                orderId: '507f1f77bcf86cd799439011',
+                status: 'Shipped'
+            },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await updateOrderStatus(req, res);
+
+        expect(orderModelMock.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(orderModelMock.findByIdAndUpdate).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+            success: false,
+            message: 'Cancelled orders cannot be moved back into the fulfillment pipeline.'
+        });
     });
 });

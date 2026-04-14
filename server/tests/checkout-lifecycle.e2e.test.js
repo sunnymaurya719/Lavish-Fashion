@@ -418,6 +418,118 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(ordersResponse.body.orders[0].paymentMethod).toBe('COD');
     });
 
+    it('cancels an order within six hours and releases reserved inventory', async () => {
+        const product = await productModel.create({
+            name: 'Cancelable Tee',
+            description: 'A product used to validate user order cancellation',
+            price: 279,
+            image: ['https://example.com/image-cancel.jpg'],
+            category: 'Women',
+            subCategory: 'Topwear',
+            sizes: ['M'],
+            stock: 3,
+            lowStockThreshold: 1,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Cancel Flow User', email: 'cancelflow@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `cancel_cod_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                address,
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+        expect(orderResponse.body.success).toBe(true);
+
+        const reservedOrder = await orderModel.findById(orderResponse.body.orderId).lean();
+        const reservedProduct = await productModel.findById(product._id).lean();
+        expect(reservedOrder.status).toBe('Order Placed');
+        expect(reservedOrder.inventoryReserved).toBe(true);
+        expect(reservedProduct.stock).toBe(2);
+
+        const cancelResponse = await request(app)
+            .post(`/api/orders/${reservedOrder._id}/cancel`)
+            .set('token', token)
+            .send({});
+
+        expect(cancelResponse.status).toBe(200);
+        expect(cancelResponse.body.success).toBe(true);
+
+        const cancelledOrder = await orderModel.findById(reservedOrder._id).lean();
+        const restoredProduct = await productModel.findById(product._id).lean();
+
+        expect(cancelledOrder.status).toBe('Cancelled');
+        expect(cancelledOrder.paymentStatus).toBe('cancelled');
+        expect(cancelledOrder.inventoryReserved).toBe(false);
+        expect(cancelledOrder.cancelledAt).toEqual(expect.any(Number));
+        expect(restoredProduct.stock).toBe(3);
+    });
+
+    it('rejects order cancellation requests after six hours', async () => {
+        const product = await productModel.create({
+            name: 'Expired Cancel Tee',
+            description: 'A product used to validate the cancellation window restriction',
+            price: 289,
+            image: ['https://example.com/image-expired-cancel.jpg'],
+            category: 'Women',
+            subCategory: 'Topwear',
+            sizes: ['S'],
+            stock: 4,
+            lowStockThreshold: 1,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Expired Cancel User', email: 'expiredcancel@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `cancel_expired_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'S' }],
+                address,
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+
+        const createdOrder = await orderModel.findById(orderResponse.body.orderId);
+        createdOrder.createdAt = new Date(Date.now() - 7 * 60 * 60 * 1000);
+        await createdOrder.save();
+
+        const cancelResponse = await request(app)
+            .post(`/api/orders/${createdOrder._id}/cancel`)
+            .set('token', token)
+            .send({});
+
+        expect(cancelResponse.status).toBe(400);
+        expect(cancelResponse.body.success).toBe(false);
+        expect(cancelResponse.body.message).toBe('Order can only be cancelled within 6 hours of placing it.');
+
+        const unchangedOrder = await orderModel.findById(createdOrder._id).lean();
+        const reservedProduct = await productModel.findById(product._id).lean();
+
+        expect(unchangedOrder.status).toBe('Order Placed');
+        expect(unchangedOrder.inventoryReserved).toBe(true);
+        expect(reservedProduct.stock).toBe(3);
+    });
+
     it('releases reserved inventory when Stripe checkout is cancelled', async () => {
         const product = await productModel.create({
             name: 'Stripe Cancel Tee',

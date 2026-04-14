@@ -5,7 +5,19 @@ import { BACKEND_URL } from '../config/api';
 import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
 import { mergeOrderSnapshot, upsertOrderById } from '../utils/orderMerge';
 
-const orderStatusOptions = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered'];
+const orderStatusOptions = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered', 'Cancelled'];
+
+const getAvailableStatusOptions = (order) => {
+  if (order?.status === 'Cancelled') {
+    return ['Cancelled'];
+  }
+
+  if (order?.status === 'Delivered') {
+    return orderStatusOptions.filter((status) => status !== 'Cancelled');
+  }
+
+  return orderStatusOptions;
+};
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-IN', {
@@ -34,6 +46,10 @@ const getItemImageUrl = (item) => {
 };
 
 const getPaymentLabel = (order) => {
+  if (String(order.paymentStatus || '').trim().toLowerCase() === 'cancelled' || order.status === 'Cancelled') {
+    return order.payment ? 'Refund pending' : 'Cancelled';
+  }
+
   if (order.payment) {
     return 'Paid';
   }
@@ -46,6 +62,10 @@ const getPaymentLabel = (order) => {
 };
 
 const getStatusClasses = (status) => {
+  if (status === 'Cancelled') {
+    return 'bg-rose-100 text-rose-800';
+  }
+
   if (status === 'Delivered') {
     return 'bg-emerald-100 text-emerald-800';
   }
@@ -233,7 +253,7 @@ const Orders = ({ token }) => {
       },
       {
         label: 'In progress',
-        value: orders.filter((order) => order.status !== 'Delivered').length,
+        value: orders.filter((order) => !['Delivered', 'Cancelled'].includes(order.status)).length,
         tone: 'text-amber-700',
       },
       {
@@ -373,7 +393,7 @@ const Orders = ({ token }) => {
                       disabled={updatingOrderId === order._id}
                       className='rounded-2xl border border-slate-300 bg-white px-4 py-3 font-medium text-slate-700 disabled:opacity-60'
                     >
-                      {orderStatusOptions.map((status) => (
+                      {getAvailableStatusOptions(order).map((status) => (
                         <option key={status} value={status}>
                           {status}
                         </option>

@@ -33,6 +33,40 @@ const deliveryCharge = DEFAULT_DELIVERY_CHARGE;
 let stripeClient;
 let razorpayClient;
 
+const ORDER_STATUS = {
+    placed: 'Order Placed',
+    delivered: 'Delivered',
+    cancelled: 'Cancelled'
+};
+const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+const normalizeOrderStatus = (value) => String(value || '').trim().toLowerCase();
+const resolveOrderCreatedAtMs = (order) => {
+    const createdAtValue = order?.createdAt ?? order?.date ?? 0;
+
+    if (createdAtValue instanceof Date) {
+        return createdAtValue.getTime();
+    }
+
+    const numericValue = Number(createdAtValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+        return numericValue;
+    }
+
+    const parsedValue = new Date(createdAtValue).getTime();
+    return Number.isFinite(parsedValue) ? parsedValue : 0;
+};
+
+const isOrderWithinCancellationWindow = (order, now = Date.now()) => {
+    const createdAtMs = resolveOrderCreatedAtMs(order);
+
+    if (!createdAtMs) {
+        return false;
+    }
+
+    return now - createdAtMs <= ORDER_CANCELLATION_WINDOW_MS;
+};
+
 const getStripeClient = () => {
     if (!process.env.STRIPE_SECRET_KEY) {
         return null;
@@ -75,6 +109,53 @@ const releaseInventoryForOrder = async (order) => {
 
     await releaseInventoryForItems(order.items);
     await orderModel.findByIdAndUpdate(order._id, { inventoryReserved: false });
+};
+
+const performOrderCancellation = async ({ existingOrder, source }) => {
+    const orderId = String(existingOrder?._id || '');
+    const shouldReleaseLoyalty =
+        normalizeOrderStatus(existingOrder?.status) !== normalizeOrderStatus(ORDER_STATUS.delivered) &&
+        Number(existingOrder?.loyaltyPointsRedeemed || 0) > 0 &&
+        existingOrder?.loyaltyRedemptionStatus === 'reserved';
+    const shouldReleaseInventory = Boolean(existingOrder?.inventoryReserved);
+
+    const cancelledOrder = await orderModel.findOneAndUpdate(
+        {
+            _id: orderId,
+            status: { $ne: ORDER_STATUS.cancelled }
+        },
+        {
+            status: ORDER_STATUS.cancelled,
+            paymentStatus: 'cancelled',
+            cancelledAt: existingOrder?.cancelledAt || Date.now()
+        },
+        { new: true }
+    );
+
+    // Another request may have cancelled the order first. In that case, avoid double-releasing
+    // inventory or loyalty reservations from stale order state and return the latest record.
+    if (!cancelledOrder) {
+        return orderModel.findById(orderId);
+    }
+
+    if (shouldReleaseLoyalty) {
+        await releaseReservedLoyaltyRedemption({ order: existingOrder });
+    }
+
+    if (shouldReleaseInventory) {
+        await releaseInventoryForOrder(existingOrder);
+    }
+
+    const refreshedOrder = await orderModel.findById(orderId);
+
+    if (refreshedOrder) {
+        await publishAdminOrderUpsert({
+            order: refreshedOrder,
+            source
+        });
+    }
+
+    return refreshedOrder;
 };
 
 const markOrderAsPaid = async ({ order, gatewayEventId, paymentFields }) => {
@@ -1310,6 +1391,54 @@ const userOrders = async (req, res) => {
     }
 };
 
+const cancelUserOrder = async (req, res) => {
+    try {
+        const userId = req.userId;
+        const { orderId } = req.params;
+        const existingOrder = await orderModel.findById(orderId);
+
+        if (!existingOrder || String(existingOrder.userId) !== String(userId)) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        if (normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.cancelled)) {
+            return res.status(200).json({
+                success: true,
+                message: 'Order cancelled successfully',
+                order: existingOrder
+            });
+        }
+
+        if (normalizeOrderStatus(existingOrder.status) !== normalizeOrderStatus(ORDER_STATUS.placed)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Only orders that are still in Order placed status can be cancelled.'
+            });
+        }
+
+        if (!isOrderWithinCancellationWindow(existingOrder)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Order can only be cancelled within 6 hours of placing it.'
+            });
+        }
+
+        const updatedOrder = await performOrderCancellation({
+            existingOrder,
+            source: 'orderController.cancelUserOrder'
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Order cancelled successfully',
+            order: updatedOrder
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to cancel user order');
+        return res.status(500).json({ success: false, message: 'Failed to cancel order. Please try again.' });
+    }
+};
+
 //update order status by Admin Panel
 const updateOrderStatus = async (req, res) => {
     try {
@@ -1320,35 +1449,58 @@ const updateOrderStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
+        if (
+            normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.cancelled) &&
+            normalizeOrderStatus(status) !== normalizeOrderStatus(ORDER_STATUS.cancelled)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cancelled orders cannot be moved back into the fulfillment pipeline.'
+            });
+        }
+
+        if (
+            normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.delivered) &&
+            normalizeOrderStatus(status) === normalizeOrderStatus(ORDER_STATUS.cancelled)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: 'Delivered orders cannot be cancelled.'
+            });
+        }
+
+        if (normalizeOrderStatus(status) === normalizeOrderStatus(ORDER_STATUS.cancelled) &&
+            normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.cancelled)) {
+            return res.status(200).json({ success: true, message: 'Status Updated', order: existingOrder });
+        }
+
         const updatePayload = { status };
         let shouldProcessDeliveryRewards = false;
-        let shouldReleaseLoyalty = false;
 
         // Mark COD orders as paid once delivery is confirmed in admin.
-        if (existingOrder.paymentMethod === 'COD' && status === 'Delivered' && !existingOrder.payment) {
+        if (existingOrder.paymentMethod === 'COD' && status === ORDER_STATUS.delivered && !existingOrder.payment) {
             updatePayload.payment = true;
             updatePayload.paymentStatus = 'paid';
             updatePayload.paymentVerifiedAt = Date.now();
         }
 
-        if (status === 'Delivered' && !existingOrder.deliveredAt) {
+        if (status === ORDER_STATUS.delivered && !existingOrder.deliveredAt) {
             updatePayload.deliveredAt = Date.now();
-        }
-
-        // Release reserved loyalty points when order is cancelled
-        if (status === 'Cancelled' && existingOrder.status !== 'Cancelled' && existingOrder.status !== 'Delivered') {
-            shouldReleaseLoyalty = Number(existingOrder.loyaltyPointsRedeemed || 0) > 0 &&
-                existingOrder.loyaltyRedemptionStatus === 'reserved';
         }
 
         let updatedOrder = null;
 
-        if (status === 'Delivered') {
+        if (status === ORDER_STATUS.cancelled) {
+            updatedOrder = await performOrderCancellation({
+                existingOrder,
+                source: 'orderController.updateOrderStatus'
+            });
+        } else if (status === ORDER_STATUS.delivered) {
             // Ensure only one concurrent transition to Delivered executes delivery-linked rewards.
             updatedOrder = await orderModel.findOneAndUpdate(
                 {
                     _id: orderId,
-                    status: { $ne: 'Delivered' }
+                    status: { $ne: ORDER_STATUS.delivered }
                 },
                 updatePayload,
                 { new: true }
@@ -1363,12 +1515,14 @@ const updateOrderStatus = async (req, res) => {
             updatedOrder = await orderModel.findByIdAndUpdate(orderId, updatePayload, { new: true });
         }
 
-        await publishAdminOrderUpsert({
-            order: updatedOrder,
-            source: 'orderController.updateOrderStatus'
-        });
+        if (status !== ORDER_STATUS.cancelled) {
+            await publishAdminOrderUpsert({
+                order: updatedOrder,
+                source: 'orderController.updateOrderStatus'
+            });
+        }
 
-        if (shouldProcessDeliveryRewards && status === 'Delivered') {
+        if (shouldProcessDeliveryRewards && status === ORDER_STATUS.delivered) {
             await finalizeReservedLoyaltyRedemption({ order: updatedOrder });
             const rewardSummary = await awardOrderDeliveryRewards(updatedOrder);
             const refreshedOrder = await orderModel.findById(orderId).lean();
@@ -1423,16 +1577,6 @@ const updateOrderStatus = async (req, res) => {
             }
         }
 
-        // Release reserved loyalty points on cancellation
-        if (shouldReleaseLoyalty) {
-            await releaseReservedLoyaltyRedemption({ order: existingOrder });
-        }
-
-        // Release inventory on cancellation if still reserved
-        if (status === 'Cancelled' && existingOrder.status !== 'Cancelled' && existingOrder.inventoryReserved) {
-            await releaseInventoryForOrder(existingOrder);
-        }
-
         res.status(200).json({ success: true, message: 'Status Updated', order: updatedOrder });
     } catch (error) {
         req.log?.error({ err: error }, 'Failed to update order status');
@@ -1442,6 +1586,7 @@ const updateOrderStatus = async (req, res) => {
 
 export {
     allOrders,
+    cancelUserOrder,
     handleRazorpayWebhook,
     handleStripeWebhook,
     placeOrderCOD,

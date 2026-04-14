@@ -1,6 +1,7 @@
 import express from 'express';
 import {
     allOrders,
+    cancelUserOrder,
     placeOrderCOD,
     placeOrderRazorpay,
     placeOrderStripe,
@@ -15,6 +16,7 @@ import authUser from '../middleware/auth.js';
 import validateRequest from '../middleware/validateRequest.js';
 import {
     orderCreateSchema,
+    orderCancelParamsSchema,
     orderPricingPreviewSchema,
     orderStatusSchema,
     razorpayVerifySchema,
@@ -39,6 +41,7 @@ orderRouter.post('/razorpay',authUser,validateRequest(orderCreateSchema),placeOr
 
 
 //User Features
+orderRouter.post('/:orderId/cancel', authUser, validateRequest(orderCancelParamsSchema, 'params'), cancelUserOrder);
 orderRouter.post('/userorders',authUser,userOrders);
 
 //Verify payment
