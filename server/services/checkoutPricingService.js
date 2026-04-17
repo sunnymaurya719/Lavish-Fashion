@@ -21,6 +21,7 @@ const isCheckoutError = (error) => Boolean(error?.isCheckoutError);
 
 const normalizeCouponCode = (value) => String(value || '').trim().toUpperCase();
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(2));
+const truncateText = (value, maxLength = 40) => String(value || '').trim().slice(0, maxLength);
 const normalizeOptionalFitAssistant = (fitAssistant) => {
     if (!fitAssistant || typeof fitAssistant !== 'object' || Array.isArray(fitAssistant)) {
         return undefined;
@@ -48,6 +49,12 @@ const normalizeOptionalFitAssistant = (fitAssistant) => {
         source: normalizedSource,
         modelVersion: normalizedModelVersion
     };
+};
+
+const resolveFallbackSku = (product = {}, rawItem = {}) => {
+    const baseProductId = truncateText(String(product?._id || rawItem?._id || rawItem?.productId || '').slice(-8).toUpperCase(), 16);
+    const normalizedSize = truncateText(String(rawItem?.size || '').replace(/\s+/g, '').toUpperCase(), 10);
+    return truncateText(`LF-${baseProductId}${normalizedSize ? `-${normalizedSize}` : ''}`, 40);
 };
 
 const buildNormalizedOrderItems = async (items, { checkInventory = true } = {}) => {
@@ -93,6 +100,9 @@ const buildNormalizedOrderItems = async (items, { checkInventory = true } = {}) 
         normalizedItems.push({
             _id: String(product._id),
             name: product.name,
+            sku: truncateText(product.sku || resolveFallbackSku(product, rawItem), 40),
+            hsn: '',
+            tax: '',
             price: productPrice,
             image: product.image,
             size: rawItem.size || '',

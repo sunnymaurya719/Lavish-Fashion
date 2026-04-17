@@ -16,10 +16,34 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_mock';
 process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_mock';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'rzp_whsec_mock';
+process.env.WHATSAPP_ACCESS_TOKEN = 'wa_test_token';
+process.env.WHATSAPP_PHONE_NUMBER_ID = '980132085193608';
+process.env.WHATSAPP_TEMPLATE_ORDER_PLACED = 'order_placed';
+process.env.WHATSAPP_TEMPLATE_OUT_FOR_DELIVERY = 'order_out_for_delivery';
+process.env.WHATSAPP_TEMPLATE_DELIVERED = 'order_delivered';
+process.env.WHATSAPP_TEMPLATE_LANGUAGE_CODE = 'en_US';
+process.env.WHATSAPP_GRAPH_API_VERSION = 'v25.0';
+process.env.WHATSAPP_DEFAULT_COUNTRY_CODE = '91';
+process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN = 'wa_verify_token';
+process.env.WHATSAPP_APP_SECRET = 'wa_app_secret';
 
 let stripeSessionCounter = 1;
 let razorpayOrderCounter = 1;
+let whatsappMessageCounter = 1;
 const stripeSessions = new Map();
+const whatsappFetchMock = vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+        messages: [
+            {
+                id: `wamid.test.${whatsappMessageCounter++}`
+            }
+        ]
+    })
+}));
+
+vi.stubGlobal('fetch', whatsappFetchMock);
 
 vi.mock('stripe', () => {
     return {
@@ -120,10 +144,13 @@ describe('checkout and order lifecycle e2e api tests', () => {
         if (mongoServer) {
             await mongoServer.stop();
         }
+        vi.unstubAllGlobals();
     });
 
     beforeEach(async () => {
         stripeSessions.clear();
+        whatsappMessageCounter = 1;
+        whatsappFetchMock.mockClear();
         await couponModel.deleteMany({});
         await productModel.deleteMany({});
         await orderModel.deleteMany({});
@@ -416,6 +443,208 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(ordersResponse.status).toBe(200);
         expect(ordersResponse.body.orders.length).toBe(1);
         expect(ordersResponse.body.orders[0].paymentMethod).toBe('COD');
+    });
+
+    it('sends WhatsApp template notifications for placed, out-for-delivery, and delivered without duplicates', async () => {
+        const product = await productModel.create({
+            name: 'WhatsApp Tee',
+            description: 'A product used to validate WhatsApp order notifications',
+            price: 250,
+            image: ['https://example.com/image-whatsapp.jpg'],
+            category: 'Women',
+            subCategory: 'Topwear',
+            sizes: ['28'],
+            stock: 5,
+            lowStockThreshold: 1,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Sunny User', email: 'sunnywa@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const orderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `whatsapp_cod_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: '28' }],
+                address: {
+                    firstName: 'Sunny',
+                    lastName: 'Maurya',
+                    street: 'New Subhash Nagar',
+                    city: 'Ludhiana',
+                    state: 'Punjab',
+                    pincode: '141007',
+                    country: 'India',
+                    phone: '9988073907'
+                },
+                checkoutSource: 'cart'
+            });
+
+        expect(orderResponse.status).toBe(201);
+        expect(whatsappFetchMock).toHaveBeenCalledTimes(1);
+
+        const placedOrder = await orderModel.findById(orderResponse.body.orderId).lean();
+        expect(placedOrder.whatsappNotifications.placedSent).toBe(true);
+        expect(placedOrder.whatsappNotifications.placedMessageId).toBeTruthy();
+        expect(placedOrder.whatsappNotifications.outForDeliverySent).toBe(false);
+        expect(placedOrder.whatsappNotifications.deliveredSent).toBe(false);
+
+        /*
+        const placedPayload = JSON.parse(whatsappFetchMock.mock.calls[0][1].body);
+        expect(placedPayload.template.name).toBe(process.env.WHATSAPP_TEMPLATE_ORDER_PLACED);
+        expect(placedPayload.to).toBe('9988073907');
+        expect(placedPayload.template.components[0].parameters.map((parameter) => parameter.text)).toEqual([
+            'Sunny Maurya',
+            `LF-${String(placedOrder._id).slice(-8).toUpperCase()}`,
+            '₹260',
+            'Order placed'
+        ]);
+        */
+        const placedPayloadUtf8 = JSON.parse(whatsappFetchMock.mock.calls[0][1].body);
+        expect(placedPayloadUtf8.template.name).toBe(process.env.WHATSAPP_TEMPLATE_ORDER_PLACED);
+        expect(placedPayloadUtf8.to).toBe('919988073907');
+        expect(placedPayloadUtf8.template.components[0].parameters.map((parameter) => parameter.text)).toEqual([
+            'Sunny Maurya',
+            `LF-${String(placedOrder.shiprocket?.referenceOrderId || placedOrder._id).slice(-8).toUpperCase()}`,
+            '260',
+            'Order placed'
+        ]);
+
+        const adminLoginResponse = await request(app)
+            .post('/api/user/admin')
+            .send({
+                email: process.env.ADMIN_EMAIL,
+                password: process.env.ADMIN_PASSWORD
+            });
+
+        expect(adminLoginResponse.status).toBe(200);
+        const adminToken = adminLoginResponse.body.token;
+
+        const outForDeliveryResponse = await request(app)
+            .post('/api/order/status')
+            .set('token', adminToken)
+            .send({
+                orderId: String(placedOrder._id),
+                status: 'Out for delivery'
+            });
+
+        expect(outForDeliveryResponse.status).toBe(200);
+        expect(whatsappFetchMock).toHaveBeenCalledTimes(2);
+
+        const outForDeliveryOrder = await orderModel.findById(placedOrder._id).lean();
+        expect(outForDeliveryOrder.whatsappNotifications.outForDeliverySent).toBe(true);
+        expect(outForDeliveryOrder.whatsappNotifications.outForDeliveryMessageId).toBeTruthy();
+
+        const deliveredResponse = await request(app)
+            .post('/api/order/status')
+            .set('token', adminToken)
+            .send({
+                orderId: String(placedOrder._id),
+                status: 'Delivered'
+            });
+
+        expect(deliveredResponse.status).toBe(200);
+        expect(whatsappFetchMock).toHaveBeenCalledTimes(3);
+
+        const deliveredOrder = await orderModel.findById(placedOrder._id).lean();
+        expect(deliveredOrder.whatsappNotifications.deliveredSent).toBe(true);
+        expect(deliveredOrder.whatsappNotifications.deliveredMessageId).toBeTruthy();
+
+        const duplicateDeliveredResponse = await request(app)
+            .post('/api/order/status')
+            .set('token', adminToken)
+            .send({
+                orderId: String(placedOrder._id),
+                status: 'Delivered'
+            });
+
+        expect(duplicateDeliveredResponse.status).toBe(200);
+        expect(whatsappFetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('verifies the WhatsApp webhook and records message delivery updates by message id', async () => {
+        const verifyResponse = await request(app)
+            .get('/api/webhooks/whatsapp')
+            .query({
+                'hub.mode': 'subscribe',
+                'hub.verify_token': process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+                'hub.challenge': '12345'
+            });
+
+        expect(verifyResponse.status).toBe(200);
+        expect(verifyResponse.text).toBe('12345');
+
+        const order = await orderModel.create({
+            userId: new mongoose.Types.ObjectId().toString(),
+            items: [
+                {
+                    _id: new mongoose.Types.ObjectId().toString(),
+                    name: 'Webhook Tee',
+                    price: 199,
+                    image: ['https://example.com/image-webhook.jpg'],
+                    size: 'M',
+                    quantity: 1
+                }
+            ],
+            subtotal: 199,
+            deliveryFee: 10,
+            discountAmount: 0,
+            amount: 209,
+            address,
+            paymentMethod: 'COD',
+            payment: false,
+            paymentStatus: 'pending',
+            status: 'Order Placed',
+            date: Date.now(),
+            whatsappNotifications: {
+                placedSent: true,
+                placedMessageId: 'wamid.test.known'
+            }
+        });
+
+        const webhookPayload = {
+            object: 'whatsapp_business_account',
+            entry: [
+                {
+                    changes: [
+                        {
+                            value: {
+                                statuses: [
+                                    {
+                                        id: 'wamid.test.known',
+                                        status: 'delivered',
+                                        timestamp: '1711111111'
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        };
+        const webhookBody = JSON.stringify(webhookPayload);
+        const whatsappWebhookSignature = `sha256=${crypto
+            .createHmac('sha256', process.env.WHATSAPP_APP_SECRET)
+            .update(Buffer.from(webhookBody))
+            .digest('hex')}`;
+
+        const webhookResponse = await request(app)
+            .post('/api/webhooks/whatsapp')
+            .set('x-hub-signature-256', whatsappWebhookSignature)
+            .set('Content-Type', 'application/json')
+            .send(webhookBody);
+
+        expect(webhookResponse.status).toBe(200);
+        expect(webhookResponse.body.received).toBe(true);
+
+        const refreshedOrder = await orderModel.findById(order._id).lean();
+        expect(refreshedOrder.whatsappNotifications.placedWebhookStatus).toBe('delivered');
+        expect(refreshedOrder.whatsappNotifications.placedWebhookTimestamp).toBe(1711111111000);
     });
 
     it('cancels an order within six hours and releases reserved inventory', async () => {

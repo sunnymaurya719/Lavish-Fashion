@@ -120,6 +120,9 @@ const releaseReservedLoyaltyRedemptionMock = vi.fn();
 const releaseUserReservedLoyaltyPointsMock = vi.fn();
 const reserveLoyaltyRedemptionMock = vi.fn();
 const queueAutomationEmailMock = vi.fn();
+const sendDeliveredMessageMock = vi.fn();
+const sendOrderPlacedMessageMock = vi.fn();
+const sendOutForDeliveryMessageMock = vi.fn();
 
 vi.mock('../models/orderModel.js', () => ({
     default: orderModelMock
@@ -161,6 +164,12 @@ vi.mock('../services/loyaltyService.js', () => ({
 
 vi.mock('../services/marketingAutomationService.js', () => ({
     queueAutomationEmail: queueAutomationEmailMock
+}));
+
+vi.mock('../services/whatsappService.js', () => ({
+    sendDeliveredMessage: sendDeliveredMessageMock,
+    sendOrderPlacedMessage: sendOrderPlacedMessageMock,
+    sendOutForDeliveryMessage: sendOutForDeliveryMessageMock
 }));
 
 const {
@@ -266,13 +275,21 @@ describe('orderController unit tests', () => {
                 }
             ])
         });
-        userModelMock.findById.mockReturnValueOnce({
-            lean: vi.fn().mockResolvedValueOnce({
-                _id: 'user_1',
-                loyaltyPoints: 0,
-                reservedLoyaltyPoints: 0
+        userModelMock.findById
+            .mockReturnValueOnce({
+                lean: vi.fn().mockResolvedValueOnce({
+                    _id: 'user_1',
+                    loyaltyPoints: 0,
+                    reservedLoyaltyPoints: 0
+                })
             })
-        });
+            .mockReturnValueOnce({
+                select: vi.fn().mockReturnValue({
+                    lean: vi.fn().mockResolvedValueOnce({
+                        email: 'cod-user@example.com'
+                    })
+                })
+            });
 
         orderModelMock.create.mockResolvedValueOnce({
             _id: '507f1f77bcf86cd799439012',
@@ -345,6 +362,14 @@ describe('orderController unit tests', () => {
             ])
         );
         expect(userModelMock.findByIdAndUpdate).toHaveBeenCalledWith('user_1', { cartData: {} });
+        expect(sendOrderPlacedMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                _id: '507f1f77bcf86cd799439012'
+            }),
+            expect.objectContaining({
+                log: expect.any(Object)
+            })
+        );
         expect(completeIdempotentRequestMock).toHaveBeenCalledWith(
             expect.objectContaining({ recordId: 'idem_record_1', statusCode: 201 })
         );
@@ -916,6 +941,45 @@ describe('orderController unit tests', () => {
         expect(res.json).toHaveBeenCalledWith({ received: true });
     });
 
+    it('sends an out-for-delivery WhatsApp notification when admin updates that status', async () => {
+        orderModelMock.findById.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Shipped',
+            paymentMethod: 'COD',
+            payment: false
+        });
+        orderModelMock.findByIdAndUpdate.mockResolvedValueOnce({
+            _id: '507f1f77bcf86cd799439011',
+            userId: 'user_1',
+            status: 'Out for delivery',
+            paymentMethod: 'COD',
+            payment: false
+        });
+
+        const req = {
+            body: {
+                orderId: '507f1f77bcf86cd799439011',
+                status: 'Out for delivery'
+            },
+            log: { error: vi.fn(), child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })) }
+        };
+        const res = createRes();
+
+        await updateOrderStatus(req, res);
+
+        expect(sendOutForDeliveryMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                _id: '507f1f77bcf86cd799439011',
+                status: 'Out for delivery'
+            }),
+            expect.objectContaining({
+                log: req.log
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+    });
+
     it('updates a COD order to delivered and triggers loyalty automations', async () => {
         orderModelMock.findById.mockReset();
         orderModelMock.findOneAndUpdate.mockReset();
@@ -983,11 +1047,13 @@ describe('orderController unit tests', () => {
                 status: { $ne: 'Delivered' }
             }),
             expect.objectContaining({
-                status: 'Delivered',
-                payment: true,
-                paymentStatus: 'paid',
-                paymentVerifiedAt: expect.any(Number),
-                deliveredAt: expect.any(Number)
+                $set: expect.objectContaining({
+                    status: 'Delivered',
+                    payment: true,
+                    paymentStatus: 'paid',
+                    paymentVerifiedAt: expect.any(Number),
+                    deliveredAt: expect.any(Number)
+                })
             }),
             { new: true }
         );
@@ -1011,6 +1077,15 @@ describe('orderController unit tests', () => {
             2,
             expect.objectContaining({
                 automationKey: 'review_request'
+            })
+        );
+        expect(sendDeliveredMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                _id: '507f1f77bcf86cd799439011',
+                status: 'Delivered'
+            }),
+            expect.objectContaining({
+                log: req.log
             })
         );
         expect(res.status).toHaveBeenCalledWith(200);
@@ -1041,7 +1116,7 @@ describe('orderController unit tests', () => {
         expect(res.status).toHaveBeenCalledWith(400);
         expect(res.json).toHaveBeenCalledWith({
             success: false,
-            message: 'Delivered orders cannot be cancelled.'
+            message: 'Delivered orders cannot be moved back into the fulfillment pipeline.'
         });
     });
 

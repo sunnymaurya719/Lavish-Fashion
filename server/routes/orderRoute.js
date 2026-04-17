@@ -2,10 +2,13 @@ import express from 'express';
 import {
     allOrders,
     cancelUserOrder,
+    getShiprocketOrderDetails,
     placeOrderCOD,
     placeOrderRazorpay,
     placeOrderStripe,
     previewCheckoutPricing,
+    retryShiprocketSync,
+    trackShiprocketOrder,
     updateOrderStatus,
     userOrders,
     verifyRazorpay,
@@ -20,6 +23,7 @@ import {
     orderPricingPreviewSchema,
     orderStatusSchema,
     razorpayVerifySchema,
+    shiprocketOrderParamsSchema,
     stripeVerifySchema
 } from '../validation/schemas.js';
 
@@ -34,6 +38,7 @@ orderRouter.post('/status',adminAuth,validateRequest(orderStatusSchema),updateOr
 //Payment Features
 
 orderRouter.post('/preview',authUser,validateRequest(orderPricingPreviewSchema),previewCheckoutPricing);
+orderRouter.post('/create',authUser,validateRequest(orderCreateSchema),placeOrderCOD);
 orderRouter.post('/place',authUser,validateRequest(orderCreateSchema),placeOrderCOD);
 orderRouter.post('/stripe',authUser,validateRequest(orderCreateSchema),placeOrderStripe);
 orderRouter.post('/razorpay',authUser,validateRequest(orderCreateSchema),placeOrderRazorpay);
@@ -43,6 +48,11 @@ orderRouter.post('/razorpay',authUser,validateRequest(orderCreateSchema),placeOr
 //User Features
 orderRouter.post('/:orderId/cancel', authUser, validateRequest(orderCancelParamsSchema, 'params'), cancelUserOrder);
 orderRouter.post('/userorders',authUser,userOrders);
+
+//Shiprocket admin features
+orderRouter.post('/:orderId/shiprocket/retry', adminAuth, validateRequest(shiprocketOrderParamsSchema, 'params'), retryShiprocketSync);
+orderRouter.get('/:orderId/shiprocket', adminAuth, validateRequest(shiprocketOrderParamsSchema, 'params'), getShiprocketOrderDetails);
+orderRouter.get('/:orderId/shiprocket/track', adminAuth, validateRequest(shiprocketOrderParamsSchema, 'params'), trackShiprocketOrder);
 
 //Verify payment
 orderRouter.post('/verifyStripe',authUser,validateRequest(stripeVerifySchema),verifyStripe);

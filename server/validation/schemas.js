@@ -279,6 +279,10 @@ const orderCancelParamsSchema = z.object({
     orderId: objectIdSchema
 });
 
+const shiprocketOrderParamsSchema = z.object({
+    orderId: objectIdSchema
+});
+
 const couponValidateSchema = z.object({
     couponCode: z.string().trim().min(3).max(30),
     items: z.array(orderItemSchema).min(1)
@@ -463,6 +467,18 @@ const razorpayWebhookEventSchema = z.object({
         .optional()
 });
 
+const shiprocketWebhookSchema = z
+    .object({
+        event: z.string().trim().optional(),
+        shipment_id: z.union([z.string(), z.number()]).optional(),
+        order_id: z.union([z.string(), z.number()]).optional(),
+        awb_code: z.string().trim().optional(),
+        current_status: z.string().trim().optional(),
+        current_status_id: z.union([z.string(), z.number()]).optional(),
+        data: z.record(z.any()).optional()
+    })
+    .passthrough();
+
 export {
     adminLoginSchema,
     adminCustomerDetailSchema,
@@ -482,6 +498,8 @@ export {
     orderCancelParamsSchema,
     orderPricingPreviewSchema,
     orderStatusSchema,
+    shiprocketOrderParamsSchema,
+    shiprocketWebhookSchema,
     marketingCampaignCreateSchema,
     marketingCampaignDispatchSchema,
     marketingCampaignStatusSchema,

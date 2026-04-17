@@ -16,6 +16,7 @@ import reviewRouter from './routes/reviewRoute.js';
 import realtimeRouter from './routes/realtimeRoute.js';
 import systemRouter from './routes/systemRoute.js';
 import fitRouter from './routes/fitRoute.js';
+import testRouter from './routes/testRoute.js';
 import webhookRouter from './routes/webhookRoute.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import requestLogger from './middleware/requestLogger.js';
@@ -108,6 +109,7 @@ const createApp = () => {
     app.use(express.json({ limit: getJsonBodyLimitBytes() }));
 
     app.use('/api/system', systemRouter);
+    app.use('/api/test', testRouter);
     app.use('/api/fit', fitRouter);
     app.use('/api/realtime', realtimeRouter);
     app.use('/api/user',userRouter);

@@ -1,6 +1,21 @@
 import logger from './logger.js';
 
-const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'ADMIN_EMAIL', 'ADMIN_PASSWORD'];
+const normalizeEnvValue = (value) => String(value || '').trim();
+const isFeatureEnabled = (value) => ['1', 'true', 'yes', 'on'].includes(normalizeEnvValue(value).toLowerCase());
+
+const requiredEnvVars = [
+    'MONGODB_URI',
+    'JWT_SECRET',
+    'ADMIN_EMAIL',
+    'ADMIN_PASSWORD',
+    'WHATSAPP_ACCESS_TOKEN',
+    'WHATSAPP_PHONE_NUMBER_ID',
+    'WHATSAPP_TEMPLATE_ORDER_PLACED',
+    'WHATSAPP_TEMPLATE_OUT_FOR_DELIVERY',
+    'WHATSAPP_TEMPLATE_DELIVERED',
+    'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
+    'WHATSAPP_APP_SECRET'
+];
 
 const optionalButRecommendedEnvVars = [
     'CLOUDINARY_NAME',
@@ -30,6 +45,12 @@ const optionalButRecommendedEnvVars = [
     'MARKETING_FROM_EMAIL',
     'MARKETING_REPLY_TO_EMAIL',
     'RESEND_API_KEY',
+    'WHATSAPP_TEMPLATE_LANGUAGE_CODE',
+    'WHATSAPP_GRAPH_API_VERSION',
+    'WHATSAPP_DEFAULT_COUNTRY_CODE',
+    'WHATSAPP_NOTIFICATION_LOCK_TTL_MS',
+    'WHATSAPP_MAX_RETRIES',
+    'SHIPROCKET_ENABLED',
     'FIT_ASSISTANT_ENABLED',
     'FIT_CAMERA_ENABLED',
     'FIT_ENABLE_PERCENT',
@@ -48,9 +69,24 @@ const isValidWebUrl = (value) => /^https?:\/\/.+/i.test(String(value || '').trim
 
 const validateEnvironment = () => {
     const missingVars = requiredEnvVars.filter((envName) => !process.env[envName]);
+    const shiprocketRequiredEnvVars = [
+        'SHIPROCKET_EMAIL',
+        'SHIPROCKET_PASSWORD',
+        'SHIPROCKET_BASE_URL',
+        'SHIPROCKET_PICKUP_LOCATION'
+    ];
+    const shiprocketEnabled = isFeatureEnabled(process.env.SHIPROCKET_ENABLED);
 
     if (missingVars.length > 0) {
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+    }
+
+    if (shiprocketEnabled) {
+        const missingShiprocketVars = shiprocketRequiredEnvVars.filter((envName) => !normalizeEnvValue(process.env[envName]));
+
+        if (missingShiprocketVars.length > 0) {
+            throw new Error(`Missing required Shiprocket environment variables: ${missingShiprocketVars.join(', ')}`);
+        }
     }
 
     const missingOptionalVars = optionalButRecommendedEnvVars.filter((envName) => !process.env[envName]);
@@ -71,6 +107,10 @@ const validateEnvironment = () => {
             { invalidUrlEnvVars },
             'Some configured URL environment variables are not valid http/https URLs and will be ignored for public bootstrap metadata, CORS allowlists, or service integration calls.'
         );
+    }
+
+    if (!shiprocketEnabled) {
+        logger.info('Shiprocket integration is disabled via SHIPROCKET_ENABLED');
     }
 };
 

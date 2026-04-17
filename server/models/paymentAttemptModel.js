@@ -13,6 +13,9 @@ const orderItemSchema = new mongoose.Schema(
             }
         },
         name: { type: String, required: true, trim: true, minlength: 1, maxlength: 150 },
+        sku: { type: String, default: '', trim: true, maxlength: 40 },
+        hsn: { type: String, default: '', trim: true, maxlength: 30 },
+        tax: { type: String, default: '', trim: true, maxlength: 30 },
         price: { type: Number, required: true, min: 0 },
         image: { type: [String], default: [] },
         size: { type: String, default: '', trim: true, maxlength: 10 },
@@ -75,6 +78,8 @@ const paymentAttemptSchema = new mongoose.Schema(
         },
         amount: { type: Number, required: true, min: 0 },
         address: { type: orderAddressSchema, required: true },
+        customerEmail: { type: String, default: '', trim: true, lowercase: true, maxlength: 254 },
+        shiprocketReferenceOrderId: { type: String, default: '', trim: true, maxlength: 20, index: true },
         checkoutSource: { type: String, enum: ['cart', 'buy_now'], default: 'cart' },
         paymentMethod: { type: String, required: true, enum: ['Stripe', 'Razorpay'] },
         status: {

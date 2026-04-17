@@ -6,6 +6,7 @@ import {
 } from '../services/fitRuntimeService.js';
 import { getGoogleClientId, isGoogleAuthConfigured } from '../services/googleAuthService.js';
 import { probeMlServiceHealth } from '../services/mlGatewayService.js';
+import { isShiprocketConfigured, isShiprocketEnabled } from '../config/shiprocket.js';
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 const toPublicUrl = (value) => (/^https?:\/\/.+/i.test(normalizeUrl(value)) ? normalizeUrl(value) : '');
@@ -33,6 +34,8 @@ const getSystemBootstrap = async (req, res) => {
     const googleAuthConfigured = isGoogleAuthConfigured();
     const mlServiceEnabled = Boolean(mlServiceHealth.configured);
     const redisConfigured = isConfigured(process.env.REDIS_URL);
+    const shiprocketEnabled = isShiprocketEnabled();
+    const shiprocketConfigured = isShiprocketConfigured();
 
     return res.status(200).json({
         success: true,
@@ -79,6 +82,8 @@ const getSystemBootstrap = async (req, res) => {
                 mlServiceHealthReason: mlServiceHealth.reason || '',
                 mlServiceLatencyMs: mlServiceHealth.latencyMs,
                 redisConfigured,
+                shiprocketEnabled,
+                shiprocketConfigured,
                 marketingEmailMode,
                 marketingEmailProvider,
                 liveEmailEnabled: marketingEmailMode === 'live'
