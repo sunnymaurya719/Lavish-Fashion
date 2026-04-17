@@ -7,10 +7,12 @@ import {
 } from '../services/whatsappService.js';
 
 const webhookRouter = express.Router();
+const jsonWebhookBody = express.json({ limit: '256kb' });
 
 webhookRouter.post('/stripe', express.raw({ type: 'application/json' }), handleStripeWebhook);
 webhookRouter.post('/razorpay', express.raw({ type: 'application/json' }), handleRazorpayWebhook);
-webhookRouter.post('/shiprocket', express.json({ limit: '256kb' }), handleShiprocketWebhook);
+webhookRouter.post('/shiprocket', jsonWebhookBody, handleShiprocketWebhook);
+webhookRouter.post('/tracking-events', jsonWebhookBody, handleShiprocketWebhook);
 webhookRouter.get('/whatsapp', handleWhatsAppWebhookVerification);
 webhookRouter.post(
     '/whatsapp',
