@@ -1,10 +1,8 @@
 import orderModel from '../models/orderModel.js';
 import paymentAttemptModel from '../models/paymentAttemptModel.js';
-import shiprocketWebhookEventModel from '../models/shiprocketWebhookEventModel.js';
 import userModel from '../models/userModel.js';
 import {
     razorpayWebhookEventSchema,
-    shiprocketWebhookSchema,
     stripeWebhookEventSchema
 } from '../validation/schemas.js';
 import { beginIdempotentRequest, completeIdempotentRequest } from '../services/idempotencyService.js';
@@ -20,28 +18,25 @@ import {
 } from '../services/productInventoryService.js';
 import { publishAdminOrderUpsert } from '../services/realtimeService.js';
 import {
-    awardOrderDeliveryRewards,
     finalizeReservedLoyaltyRedemption,
     releaseReservedLoyaltyRedemption,
     releaseUserReservedLoyaltyPoints,
     reserveLoyaltyRedemption
 } from '../services/loyaltyService.js';
-import { queueAutomationEmail } from '../services/marketingAutomationService.js';
 import {
     SHIPROCKET_SYNC_STATUS,
-    buildShiprocketWebhookEventKey,
     getOrder as getShiprocketOrder,
     getPickupAddressStatus,
     refreshOrderTracking,
     syncOrderToShiprocket
 } from '../services/shiprocketService.js';
+import { sendOrderPlacedMessage } from '../services/whatsappService.js';
 import {
-    sendDeliveredMessage,
-    sendCancelledMessage,
-    sendOrderPlacedMessage,
-    sendShippedMessage,
-    sendOutForDeliveryMessage
-} from '../services/whatsappService.js';
+    ORDER_STATUS,
+    applyOrderStatusTransition,
+    normalizeOrderStatus,
+    performOrderCancellation
+} from '../services/orderStatusService.js';
 import { getShiprocketConfig, getValidToken, isShiprocketConfigured, isShiprocketEnabled } from '../config/shiprocket.js';
 import Stripe from 'stripe';
 import razorpay from 'razorpay';
@@ -54,26 +49,9 @@ const deliveryCharge = DEFAULT_DELIVERY_CHARGE;
 let stripeClient;
 let razorpayClient;
 
-const ORDER_STATUS = {
-    placed: 'Order Placed',
-    shipped: 'Shipped',
-    outForDelivery: 'Out for delivery',
-    delivered: 'Delivered',
-    cancelled: 'Cancelled'
-};
 const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MAX_SHIPROCKET_REFERENCE_LENGTH = 20;
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
-const truncateMessage = (value, maxLength = 500) => String(value || '').trim().slice(0, maxLength);
-
-const normalizeOrderStatus = (value) => String(value || '').trim().toLowerCase();
-const isFinalizedOrderStatus = (value) => {
-    const normalizedStatus = normalizeOrderStatus(value);
-    return (
-        normalizedStatus === normalizeOrderStatus(ORDER_STATUS.delivered) ||
-        normalizedStatus === normalizeOrderStatus(ORDER_STATUS.cancelled)
-    );
-};
 const resolveOrderCreatedAtMs = (order) => {
     const createdAtValue = order?.createdAt ?? order?.date ?? 0;
 
@@ -104,13 +82,6 @@ const generateShiprocketReferenceOrderId = () => {
     const timestampSegment = Date.now().toString(36).toUpperCase();
     const randomSegment = crypto.randomBytes(2).toString('hex').toUpperCase();
     return `LF${timestampSegment}${randomSegment}`.slice(0, MAX_SHIPROCKET_REFERENCE_LENGTH);
-};
-
-const getOrderDisplayCode = (order) => {
-    const referenceCode =
-        String(order?.shiprocket?.referenceOrderId || order?.publicOrderCode || order?._id || '').trim().toUpperCase();
-
-    return referenceCode || String(order?._id || '').slice(-6).toUpperCase();
 };
 
 const buildInitialShiprocketState = ({ referenceOrderId = '' } = {}) => ({
@@ -166,53 +137,6 @@ const releaseInventoryForOrder = async (order) => {
 
     await releaseInventoryForItems(order.items);
     await orderModel.findByIdAndUpdate(order._id, { inventoryReserved: false });
-};
-
-const performOrderCancellation = async ({ existingOrder, source }) => {
-    const orderId = String(existingOrder?._id || '');
-    const shouldReleaseLoyalty =
-        normalizeOrderStatus(existingOrder?.status) !== normalizeOrderStatus(ORDER_STATUS.delivered) &&
-        Number(existingOrder?.loyaltyPointsRedeemed || 0) > 0 &&
-        existingOrder?.loyaltyRedemptionStatus === 'reserved';
-    const shouldReleaseInventory = Boolean(existingOrder?.inventoryReserved);
-
-    const cancelledOrder = await orderModel.findOneAndUpdate(
-        {
-            _id: orderId,
-            status: { $ne: ORDER_STATUS.cancelled }
-        },
-        {
-            status: ORDER_STATUS.cancelled,
-            paymentStatus: 'cancelled',
-            cancelledAt: existingOrder?.cancelledAt || Date.now()
-        },
-        { new: true }
-    );
-
-    // Another request may have cancelled the order first. In that case, avoid double-releasing
-    // inventory or loyalty reservations from stale order state and return the latest record.
-    if (!cancelledOrder) {
-        return orderModel.findById(orderId);
-    }
-
-    if (shouldReleaseLoyalty) {
-        await releaseReservedLoyaltyRedemption({ order: existingOrder });
-    }
-
-    if (shouldReleaseInventory) {
-        await releaseInventoryForOrder(existingOrder);
-    }
-
-    const refreshedOrder = await orderModel.findById(orderId);
-
-    if (refreshedOrder) {
-        await publishAdminOrderUpsert({
-            order: refreshedOrder,
-            source
-        });
-    }
-
-    return refreshedOrder;
 };
 
 const markOrderAsPaid = async ({ order, gatewayEventId, paymentFields, log }) => {
@@ -666,221 +590,6 @@ const buildStripeLineItems = ({ normalizedItems, pricing }) => {
 
 const isClientOrderError = (error) =>
     isCheckoutError(error) || /insufficient stock/i.test(String(error?.message || ''));
-
-const sendStatusDrivenWhatsAppNotification = async ({ order, status, log }) => {
-    if (!order) {
-        return null;
-    }
-
-    if (status === ORDER_STATUS.shipped) {
-        return sendShippedMessage(order, { log });
-    }
-
-    if (status === ORDER_STATUS.outForDelivery) {
-        return sendOutForDeliveryMessage(order, { log });
-    }
-
-    if (status === ORDER_STATUS.delivered) {
-        return sendDeliveredMessage(order, { log });
-    }
-
-    if (status === ORDER_STATUS.cancelled) {
-        return sendCancelledMessage(order, { log });
-    }
-
-    return null;
-};
-
-const processDeliveredOrderEffects = async ({ existingOrder, updatedOrder }) => {
-    if (!updatedOrder || normalizeOrderStatus(updatedOrder.status) !== normalizeOrderStatus(ORDER_STATUS.delivered)) {
-        return;
-    }
-
-    await finalizeReservedLoyaltyRedemption({ order: updatedOrder });
-    const rewardSummary = await awardOrderDeliveryRewards(updatedOrder);
-    const refreshedOrder = await orderModel.findById(updatedOrder._id).lean();
-    const refreshedUser = await userModel.findById(existingOrder.userId).lean();
-    const orderCode = getOrderDisplayCode(updatedOrder);
-
-    await queueAutomationEmail({
-        userId: refreshedUser,
-        automationKey: 'order_delivered',
-        context: {
-            orderCode,
-            points: rewardSummary?.awardedOrderPoints || 0,
-            loyaltyPoints: Number(refreshedUser?.loyaltyPoints || 0)
-        }
-    });
-
-    if (!refreshedOrder?.reviewReminderQueuedAt) {
-        await queueAutomationEmail({
-            userId: refreshedUser,
-            automationKey: 'review_request',
-            context: {
-                orderCode
-            }
-        });
-
-        await orderModel.findByIdAndUpdate(updatedOrder._id, {
-            reviewReminderQueuedAt: Date.now()
-        });
-    }
-
-    if (rewardSummary?.referralRewards?.referrerPoints > 0 && refreshedUser?.referredBy) {
-        const referrer = await userModel.findById(refreshedUser.referredBy).lean();
-
-        if (referrer) {
-            await queueAutomationEmail({
-                userId: referrer,
-                automationKey: 'referral_reward_referrer',
-                context: {
-                    points: rewardSummary.referralRewards.referrerPoints,
-                    loyaltyPoints: Number(referrer.loyaltyPoints || 0)
-                }
-            });
-        }
-
-        await queueAutomationEmail({
-            userId: refreshedUser,
-            automationKey: 'referral_reward_new_customer',
-            context: {
-                points: rewardSummary.referralRewards.newCustomerPoints,
-                loyaltyPoints: Number(refreshedUser.loyaltyPoints || 0)
-            }
-        });
-    }
-};
-
-const validateOrderStatusTransition = (existingOrder, status) => {
-    if (
-        normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.delivered) &&
-        normalizeOrderStatus(status) !== normalizeOrderStatus(ORDER_STATUS.delivered)
-    ) {
-        const error = new Error('Delivered orders cannot be moved back into the fulfillment pipeline.');
-        error.statusCode = 400;
-        throw error;
-    }
-
-    if (
-        normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.cancelled) &&
-        normalizeOrderStatus(status) !== normalizeOrderStatus(ORDER_STATUS.cancelled)
-    ) {
-        const error = new Error('Cancelled orders cannot be moved back into the fulfillment pipeline.');
-        error.statusCode = 400;
-        throw error;
-    }
-};
-
-const applyOrderStatusTransition = async ({ existingOrder, status, source, log, additionalSet = {} }) => {
-    validateOrderStatusTransition(existingOrder, status);
-
-    if (
-        normalizeOrderStatus(status) === normalizeOrderStatus(ORDER_STATUS.cancelled) &&
-        normalizeOrderStatus(existingOrder.status) === normalizeOrderStatus(ORDER_STATUS.cancelled)
-    ) {
-        if (Object.keys(additionalSet).length > 0) {
-            return {
-                updatedOrder: await orderModel.findByIdAndUpdate(
-                    existingOrder._id,
-                    { $set: additionalSet },
-                    { new: true }
-                ),
-                shouldProcessDeliveryRewards: false
-            };
-        }
-
-        return {
-            updatedOrder: existingOrder,
-            shouldProcessDeliveryRewards: false
-        };
-    }
-
-    const updatePayload = {
-        status,
-        ...additionalSet
-    };
-    let shouldProcessDeliveryRewards = false;
-
-    if (existingOrder.paymentMethod === 'COD' && status === ORDER_STATUS.delivered && !existingOrder.payment) {
-        updatePayload.payment = true;
-        updatePayload.paymentStatus = 'paid';
-        updatePayload.paymentVerifiedAt = Date.now();
-    }
-
-    if (status === ORDER_STATUS.delivered && !existingOrder.deliveredAt) {
-        updatePayload.deliveredAt = Date.now();
-    }
-
-    let updatedOrder = null;
-
-    if (status === ORDER_STATUS.cancelled) {
-        updatedOrder = await performOrderCancellation({
-            existingOrder,
-            source
-        });
-
-        if (updatedOrder && Object.keys(additionalSet).length > 0) {
-            updatedOrder = await orderModel.findByIdAndUpdate(
-                updatedOrder._id,
-                { $set: additionalSet },
-                { new: true }
-            );
-        }
-    } else if (status === ORDER_STATUS.delivered) {
-        updatedOrder = await orderModel.findOneAndUpdate(
-            {
-                _id: existingOrder._id,
-                status: { $ne: ORDER_STATUS.delivered }
-            },
-            { $set: updatePayload },
-            { new: true }
-        );
-
-        if (updatedOrder) {
-            shouldProcessDeliveryRewards = true;
-        } else {
-            updatedOrder = await orderModel.findById(existingOrder._id);
-            if (updatedOrder && Object.keys(additionalSet).length > 0) {
-                updatedOrder = await orderModel.findByIdAndUpdate(
-                    existingOrder._id,
-                    { $set: additionalSet },
-                    { new: true }
-                );
-            }
-        }
-    } else {
-        updatedOrder = await orderModel.findByIdAndUpdate(
-            existingOrder._id,
-            { $set: updatePayload },
-            { new: true }
-        );
-    }
-
-    if (status !== ORDER_STATUS.cancelled) {
-        await publishAdminOrderUpsert({
-            order: updatedOrder,
-            source
-        });
-    }
-
-    await sendStatusDrivenWhatsAppNotification({
-        order: updatedOrder,
-        status,
-        log
-    });
-
-    if (shouldProcessDeliveryRewards && status === ORDER_STATUS.delivered) {
-        await processDeliveredOrderEffects({
-            existingOrder,
-            updatedOrder
-        });
-    }
-
-    return {
-        updatedOrder,
-        shouldProcessDeliveryRewards
-    };
-};
 
 const previewCheckoutPricing = async (req, res) => {
     try {
@@ -1733,211 +1442,6 @@ const handleRazorpayWebhook = async (req, res) => {
     }
 };
 
-const normalizeWebhookText = (value) => String(value || '').trim();
-const normalizeWebhookUpper = (value) => normalizeWebhookText(value).toUpperCase();
-const normalizeWebhookNumber = (value) => {
-    const parsedValue = Number(value);
-    return Number.isFinite(parsedValue) ? parsedValue : null;
-};
-const buildShiprocketWebhookPayloadHash = (payload = {}) =>
-    crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-
-const extractShiprocketWebhookPayload = (payload = {}) => {
-    const parsedPayload = shiprocketWebhookSchema.safeParse(payload);
-
-    if (!parsedPayload.success) {
-        const error = new Error('Invalid Shiprocket webhook payload');
-        error.statusCode = 400;
-        throw error;
-    }
-
-    const source = parsedPayload.data?.data && typeof parsedPayload.data.data === 'object'
-        ? parsedPayload.data.data
-        : parsedPayload.data;
-
-    return {
-        eventName: normalizeWebhookText(
-            source?.event ||
-                parsedPayload.data?.event ||
-                source?.event_name ||
-                parsedPayload.data?.event_name ||
-                source?.webhook_event
-        ),
-        shipmentId: normalizeWebhookNumber(
-            source?.shipment_id ||
-                source?.shipmentId ||
-                source?.shipment?.id
-        ),
-        shiprocketOrderId: normalizeWebhookNumber(
-            source?.order_id ||
-                source?.shiprocket_order_id ||
-                source?.order?.id
-        ),
-        referenceOrderId: normalizeWebhookText(
-            source?.channel_order_id ||
-                source?.reference_order_id ||
-                source?.order_number ||
-                source?.order_id_text ||
-                source?.order?.channel_order_id
-        ),
-        awbCode: normalizeWebhookText(
-            source?.awb_code ||
-                source?.awb ||
-                source?.shipment?.awb
-        ),
-        currentStatus: normalizeWebhookText(
-            source?.current_status ||
-                source?.status ||
-                source?.shipment_status ||
-                parsedPayload.data?.current_status
-        ),
-        currentStatusCode: normalizeWebhookNumber(
-            source?.current_status_id ||
-                source?.status_code ||
-                source?.shipment_status_id ||
-                parsedPayload.data?.current_status_id
-        ),
-        occurredAt: normalizeWebhookText(
-            source?.event_time ||
-                source?.timestamp ||
-                source?.updated_at ||
-                source?.occurred_at
-        ),
-        rawPayload: parsedPayload.data
-    };
-};
-
-const resolveShiprocketLocalStatus = ({ eventName = '', currentStatus = '' } = {}) => {
-    const normalizedSignals = [eventName, currentStatus]
-        .map(normalizeWebhookUpper)
-        .filter(Boolean)
-        .join(' ');
-
-    if (!normalizedSignals) {
-        return null;
-    }
-
-    if (normalizedSignals.includes('OUT FOR DELIVERY')) {
-        return ORDER_STATUS.outForDelivery;
-    }
-
-    if (normalizedSignals.includes('DELIVERED')) {
-        return ORDER_STATUS.delivered;
-    }
-
-    if (normalizedSignals.includes('CANCELLED') || normalizedSignals.includes('CANCELED')) {
-        return ORDER_STATUS.cancelled;
-    }
-
-    if (
-        normalizedSignals.includes('SHIPPED') ||
-        normalizedSignals.includes('IN TRANSIT') ||
-        normalizedSignals.includes('DISPATCH')
-    ) {
-        return ORDER_STATUS.shipped;
-    }
-
-    return null;
-};
-
-const isShiprocketWebhookAuthorized = (req) => {
-    const configuredCredentials = [
-        process.env.SHIPROCKET_WEBHOOK_TOKEN,
-        process.env.SHIPROCKET_WEBHOOK_SECRET
-    ]
-        .map((value) => normalizeWebhookText(value))
-        .filter(Boolean);
-
-    if (configuredCredentials.length === 0) {
-        return true;
-    }
-
-    const bearerValue = normalizeWebhookText(req?.headers?.authorization).replace(/^Bearer\s+/i, '');
-    const candidateValues = [
-        req?.headers?.['x-shiprocket-token'],
-        req?.headers?.['x-api-key'],
-        req?.headers?.['x-webhook-token'],
-        req?.headers?.['x-shiprocket-secret'],
-        req?.query?.token,
-        bearerValue,
-        req?.body?.token
-    ]
-        .map((value) => normalizeWebhookText(value))
-        .filter(Boolean);
-
-    return candidateValues.some((candidate) => configuredCredentials.includes(candidate));
-};
-
-const findOrderForShiprocketWebhook = async ({
-    shipmentId,
-    shiprocketOrderId,
-    awbCode,
-    referenceOrderId
-}) => {
-    if (shipmentId) {
-        const order = await orderModel.findOne({ 'shiprocket.shipmentId': shipmentId });
-        if (order) {
-            return order;
-        }
-    }
-
-    if (shiprocketOrderId) {
-        const order = await orderModel.findOne({ 'shiprocket.orderId': shiprocketOrderId });
-        if (order) {
-            return order;
-        }
-    }
-
-    if (awbCode) {
-        const order = await orderModel.findOne({ 'shiprocket.awbCode': awbCode });
-        if (order) {
-            return order;
-        }
-    }
-
-    if (referenceOrderId) {
-        return orderModel.findOne({ 'shiprocket.referenceOrderId': referenceOrderId });
-    }
-
-    return null;
-};
-
-const buildShiprocketWebhookUpdateSet = ({ existingOrder, webhookPayload }) => ({
-    'shiprocket.syncStatus': SHIPROCKET_SYNC_STATUS.synced,
-    'shiprocket.referenceOrderId':
-        normalizeWebhookText(webhookPayload.referenceOrderId) ||
-        normalizeWebhookText(existingOrder?.shiprocket?.referenceOrderId),
-    'shiprocket.orderId':
-        webhookPayload.shiprocketOrderId ??
-        existingOrder?.shiprocket?.orderId ??
-        null,
-    'shiprocket.shipmentId':
-        webhookPayload.shipmentId ??
-        existingOrder?.shiprocket?.shipmentId ??
-        null,
-    'shiprocket.awbCode':
-        normalizeWebhookText(webhookPayload.awbCode) ||
-        normalizeWebhookText(existingOrder?.shiprocket?.awbCode),
-    'shiprocket.status':
-        normalizeWebhookText(webhookPayload.currentStatus) ||
-        normalizeWebhookText(webhookPayload.eventName) ||
-        normalizeWebhookText(existingOrder?.shiprocket?.status),
-    'shiprocket.statusCode':
-        webhookPayload.currentStatusCode ??
-        existingOrder?.shiprocket?.statusCode ??
-        null,
-    'shiprocket.currentStatus':
-        normalizeWebhookText(webhookPayload.currentStatus) ||
-        normalizeWebhookText(webhookPayload.eventName) ||
-        normalizeWebhookText(existingOrder?.shiprocket?.currentStatus),
-    'shiprocket.currentStatusCode':
-        webhookPayload.currentStatusCode ??
-        existingOrder?.shiprocket?.currentStatusCode ??
-        null,
-    'shiprocket.lastWebhookAt': Date.now(),
-    'shiprocket.lastError': ''
-});
-
 const testShiprocketConnection = async (req, res) => {
     try {
         if (!isShiprocketEnabled()) {
@@ -2069,157 +1573,6 @@ const trackShiprocketOrder = async (req, res) => {
     }
 };
 
-const handleShiprocketWebhook = async (req, res) => {
-    try {
-        if (!isShiprocketWebhookAuthorized(req)) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid Shiprocket webhook credentials'
-            });
-        }
-
-        const webhookPayload = extractShiprocketWebhookPayload(req.body);
-        const eventKey = buildShiprocketWebhookEventKey(webhookPayload.rawPayload);
-        const payloadHash = buildShiprocketWebhookPayloadHash(webhookPayload.rawPayload);
-
-        try {
-            await shiprocketWebhookEventModel.create({
-                provider: 'shiprocket',
-                eventKey,
-                shipmentId: webhookPayload.shipmentId,
-                orderId: webhookPayload.shiprocketOrderId,
-                awbCode: webhookPayload.awbCode,
-                status: webhookPayload.currentStatus || webhookPayload.eventName,
-                payloadHash,
-                rawPayload: webhookPayload.rawPayload
-            });
-        } catch (error) {
-            if (error?.code === 11000) {
-                req.log?.info({ eventKey }, 'Skipping duplicate Shiprocket webhook event');
-                return res.status(200).json({ received: true, duplicate: true });
-            }
-
-            throw error;
-        }
-
-        const existingOrder = await findOrderForShiprocketWebhook({
-            shipmentId: webhookPayload.shipmentId,
-            shiprocketOrderId: webhookPayload.shiprocketOrderId,
-            awbCode: webhookPayload.awbCode,
-            referenceOrderId: webhookPayload.referenceOrderId
-        });
-
-        if (!existingOrder) {
-            req.log?.warn(
-                {
-                    shiprocketShipmentId: webhookPayload.shipmentId,
-                    shiprocketOrderId: webhookPayload.shiprocketOrderId,
-                    awbCode: webhookPayload.awbCode,
-                    referenceOrderId: webhookPayload.referenceOrderId
-                },
-                'Shiprocket webhook could not be matched to a local order'
-            );
-
-            return res.status(200).json({ received: true, matched: false });
-        }
-
-        const shiprocketUpdateSet = buildShiprocketWebhookUpdateSet({
-            existingOrder,
-            webhookPayload
-        });
-        const localStatus = resolveShiprocketLocalStatus(webhookPayload);
-
-        if (!localStatus) {
-            const updatedOrder = await orderModel.findByIdAndUpdate(
-                existingOrder._id,
-                { $set: shiprocketUpdateSet },
-                { new: true }
-            );
-
-            return res.status(200).json({
-                received: true,
-                matched: true,
-                statusUpdated: false,
-                order: updatedOrder
-            });
-        }
-
-        if (
-            isFinalizedOrderStatus(existingOrder.status) &&
-            normalizeOrderStatus(existingOrder.status) !== normalizeOrderStatus(localStatus)
-        ) {
-            const updatedOrder = await orderModel.findByIdAndUpdate(
-                existingOrder._id,
-                { $set: shiprocketUpdateSet },
-                { new: true }
-            );
-
-            req.log?.info(
-                {
-                    orderId: String(existingOrder._id),
-                    existingStatus: existingOrder.status,
-                    webhookStatus: localStatus
-                },
-                'Ignored stale Shiprocket webhook status after a local final state was reached'
-            );
-
-            return res.status(200).json({
-                received: true,
-                matched: true,
-                stale: true,
-                order: updatedOrder
-            });
-        }
-
-        try {
-            const { updatedOrder } = await applyOrderStatusTransition({
-                existingOrder,
-                status: localStatus,
-                source: 'orderController.handleShiprocketWebhook',
-                log: req.log,
-                additionalSet: shiprocketUpdateSet
-            });
-
-            return res.status(200).json({
-                received: true,
-                matched: true,
-                order: updatedOrder
-            });
-        } catch (error) {
-            if (Number(error?.statusCode) === 400) {
-                const updatedOrder = await orderModel.findByIdAndUpdate(
-                    existingOrder._id,
-                    { $set: shiprocketUpdateSet },
-                    { new: true }
-                );
-
-                req.log?.info(
-                    {
-                        orderId: String(existingOrder._id),
-                        errorMessage: error.message
-                    },
-                    'Shiprocket webhook updated integration fields but skipped local status transition'
-                );
-
-                return res.status(200).json({
-                    received: true,
-                    matched: true,
-                    ignored: true,
-                    order: updatedOrder
-                });
-            }
-
-            throw error;
-        }
-    } catch (error) {
-        req.log?.error({ err: error }, 'Failed to process Shiprocket webhook');
-        return res.status(error?.statusCode || 500).json({
-            success: false,
-            message: error?.message || 'Failed to process Shiprocket webhook'
-        });
-    }
-};
-
 
 //All Orders data for Admin panel
 const allOrders = async (req, res) => {
@@ -2339,7 +1692,6 @@ export {
     allOrders,
     cancelUserOrder,
     handleRazorpayWebhook,
-    handleShiprocketWebhook,
     handleStripeWebhook,
     getShiprocketOrderDetails,
     placeOrderCOD,

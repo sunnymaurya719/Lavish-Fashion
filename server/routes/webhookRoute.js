@@ -1,5 +1,6 @@
 import express from 'express';
-import { handleRazorpayWebhook, handleShiprocketWebhook, handleStripeWebhook } from '../controllers/orderController.js';
+import { handleRazorpayWebhook, handleStripeWebhook } from '../controllers/orderController.js';
+import { handleShiprocketWebhook } from '../controllers/webhookController.js';
 import {
     captureRawRequestBody,
     handleWhatsAppWebhookEvent,

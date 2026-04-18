@@ -49,6 +49,12 @@ ML_SERVICE_SHARED_SECRET=replace-with-a-long-random-secret
 ML_SERVICE_URL=https://your-ml-service.vercel.app
 ML_SERVICE_SHARED_SECRET=replace-with-the-same-secret-used-by-ml-service
 ML_SERVICE_TIMEOUT_MS=4000
+CRON_SECRET=replace-with-a-long-random-secret
+SHIPROCKET_WEBHOOK_API_KEY=replace-with-your-shiprocket-webhook-key
+SHIPROCKET_WEBHOOK_DRAIN_BATCH_SIZE=25
+SHIPROCKET_WEBHOOK_DRAIN_TIME_BUDGET_MS=15000
+SHIPROCKET_WEBHOOK_DRAIN_LOCK_TTL_MS=45000
+SHIPROCKET_WEBHOOK_PROCESSING_STALE_AFTER_MS=300000
 ```
 
 ### `client`
@@ -129,3 +135,93 @@ Then verify:
 5. Update `client` and `admin` to use the deployed `server` URL
 6. Deploy `client`
 7. Deploy `admin`
+
+## Shiprocket Drain Cron
+
+The server now includes a cron-safe Shiprocket webhook drain endpoint:
+
+- `GET /api/system/shiprocket/webhook-drain`
+
+This endpoint is intended for Vercel Cron Jobs and expects:
+
+- `Authorization: Bearer <CRON_SECRET>`
+
+There is also an admin-only manual trigger:
+
+- `POST /api/system/shiprocket/webhook-drain`
+
+And an admin-only queue health endpoint:
+
+- `GET /api/system/shiprocket/webhook-status`
+
+The drain job is protected with a distributed MongoDB lock, bounded batch size, a time budget, and stale-processing recovery for events that were left mid-flight by an interrupted serverless run.
+
+Example `server/vercel.json` cron snippet:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/system/shiprocket/webhook-drain",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+```
+
+Choose the schedule based on how quickly you want unmatched or failed webhook events retried. A shorter interval improves recovery speed, while the endpoint itself keeps each run bounded and overlap-safe.
+
+## Shiprocket Ops Testing
+
+Webhook enqueue test:
+
+```bash
+curl -X POST "https://your-server.vercel.app/api/webhooks/shiprocket" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: ${SHIPROCKET_WEBHOOK_API_KEY}" \
+  -d '{
+    "event_id": "ship_evt_manual_1",
+    "event": "shipment_update",
+    "shipment_id": 3201,
+    "order_id": 9201,
+    "awb_code": "AWB2001",
+    "current_status": "Shipped",
+    "current_status_id": 17,
+    "updated_at": "2026-04-18T10:00:00.000Z"
+  }'
+```
+
+Cron drain test:
+
+```bash
+curl -X GET "https://your-server.vercel.app/api/system/shiprocket/webhook-drain" \
+  -H "Authorization: Bearer ${CRON_SECRET}" \
+  -H "User-Agent: vercel-cron/1.0"
+```
+
+Manual admin drain test:
+
+```bash
+curl -X POST "https://your-server.vercel.app/api/system/shiprocket/webhook-drain" \
+  -H "Authorization: Bearer ${ADMIN_JWT}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "batchSize": 10,
+    "timeBudgetMs": 12000
+  }'
+```
+
+Queue status check:
+
+```bash
+curl -X GET "https://your-server.vercel.app/api/system/shiprocket/webhook-status" \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+The status endpoint returns:
+
+- pending queued events
+- processing event count
+- retryable failure counts
+- active lock details
+- the last drain run timestamp and latest drain summary

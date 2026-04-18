@@ -887,11 +887,26 @@ const buildShiprocketWebhookEventKey = (payload = {}) => {
     }
 
     const shipmentId = normalizeText(payload?.shipment_id || payload?.data?.shipment_id);
+    const awbCode = normalizeText(payload?.awb_code || payload?.awb || payload?.data?.awb_code);
+    const referenceOrderId = normalizeText(
+        payload?.channel_order_id ||
+            payload?.reference_order_id ||
+            payload?.order_number ||
+            payload?.data?.channel_order_id
+    );
     const currentStatus = normalizeText(payload?.current_status || payload?.data?.current_status);
     const occurredAt = normalizeText(payload?.event_time || payload?.timestamp || payload?.updated_at);
 
     if (shipmentId && currentStatus && occurredAt) {
         return `shiprocket:${shipmentId}:${currentStatus}:${occurredAt}`;
+    }
+
+    if (awbCode && currentStatus && occurredAt) {
+        return `shiprocket:${awbCode}:${currentStatus}:${occurredAt}`;
+    }
+
+    if (referenceOrderId && currentStatus && occurredAt) {
+        return `shiprocket:${referenceOrderId}:${currentStatus}:${occurredAt}`;
     }
 
     return `shiprocket:${crypto.createHash('sha256').update(fingerprintSource).digest('hex')}`;

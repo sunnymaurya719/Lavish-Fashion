@@ -1,4 +1,4 @@
-    {
+{
     "version": 2,
     "builds": [
         {
@@ -15,6 +15,12 @@
         {
             "src": "/(.*)",
             "dest": "server.js"
+        }
+    ],
+    "crons": [
+        {
+            "path": "/api/system/shiprocket/webhook-drain",
+            "schedule": "*/5 * * * *"
         }
     ]
 }
