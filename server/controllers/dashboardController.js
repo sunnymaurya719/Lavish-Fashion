@@ -271,7 +271,7 @@ const getDashboardMetrics = async (req, res) => {
 
         const healthyCount = productStats.totalProducts - productStats.archivedProducts - productStats.lowStock - productStats.outOfStock;
 
-        res.set('Cache-Control', 'private, max-age=30');
+        res.set('Cache-Control', 'private, no-store, max-age=0');
         return res.status(200).json({
             success: true,
             metrics: {

@@ -1,8 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { BACKEND_URL } from '../config/api';
+import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
+
+const realtimeEnabled = String(import.meta.env.VITE_REALTIME_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const DASHBOARD_REFRESH_DEBOUNCE_MS = 1200;
+const DASHBOARD_FALLBACK_REFRESH_MS = 60000;
 
 const formatCurrency = (value, currency = 'INR') =>
   new Intl.NumberFormat('en-IN', {
@@ -26,12 +31,37 @@ const formatDate = (value) => {
   });
 };
 
+const formatSyncTime = (value) => {
+  if (!value) {
+    return 'Not yet';
+  }
+
+  return new Date(value).toLocaleString('en-IN', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
 const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus }) => {
   const [metrics, setMetrics] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastMetricsSyncAt, setLastMetricsSyncAt] = useState('');
+  const [liveUpdatesStatus, setLiveUpdatesStatus] = useState({ status: 'idle', message: '' });
+  const hasMetricsRef = useRef(false);
+  const scheduledRefreshTimerRef = useRef(null);
+  const processedEventIdsRef = useRef(new Set());
 
-  const fetchDashboard = useCallback(async () => {
-    setIsLoading(true);
+  const fetchDashboard = useCallback(async ({ silent = false, showToastOnError = true } = {}) => {
+    const backgroundRefresh = silent || hasMetricsRef.current;
+
+    if (backgroundRefresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
 
     try {
       const response = await axios.get(BACKEND_URL + '/api/admin/dashboard', {
@@ -39,21 +69,113 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
       });
 
       if (!response.data.success) {
-        toast.error(response.data.message || 'Failed to fetch dashboard metrics');
+        if (showToastOnError) {
+          toast.error(response.data.message || 'Failed to fetch dashboard metrics');
+        }
         return;
       }
 
       setMetrics(response.data.metrics);
+      hasMetricsRef.current = true;
+      setLastMetricsSyncAt(new Date().toISOString());
     } catch (error) {
-      toast.error(error?.response?.data?.message || error.message);
+      if (showToastOnError) {
+        toast.error(error?.response?.data?.message || error.message);
+      }
     } finally {
-      setIsLoading(false);
+      if (backgroundRefresh) {
+        setIsRefreshing(false);
+      } else {
+        setIsLoading(false);
+      }
     }
   }, [token]);
 
-  useEffect(() => {
-    fetchDashboard();
+  const scheduleDashboardRefresh = useCallback(({ delayMs = DASHBOARD_REFRESH_DEBOUNCE_MS } = {}) => {
+    if (scheduledRefreshTimerRef.current) {
+      clearTimeout(scheduledRefreshTimerRef.current);
+    }
+
+    scheduledRefreshTimerRef.current = setTimeout(() => {
+      scheduledRefreshTimerRef.current = null;
+      void fetchDashboard({ silent: true, showToastOnError: false });
+    }, delayMs);
   }, [fetchDashboard]);
+
+  const handleManualRefresh = useCallback(async () => {
+    await Promise.all([
+      Promise.resolve(onRefreshServerStatus?.()),
+      fetchDashboard({ silent: false, showToastOnError: true }),
+    ]);
+  }, [fetchDashboard, onRefreshServerStatus]);
+
+  useEffect(() => {
+    void fetchDashboard();
+  }, [fetchDashboard]);
+
+  useEffect(() => {
+    if (!token || !realtimeEnabled) {
+      setLiveUpdatesStatus({ status: 'disabled', message: 'Live updates disabled' });
+      return undefined;
+    }
+
+    const disconnect = createAdminOrderRealtimeClient({
+      token,
+      onConnectionStatusChange: ({ status, message }) => {
+        setLiveUpdatesStatus({ status, message });
+      },
+      onOrderUpsert: (eventPayload, message) => {
+        const eventId = String(eventPayload?.eventId || message?.id || '');
+
+        if (eventId) {
+          if (processedEventIdsRef.current.has(eventId)) {
+            return;
+          }
+
+          processedEventIdsRef.current.add(eventId);
+
+          if (processedEventIdsRef.current.size > 500) {
+            const iterator = processedEventIdsRef.current.values();
+            const oldest = iterator.next().value;
+
+            if (oldest) {
+              processedEventIdsRef.current.delete(oldest);
+            }
+          }
+        }
+
+        if (!eventPayload?.order?._id) {
+          return;
+        }
+
+        scheduleDashboardRefresh();
+      },
+    });
+
+    return () => {
+      disconnect?.();
+      processedEventIdsRef.current.clear();
+    };
+  }, [scheduleDashboardRefresh, token]);
+
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    const intervalId = setInterval(() => {
+      void fetchDashboard({ silent: true, showToastOnError: false });
+    }, DASHBOARD_FALLBACK_REFRESH_MS);
+
+    return () => clearInterval(intervalId);
+  }, [fetchDashboard, token]);
+
+  useEffect(() => () => {
+    if (scheduledRefreshTimerRef.current) {
+      clearTimeout(scheduledRefreshTimerRef.current);
+      scheduledRefreshTimerRef.current = null;
+    }
+  }, []);
 
   const summaryCards = useMemo(() => {
     if (!metrics) {
@@ -164,16 +286,32 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
               <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
                 Media {serverBootstrap?.features?.reviewMediaEnabled ? 'on' : 'off'}
               </span>
+              <span
+                className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'
+                title={liveUpdatesStatus.message || 'Live dashboard metrics'}
+              >
+                Live {liveUpdatesStatus.status === 'connected'
+                  ? 'on'
+                  : liveUpdatesStatus.status === 'connecting'
+                    ? 'syncing'
+                    : liveUpdatesStatus.status === 'disabled'
+                      ? 'off'
+                      : 'reconnecting'}
+              </span>
+              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
+                Sync {isRefreshing ? 'refreshing' : formatSyncTime(lastMetricsSyncAt)}
+              </span>
             </div>
           </div>
 
           <div className='flex flex-wrap gap-3'>
             <button
               type='button'
-              onClick={onRefreshServerStatus}
-              className='rounded-2xl border border-slate-600 px-4 py-3 text-sm font-medium text-white'
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className='rounded-2xl border border-slate-600 px-4 py-3 text-sm font-medium text-white disabled:opacity-60'
             >
-              Refresh connection
+              {isRefreshing ? 'Refreshing...' : 'Refresh live data'}
             </button>
             <Link to='/products/new' className='rounded-2xl bg-white px-4 py-3 text-sm font-medium text-slate-900'>
               Add product
