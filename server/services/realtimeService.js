@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import Ably from 'ably';
 import logger from '../config/logger.js';
+import { decorateOrderWithShiprocketPricingAudit } from './shiprocketService.js';
 
 const REALTIME_CHANNEL_ADMIN_ORDERS = 'admin.orders';
 const REALTIME_EVENT_ORDER_UPSERT = 'order.upsert';
@@ -81,7 +82,7 @@ const normalizeOrderForRealtime = (order) => {
         normalizedOrder.items = [];
     }
 
-    return normalizedOrder;
+    return decorateOrderWithShiprocketPricingAudit(normalizedOrder);
 };
 
 const createOrderUpsertEvent = ({ order, source = 'unknown' }) => {

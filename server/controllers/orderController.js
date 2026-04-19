@@ -25,11 +25,19 @@ import {
 } from '../services/loyaltyService.js';
 import {
     SHIPROCKET_SYNC_STATUS,
+    buildShiprocketPricingSnapshot,
+    decorateOrderWithShiprocketPricingAudit,
     getOrder as getShiprocketOrder,
     getPickupAddressStatus,
     refreshOrderTracking,
-    syncOrderToShiprocket
+    syncOrderToShiprocket,
+    verifyOrderPricingAgainstLiveShiprocket
 } from '../services/shiprocketService.js';
+import {
+    cancelShiprocketBulkLiveVerificationJob,
+    getShiprocketBulkVerifyJobStatus,
+    startShiprocketBulkLiveVerificationJob
+} from '../services/shiprocketBulkLiveVerificationService.js';
 import { sendOrderPlacedMessage } from '../services/whatsappService.js';
 import {
     ORDER_STATUS,
@@ -51,6 +59,8 @@ let razorpayClient;
 
 const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MAX_SHIPROCKET_REFERENCE_LENGTH = 20;
+const DEFAULT_SHIPROCKET_SNAPSHOT_BACKFILL_LIMIT = 200;
+const MAX_SHIPROCKET_SNAPSHOT_BACKFILL_LIMIT = 1000;
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const resolveOrderCreatedAtMs = (order) => {
     const createdAtValue = order?.createdAt ?? order?.date ?? 0;
@@ -1500,7 +1510,7 @@ const retryShiprocketSync = async (req, res) => {
             success: true,
             message: 'Shiprocket sync completed',
             syncResult,
-            order: refreshedOrder
+            order: decorateOrderWithShiprocketPricingAudit(refreshedOrder)
         });
     } catch (error) {
         req.log?.error({ err: error }, 'Manual Shiprocket sync retry failed');
@@ -1524,7 +1534,7 @@ const getShiprocketOrderDetails = async (req, res) => {
             return res.status(200).json({
                 success: true,
                 message: 'Order has not been synced to Shiprocket yet',
-                order
+                order: decorateOrderWithShiprocketPricingAudit(order)
             });
         }
 
@@ -1534,7 +1544,7 @@ const getShiprocketOrderDetails = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            order,
+            order: decorateOrderWithShiprocketPricingAudit(order),
             shiprocketOrder
         });
     } catch (error) {
@@ -1561,7 +1571,7 @@ const trackShiprocketOrder = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            order: result.order,
+            order: decorateOrderWithShiprocketPricingAudit(result.order),
             tracking: result.tracking
         });
     } catch (error) {
@@ -1569,6 +1579,211 @@ const trackShiprocketOrder = async (req, res) => {
         return res.status(error?.statusCode || 500).json({
             success: false,
             message: error?.message || 'Failed to refresh Shiprocket order tracking'
+        });
+    }
+};
+
+const buildMissingShiprocketPricingSnapshotQuery = () => ({
+    'shiprocket.syncStatus': SHIPROCKET_SYNC_STATUS.synced,
+    $or: [
+        { 'shiprocket.pricingSnapshot': { $exists: false } },
+        { 'shiprocket.pricingSnapshot': null }
+    ]
+});
+
+const backfillShiprocketPricingSnapshots = async (req, res) => {
+    try {
+        const requestedLimit = Number(req.body?.limit || DEFAULT_SHIPROCKET_SNAPSHOT_BACKFILL_LIMIT);
+        const limit = Math.min(
+            MAX_SHIPROCKET_SNAPSHOT_BACKFILL_LIMIT,
+            Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : DEFAULT_SHIPROCKET_SNAPSHOT_BACKFILL_LIMIT)
+        );
+        const dryRun = req.body?.dryRun === true;
+        const query = buildMissingShiprocketPricingSnapshotQuery();
+        const matchedCount = await orderModel.countDocuments(query);
+        const targetOrders = await orderModel.find(query).sort({ date: -1 }).limit(limit).lean();
+
+        if (dryRun) {
+            return res.status(200).json({
+                success: true,
+                dryRun: true,
+                matchedCount,
+                processedCount: targetOrders.length,
+                remainingCount: Math.max(0, matchedCount - targetOrders.length),
+                sampleOrders: targetOrders.slice(0, 10).map((order) => ({
+                    _id: String(order._id || ''),
+                    referenceOrderId: order?.shiprocket?.referenceOrderId || '',
+                    amount: Number(order.amount || 0),
+                    syncStatus: order?.shiprocket?.syncStatus || ''
+                }))
+            });
+        }
+
+        if (targetOrders.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'No Shiprocket pricing snapshots needed backfill',
+                matchedCount,
+                processedCount: 0,
+                updatedCount: 0,
+                remainingCount: 0
+            });
+        }
+
+        const capturedAt = Date.now();
+        const bulkOperations = targetOrders.map((order) => ({
+            updateOne: {
+                filter: { _id: order._id },
+                update: {
+                    $set: {
+                        'shiprocket.pricingSnapshot': buildShiprocketPricingSnapshot(order, {
+                            capturedAt,
+                            source: 'shiprocket_backfill_v2'
+                        })
+                    }
+                }
+            }
+        }));
+
+        const bulkResult = await orderModel.bulkWrite(bulkOperations, { ordered: false });
+        const updatedCount = Number(bulkResult?.modifiedCount || bulkResult?.matchedCount || 0);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Shiprocket pricing snapshot backfill completed',
+            matchedCount,
+            processedCount: targetOrders.length,
+            updatedCount,
+            remainingCount: Math.max(0, matchedCount - targetOrders.length),
+            updatedOrderIds: targetOrders.slice(0, 20).map((order) => String(order._id || ''))
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to backfill Shiprocket pricing snapshots');
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Failed to backfill Shiprocket pricing snapshots'
+        });
+    }
+};
+
+const verifyShiprocketPricingLive = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const order = await orderModel.findById(orderId);
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        const verification = await verifyOrderPricingAgainstLiveShiprocket(order, {
+            log: req.log,
+            persist: true
+        });
+        const refreshedOrder = await orderModel.findById(orderId);
+
+        await publishAdminOrderUpsert({
+            order: refreshedOrder,
+            source: 'orderController.verifyShiprocketPricingLive'
+        });
+
+        return res.status(200).json({
+            success: true,
+            message:
+                verification.status === 'clear'
+                    ? 'Live Shiprocket pricing matches the expected payload'
+                    : 'Live Shiprocket pricing requires review',
+            order: decorateOrderWithShiprocketPricingAudit(refreshedOrder),
+            verification
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to verify live Shiprocket pricing');
+        return res.status(error?.statusCode || 500).json({
+            success: false,
+            message: error?.message || 'Failed to verify live Shiprocket pricing'
+        });
+    }
+};
+
+const startShiprocketBulkLiveVerification = async (req, res) => {
+    try {
+        const requestedBy = normalizeEmail(req.admin?.email || process.env.ADMIN_EMAIL || 'admin');
+        const result = await startShiprocketBulkLiveVerificationJob({
+            config: {
+                limit: req.body?.limit,
+                requestsPerMinute: req.body?.requestsPerMinute,
+                scope: req.body?.scope
+            },
+            requestedBy,
+            trigger: 'admin_api',
+            log: req.log
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: result.started
+                ? 'Shiprocket bulk live verification started'
+                : result.reason === 'no_target_orders'
+                  ? 'No eligible Shiprocket orders need live verification right now'
+                  : 'A Shiprocket bulk live verification run is already in progress',
+            started: result.started,
+            skipped: result.skipped,
+            config: result.config,
+            targetCount: result.targetCount || 0,
+            job: result.job
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to start Shiprocket bulk live verification');
+        return res.status(error?.statusCode || 500).json({
+            success: false,
+            message: error?.message || 'Failed to start Shiprocket bulk live verification'
+        });
+    }
+};
+
+const getShiprocketBulkLiveVerificationJob = async (req, res) => {
+    try {
+        const job = await getShiprocketBulkVerifyJobStatus();
+
+        return res.status(200).json({
+            success: true,
+            job
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to load Shiprocket bulk live verification status');
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Failed to load Shiprocket bulk live verification status'
+        });
+    }
+};
+
+const cancelShiprocketBulkLiveVerification = async (req, res) => {
+    try {
+        const requestedBy = normalizeEmail(req.admin?.email || process.env.ADMIN_EMAIL || 'admin');
+        const result = await cancelShiprocketBulkLiveVerificationJob({
+            requestedBy,
+            reason: req.body?.reason || 'admin_request'
+        });
+
+        return res.status(200).json({
+            success: true,
+            message:
+                result.reason === 'cancel_requested'
+                    ? 'Shiprocket bulk live verification cancellation has been requested'
+                    : result.reason === 'stale_job_cancelled'
+                      ? 'The stale Shiprocket bulk verification run was cancelled'
+                      : result.reason === 'cancel_already_requested'
+                        ? 'Cancellation was already requested for the active Shiprocket run'
+                        : 'No active Shiprocket bulk verification run is currently running',
+            cancelled: result.cancelled,
+            reason: result.reason,
+            job: result.job
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to cancel Shiprocket bulk live verification');
+        return res.status(error?.statusCode || 500).json({
+            success: false,
+            message: error?.message || 'Failed to cancel Shiprocket bulk live verification'
         });
     }
 };
@@ -1585,7 +1800,10 @@ const allOrders = async (req, res) => {
                 ]
             })
             .sort({ date: -1 });
-        res.status(200).json({ success: true, orders });
+        res.status(200).json({
+            success: true,
+            orders: orders.map((order) => decorateOrderWithShiprocketPricingAudit(order)).filter(Boolean)
+        });
     } catch (error) {
         req.log?.error({ err: error }, 'Failed to fetch all orders');
         res.status(500).json({ success: false, message: 'Failed to fetch orders' });
@@ -1677,7 +1895,11 @@ const updateOrderStatus = async (req, res) => {
             log: req.log
         });
 
-        res.status(200).json({ success: true, message: 'Status Updated', order: updatedOrder });
+        res.status(200).json({
+            success: true,
+            message: 'Status Updated',
+            order: decorateOrderWithShiprocketPricingAudit(updatedOrder)
+        });
     } catch (error) {
         if (Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
             return res.status(error.statusCode).json({ success: false, message: error.message });
@@ -1690,7 +1912,10 @@ const updateOrderStatus = async (req, res) => {
 
 export {
     allOrders,
+    backfillShiprocketPricingSnapshots,
+    cancelShiprocketBulkLiveVerification,
     cancelUserOrder,
+    getShiprocketBulkLiveVerificationJob,
     handleRazorpayWebhook,
     handleStripeWebhook,
     getShiprocketOrderDetails,
@@ -1699,10 +1924,12 @@ export {
     placeOrderStripe,
     previewCheckoutPricing,
     retryShiprocketSync,
+    startShiprocketBulkLiveVerification,
     testShiprocketConnection,
     trackShiprocketOrder,
     updateOrderStatus,
     userOrders,
+    verifyShiprocketPricingLive,
     verifyRazorpay,
     verifyStripe
 }

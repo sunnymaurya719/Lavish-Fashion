@@ -18,6 +18,7 @@ const SHIPROCKET_SYNC_STATUS = {
     pendingRetry: 'pending_retry',
     failed: 'failed'
 };
+const SHIPROCKET_PRICING_FORMULA_VERSION = 2;
 
 const normalizeText = (value) => String(value || '').trim();
 const normalizeDigits = (value) => normalizeText(value).replace(/[^\d]/g, '');
@@ -29,6 +30,462 @@ const roundCurrency = (value) => Number(Number(value || 0).toFixed(2));
 const truncateText = (value, maxLength = 500) => normalizeText(value).slice(0, maxLength);
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isAxios401Error = (error) => Number(error?.response?.status) === 401;
+const calculateOrderItemsSubtotal = (items = []) =>
+    roundCurrency(
+        Array.isArray(items)
+            ? items.reduce(
+                (sum, item) =>
+                    sum + Math.max(0, Number(item?.price || 0)) * Math.max(0, Number(item?.quantity || 0)),
+                0
+            )
+            : 0
+    );
+const resolveShiprocketPricingContext = (order = {}) => {
+    const shippingCharges = roundCurrency(order?.deliveryFee);
+    const totalDiscount = roundCurrency(order?.discountAmount);
+    const finalAmountValue = Number(order?.amount);
+    const hasFinalAmount = Number.isFinite(finalAmountValue);
+    const finalAmount = hasFinalAmount ? roundCurrency(finalAmountValue) : null;
+    const storedSubtotalBeforeDiscount = roundCurrency(order?.subtotal);
+    const derivedItemsSubtotal = calculateOrderItemsSubtotal(order?.items);
+    const fallbackSubtotalBeforeDiscount =
+        storedSubtotalBeforeDiscount > 0 ? storedSubtotalBeforeDiscount : derivedItemsSubtotal;
+    const subtotalAfterDiscountFromBreakdown = roundCurrency(
+        Math.max(0, fallbackSubtotalBeforeDiscount - totalDiscount)
+    );
+    const subTotal =
+        finalAmount !== null
+            ? roundCurrency(Math.max(0, finalAmount - shippingCharges))
+            : subtotalAfterDiscountFromBreakdown;
+    const expectedFinalAmountFromBreakdown = roundCurrency(subtotalAfterDiscountFromBreakdown + shippingCharges);
+
+    return {
+        subTotal,
+        shippingCharges,
+        totalDiscount,
+        finalAmount,
+        storedSubtotalBeforeDiscount,
+        derivedItemsSubtotal,
+        subtotalAfterDiscountFromBreakdown,
+        breakdownAmountDelta:
+            finalAmount === null ? null : roundCurrency(finalAmount - expectedFinalAmountFromBreakdown)
+    };
+};
+const normalizeShiprocketPricingSnapshot = (snapshot) => {
+    if (!isObject(snapshot) || Object.keys(snapshot).length === 0) {
+        return null;
+    }
+
+    const normalizedFormulaVersion = Number(snapshot?.formulaVersion);
+    const normalizedCapturedAt =
+        snapshot?.capturedAt === null || snapshot?.capturedAt === undefined || snapshot?.capturedAt === ''
+            ? null
+            : normalizeNumber(snapshot?.capturedAt);
+    const normalizedDerivedFinalAmount = Number(snapshot?.derivedFinalAmount);
+
+    return {
+        formulaVersion:
+            Number.isFinite(normalizedFormulaVersion) && normalizedFormulaVersion > 0
+                ? Math.floor(normalizedFormulaVersion)
+                : SHIPROCKET_PRICING_FORMULA_VERSION,
+        source: normalizeText(snapshot?.source),
+        capturedAt: normalizedCapturedAt,
+        itemsSubtotal: roundCurrency(Math.max(0, Number(snapshot?.itemsSubtotal || 0))),
+        localSubtotal: roundCurrency(Math.max(0, Number(snapshot?.localSubtotal || 0))),
+        totalDiscount: roundCurrency(Math.max(0, Number(snapshot?.totalDiscount || 0))),
+        shippingCharges: roundCurrency(Math.max(0, Number(snapshot?.shippingCharges || 0))),
+        subTotal: roundCurrency(Math.max(0, Number(snapshot?.subTotal || 0))),
+        localAmount: roundCurrency(Math.max(0, Number(snapshot?.localAmount || 0))),
+        derivedFinalAmount: roundCurrency(
+            Math.max(
+                0,
+                Number.isFinite(normalizedDerivedFinalAmount)
+                    ? normalizedDerivedFinalAmount
+                    :
+                    Number(snapshot?.subTotal || 0) + Number(snapshot?.shippingCharges || 0)
+            )
+        )
+    };
+};
+const buildShiprocketPricingSnapshot = (order = {}, options = {}) => {
+    const pricing = resolveShiprocketPricingContext(order);
+    const capturedAt = normalizeNumber(options?.capturedAt);
+
+    return normalizeShiprocketPricingSnapshot({
+        formulaVersion: SHIPROCKET_PRICING_FORMULA_VERSION,
+        source: normalizeText(options?.source || 'shiprocket_payload_v2'),
+        capturedAt,
+        itemsSubtotal: pricing.derivedItemsSubtotal,
+        localSubtotal: pricing.storedSubtotalBeforeDiscount,
+        totalDiscount: pricing.totalDiscount,
+        shippingCharges: pricing.shippingCharges,
+        subTotal: pricing.subTotal,
+        localAmount:
+            pricing.finalAmount !== null
+                ? pricing.finalAmount
+                : roundCurrency(pricing.subTotal + pricing.shippingCharges),
+        derivedFinalAmount: roundCurrency(pricing.subTotal + pricing.shippingCharges)
+    });
+};
+const pickFirstFiniteCurrency = (...values) => {
+    for (const value of values) {
+        if (value === null || value === undefined || value === '') {
+            continue;
+        }
+
+        const parsedValue = Number(value);
+        if (Number.isFinite(parsedValue)) {
+            return roundCurrency(parsedValue);
+        }
+    }
+
+    return null;
+};
+const calculateShiprocketProductSubtotal = (products = []) =>
+    roundCurrency(
+        Array.isArray(products)
+            ? products.reduce((sum, product) => {
+                const quantity = Math.max(0, Number(product?.quantity || product?.units || 0));
+                const explicitLineTotal = pickFirstFiniteCurrency(product?.net_total, product?.total);
+                const unitPrice = pickFirstFiniteCurrency(
+                    product?.selling_price,
+                    product?.price,
+                    product?.cost,
+                    quantity > 0 ? Number(product?.net_total || 0) / quantity : null
+                );
+
+                if (explicitLineTotal !== null) {
+                    return sum + explicitLineTotal;
+                }
+
+                if (unitPrice !== null && quantity > 0) {
+                    return sum + unitPrice * quantity;
+                }
+
+                return sum;
+            }, 0)
+            : 0
+    );
+const calculateShiprocketProductDiscount = (products = []) =>
+    roundCurrency(
+        Array.isArray(products)
+            ? products.reduce((sum, product) => {
+                const quantity = Math.max(0, Number(product?.quantity || product?.units || 0));
+                const explicitDiscount = pickFirstFiniteCurrency(
+                    product?.discount_including_tax,
+                    product?.discount
+                );
+
+                if (explicitDiscount !== null) {
+                    return sum + explicitDiscount * Math.max(1, quantity);
+                }
+
+                return sum;
+            }, 0)
+            : 0
+    );
+const extractShiprocketOrderRoot = (payload = {}) => {
+    if (isObject(payload?.data)) {
+        return payload.data;
+    }
+
+    return isObject(payload) ? payload : {};
+};
+const compareShiprocketPricingSnapshots = (baselineSnapshot, comparisonSnapshot) => {
+    const baseline = normalizeShiprocketPricingSnapshot(baselineSnapshot);
+    const comparison = normalizeShiprocketPricingSnapshot(comparisonSnapshot);
+
+    if (!baseline || !comparison) {
+        return null;
+    }
+
+    const deltas = {
+        subTotalDelta: roundCurrency(comparison.subTotal - baseline.subTotal),
+        shippingChargesDelta: roundCurrency(comparison.shippingCharges - baseline.shippingCharges),
+        totalDiscountDelta: roundCurrency(comparison.totalDiscount - baseline.totalDiscount),
+        derivedFinalAmountDelta: roundCurrency(comparison.derivedFinalAmount - baseline.derivedFinalAmount)
+    };
+
+    return {
+        ...deltas,
+        hasDifference: Object.values(deltas).some((delta) => Math.abs(Number(delta || 0)) > 0.01)
+    };
+};
+const extractShiprocketOrderPricingSnapshot = (payload = {}, options = {}) => {
+    const orderRoot = extractShiprocketOrderRoot(payload);
+
+    if (!isObject(orderRoot) || Object.keys(orderRoot).length === 0) {
+        return null;
+    }
+
+    const products = Array.isArray(orderRoot?.products) ? orderRoot.products : [];
+    const itemsSubtotal = calculateShiprocketProductSubtotal(products);
+    const productDiscount = calculateShiprocketProductDiscount(products);
+    const shippingCharges = pickFirstFiniteCurrency(
+        orderRoot?.others?.shipping_charges,
+        orderRoot?.shipping_charges,
+        orderRoot?.shipments?.cost
+    );
+    const giftwrapCharges = pickFirstFiniteCurrency(orderRoot?.giftwrap_charges);
+    const transactionCharges = pickFirstFiniteCurrency(
+        orderRoot?.transaction_charges,
+        orderRoot?.others?.transaction_charges
+    );
+    const totalDiscount = pickFirstFiniteCurrency(
+        orderRoot?.total_discount,
+        orderRoot?.other_discounts,
+        orderRoot?.discount,
+        productDiscount
+    );
+    const derivedFinalAmount = pickFirstFiniteCurrency(
+        orderRoot?.net_total,
+        orderRoot?.total,
+        orderRoot?.total_inr
+    );
+    const explicitSubTotal = pickFirstFiniteCurrency(orderRoot?.sub_total);
+    const normalizedShippingCharges = shippingCharges ?? 0;
+    const normalizedGiftwrapCharges = giftwrapCharges ?? 0;
+    const normalizedTransactionCharges = transactionCharges ?? 0;
+    const normalizedDerivedFinalAmount =
+        derivedFinalAmount ??
+        roundCurrency(
+            Math.max(
+                0,
+                itemsSubtotal - Number(totalDiscount || 0) + normalizedShippingCharges + normalizedGiftwrapCharges + normalizedTransactionCharges
+            )
+        );
+    const normalizedSubTotal =
+        explicitSubTotal ??
+        roundCurrency(
+            Math.max(
+                0,
+                normalizedDerivedFinalAmount - normalizedShippingCharges - normalizedGiftwrapCharges - normalizedTransactionCharges
+            )
+        );
+
+    return normalizeShiprocketPricingSnapshot({
+        formulaVersion: SHIPROCKET_PRICING_FORMULA_VERSION,
+        source: normalizeText(options?.source || 'shiprocket_live_order_details'),
+        capturedAt: options?.capturedAt ?? Date.now(),
+        itemsSubtotal,
+        localSubtotal: itemsSubtotal,
+        totalDiscount: totalDiscount ?? 0,
+        shippingCharges: normalizedShippingCharges,
+        subTotal: normalizedSubTotal,
+        localAmount: normalizedDerivedFinalAmount,
+        derivedFinalAmount: normalizedDerivedFinalAmount
+    });
+};
+const buildShiprocketLivePricingVerification = (order = {}, shiprocketOrder = {}, options = {}) => {
+    const checkedAt = normalizeNumber(options?.checkedAt) || Date.now();
+    const expectedShiprocket = buildShiprocketPricingSnapshot(order, {
+        source: 'computed_current',
+        capturedAt: null
+    });
+    const liveShiprocketSnapshot =
+        normalizeShiprocketPricingSnapshot(options?.liveShiprocketSnapshot) ||
+        normalizeShiprocketPricingSnapshot(shiprocketOrder?.pricingSnapshot) ||
+        extractShiprocketOrderPricingSnapshot(shiprocketOrder?.raw || shiprocketOrder, {
+            source: 'shiprocket_live_order_details',
+            capturedAt: checkedAt
+        });
+    const snapshotDelta = compareShiprocketPricingSnapshots(expectedShiprocket, liveShiprocketSnapshot);
+    const issues = [];
+    const addIssue = (code, severity, message) => {
+        issues.push({
+            code,
+            severity,
+            message: normalizeText(message)
+        });
+    };
+
+    if (!liveShiprocketSnapshot) {
+        addIssue(
+            'shiprocket_live_pricing_unavailable',
+            'warning',
+            'Live Shiprocket order details did not expose enough pricing information to verify this order.'
+        );
+    }
+
+    if (snapshotDelta?.hasDifference) {
+        addIssue(
+            'shiprocket_live_mismatch',
+            'error',
+            'Live Shiprocket order details differ from the current expected payload for this order.'
+        );
+    }
+
+    const hasMismatch = issues.some((issue) => issue.severity === 'error');
+    const hasWarning = issues.some((issue) => issue.severity === 'warning');
+
+    return {
+        checkedAt,
+        status: hasMismatch ? 'mismatch' : hasWarning ? 'warning' : 'clear',
+        hasMismatch,
+        hasWarning,
+        issueCount: issues.length,
+        issueCodes: issues.map((issue) => issue.code),
+        expectedShiprocket,
+        liveShiprocketSnapshot: liveShiprocketSnapshot
+            ? {
+                ...liveShiprocketSnapshot,
+                ...(snapshotDelta || {})
+            }
+            : null,
+        issues,
+        shiprocketOrder: {
+            shiprocketOrderId: shiprocketOrder?.shiprocketOrderId ?? null,
+            shipmentId: shiprocketOrder?.shipmentId ?? null,
+            status: normalizeText(shiprocketOrder?.status),
+            statusCode: shiprocketOrder?.statusCode ?? null
+        }
+    };
+};
+const isShiprocketOrderTrackedRemotely = (order = {}) =>
+    Boolean(
+        order?.shiprocket?.shipmentId ||
+            order?.shiprocket?.orderId ||
+            normalizeText(order?.shiprocket?.syncStatus) === SHIPROCKET_SYNC_STATUS.synced
+    );
+const buildShiprocketPricingAudit = (order = {}) => {
+    const pricing = resolveShiprocketPricingContext(order);
+    const expectedLocalAmount = roundCurrency(pricing.subtotalAfterDiscountFromBreakdown + pricing.shippingCharges);
+    const expectedShiprocket = buildShiprocketPricingSnapshot(order, {
+        source: 'computed_current',
+        capturedAt: null
+    });
+    const storedShiprocketSnapshot = normalizeShiprocketPricingSnapshot(order?.shiprocket?.pricingSnapshot);
+    const liveShiprocketSnapshot = normalizeShiprocketPricingSnapshot(order?.shiprocket?.livePricingSnapshot);
+    const liveVerificationStatus = normalizeText(order?.shiprocket?.livePricingVerificationStatus) || 'not_verified';
+    const liveVerificationError = normalizeText(order?.shiprocket?.livePricingVerificationError);
+    const liveVerificationCheckedAt = normalizeNumber(order?.shiprocket?.livePricingVerifiedAt);
+    const issues = [];
+    const addIssue = (code, severity, message) => {
+        issues.push({
+            code,
+            severity,
+            message: normalizeText(message)
+        });
+    };
+
+    if (pricing.finalAmount !== null && Math.abs(Number(pricing.breakdownAmountDelta || 0)) > 0.01) {
+        addIssue(
+            'local_breakdown_mismatch',
+            'error',
+            'Local order amount does not match subtotal + delivery fee - discount.'
+        );
+    }
+
+    if (
+        pricing.storedSubtotalBeforeDiscount > 0 &&
+        pricing.derivedItemsSubtotal > 0 &&
+        Math.abs(pricing.storedSubtotalBeforeDiscount - pricing.derivedItemsSubtotal) > 0.01
+    ) {
+        addIssue(
+            'subtotal_item_snapshot_mismatch',
+            'warning',
+            'Stored subtotal differs from the summed order item snapshot.'
+        );
+    }
+
+    if (isShiprocketOrderTrackedRemotely(order) && !storedShiprocketSnapshot) {
+        addIssue(
+            'missing_shiprocket_pricing_snapshot',
+            'warning',
+            'This Shiprocket-synced order has no persisted pricing snapshot, so the remote amount cannot be auto-verified.'
+        );
+    }
+
+    const snapshotDelta = compareShiprocketPricingSnapshots(expectedShiprocket, storedShiprocketSnapshot);
+    const liveSnapshotDelta = compareShiprocketPricingSnapshots(expectedShiprocket, liveShiprocketSnapshot);
+
+    if (snapshotDelta?.hasDifference) {
+        addIssue(
+            'shiprocket_snapshot_mismatch',
+            'error',
+            'The last Shiprocket pricing snapshot does not match the current expected payload for this order.'
+        );
+    }
+
+    if (liveVerificationStatus === 'failed' && liveVerificationError) {
+        addIssue(
+            'shiprocket_live_verification_failed',
+            'warning',
+            `Live Shiprocket verification failed: ${liveVerificationError}`
+        );
+    }
+
+    if (liveSnapshotDelta?.hasDifference) {
+        addIssue(
+            'shiprocket_live_mismatch',
+            'error',
+            'Live Shiprocket order details currently differ from the expected payload for this order.'
+        );
+    }
+
+    const hasMismatch = issues.some((issue) => issue.severity === 'error');
+    const hasWarning = issues.some((issue) => issue.severity === 'warning');
+
+    return {
+        status: hasMismatch ? 'mismatch' : hasWarning ? 'warning' : 'clear',
+        hasMismatch,
+        hasWarning,
+        issueCount: issues.length,
+        issueCodes: issues.map((issue) => issue.code),
+        syncStatus: normalizeText(order?.shiprocket?.syncStatus) || SHIPROCKET_SYNC_STATUS.notRequired,
+        remoteVerificationAvailable: Boolean(storedShiprocketSnapshot),
+        local: {
+            amount: pricing.finalAmount,
+            expectedAmount: expectedLocalAmount,
+            amountDelta: pricing.finalAmount === null ? null : roundCurrency(pricing.finalAmount - expectedLocalAmount),
+            storedSubtotal: pricing.storedSubtotalBeforeDiscount,
+            itemsSubtotal: pricing.derivedItemsSubtotal,
+            shippingCharges: pricing.shippingCharges,
+            discountAmount: pricing.totalDiscount
+        },
+        expectedShiprocket,
+        storedShiprocketSnapshot: storedShiprocketSnapshot
+            ? {
+                ...storedShiprocketSnapshot,
+                ...(snapshotDelta || {})
+            }
+            : null,
+        liveVerification: {
+            status: liveVerificationStatus,
+            available: Boolean(liveShiprocketSnapshot),
+            verifiedAt: liveVerificationCheckedAt,
+            error: liveVerificationError,
+            snapshot: liveShiprocketSnapshot
+                ? {
+                    ...liveShiprocketSnapshot,
+                    ...(liveSnapshotDelta || {})
+                }
+                : null
+        },
+        issues
+    };
+};
+const decorateOrderWithShiprocketPricingAudit = (order) => {
+    if (!order) {
+        return null;
+    }
+
+    const plainOrder =
+        typeof order?.toObject === 'function'
+            ? order.toObject()
+            : isObject(order)
+                ? { ...order }
+                : null;
+
+    if (!plainOrder) {
+        return null;
+    }
+
+    return {
+        ...plainOrder,
+        shiprocketPricingAudit: buildShiprocketPricingAudit(plainOrder)
+    };
+};
 const isAmbiguousShiprocketCreateFailure = (error) => {
     const statusCode = Number(error?.statusCode || error?.response?.status || 0);
 
@@ -57,6 +514,7 @@ const formatShiprocketOrderDate = (value) => {
 const normalizeShiprocketError = (error, fallbackMessage = 'Shiprocket request failed') => {
     const upstreamStatusCode = Number(error?.response?.status || 0);
     const upstreamPayload = error?.response?.data;
+    const upstreamHeaders = isObject(error?.response?.headers) ? error.response.headers : null;
     const upstreamMessage = normalizeText(
         upstreamPayload?.message ||
             upstreamPayload?.error ||
@@ -65,16 +523,44 @@ const normalizeShiprocketError = (error, fallbackMessage = 'Shiprocket request f
             error?.message
     );
     const normalizedError = new Error(upstreamMessage || fallbackMessage);
+    const retryAfterHeaderValue =
+        upstreamHeaders?.['retry-after'] ??
+        upstreamHeaders?.['Retry-After'] ??
+        upstreamPayload?.retry_after ??
+        upstreamPayload?.data?.retry_after;
+    const parsedRetryAfterNumber = Number(retryAfterHeaderValue);
+    const parsedRetryAfterDateMs =
+        typeof retryAfterHeaderValue === 'string' && retryAfterHeaderValue
+            ? new Date(retryAfterHeaderValue).getTime()
+            : Number.NaN;
+    const retryAfterMs = Number.isFinite(parsedRetryAfterNumber) && parsedRetryAfterNumber > 0
+        ? parsedRetryAfterNumber * 1000
+        : Number.isFinite(parsedRetryAfterDateMs)
+          ? Math.max(0, parsedRetryAfterDateMs - Date.now())
+          : 0;
+    const normalizedMessage = upstreamMessage.toLowerCase();
+    const isThrottleError =
+        upstreamStatusCode === 429 ||
+        ((upstreamStatusCode === 503 || upstreamStatusCode === 502) &&
+            (normalizedMessage.includes('rate limit') ||
+                normalizedMessage.includes('too many request') ||
+                normalizedMessage.includes('too many requests') ||
+                normalizedMessage.includes('throttle')));
 
     normalizedError.name = 'ShiprocketRequestError';
     normalizedError.statusCode = upstreamStatusCode >= 400 && upstreamStatusCode < 500 ? 502 : 502;
     normalizedError.upstreamStatusCode = upstreamStatusCode || null;
     normalizedError.upstreamPayload = upstreamPayload || null;
+    normalizedError.upstreamHeaders = upstreamHeaders;
     normalizedError.code = error?.code || '';
     normalizedError.request = error?.request || null;
+    normalizedError.retryAfterMs = retryAfterMs;
+    normalizedError.isThrottleError = isThrottleError;
 
     return normalizedError;
 };
+
+const isShiprocketThrottleError = (error) => Boolean(error?.isThrottleError || Number(error?.upstreamStatusCode || 0) === 429);
 
 const buildShiprocketPayloadError = (payload = {}, fallbackMessage = 'Shiprocket request failed') => {
     const upstreamStatusCode = Number(payload?.status_code ?? payload?.data?.status_code ?? 0) || 502;
@@ -252,6 +738,10 @@ const normalizeShiprocketOrderResponse = (payload = {}) => {
                 payload?.current_status_id ??
                 payload?.data?.status_code
         ),
+        pricingSnapshot: extractShiprocketOrderPricingSnapshot(payload, {
+            source: 'shiprocket_live_order_details',
+            capturedAt: null
+        }),
         raw: payload
     };
 };
@@ -357,6 +847,7 @@ const mapLocalOrderToShiprocketPayload = (order, user) => {
     const referenceOrderId = normalizeText(order?.shiprocket?.referenceOrderId || order?.publicOrderCode);
     const addressContext = buildShiprocketAddressContext({ order, user });
     const parcel = order?.shiprocket?.parcel || {};
+    const pricing = resolveShiprocketPricingContext(order);
     const orderItems = Array.isArray(order?.items)
         ? order.items.map((item) => ({
             name: normalizeText(item?.name),
@@ -431,11 +922,11 @@ const mapLocalOrderToShiprocketPayload = (order, user) => {
         shipping_is_billing: true,
         order_items: orderItems,
         payment_method: order?.paymentMethod === 'COD' ? 'COD' : 'Prepaid',
-        shipping_charges: roundCurrency(order?.deliveryFee),
+        shipping_charges: pricing.shippingCharges,
         giftwrap_charges: 0,
         transaction_charges: 0,
-        total_discount: roundCurrency(order?.discountAmount),
-        sub_total: roundCurrency(order?.amount),
+        total_discount: pricing.totalDiscount,
+        sub_total: pricing.subTotal,
         length: Number(parcel?.lengthCm || config.defaultDimensions.lengthCm),
         breadth: Number(parcel?.breadthCm || config.defaultDimensions.breadthCm),
         height: Number(parcel?.heightCm || config.defaultDimensions.heightCm),
@@ -461,7 +952,26 @@ const buildOrderPayloadSummary = (orderData = {}) => ({
     hasShippingCountry: Boolean(normalizeText(orderData?.shipping_country)),
     hasShippingEmail: Boolean(normalizeText(orderData?.shipping_email)),
     hasShippingPhone: Boolean(normalizeText(orderData?.shipping_phone)),
-    orderItemsCount: Array.isArray(orderData?.order_items) ? orderData.order_items.length : 0
+    orderItemsCount: Array.isArray(orderData?.order_items) ? orderData.order_items.length : 0,
+    shippingCharges: roundCurrency(orderData?.shipping_charges),
+    totalDiscount: roundCurrency(orderData?.total_discount),
+    subTotal: roundCurrency(orderData?.sub_total),
+    orderItemsSubtotal: roundCurrency(
+        Array.isArray(orderData?.order_items)
+            ? orderData.order_items.reduce(
+                (sum, item) =>
+                    sum +
+                    Math.max(0, Number(item?.selling_price || 0)) * Math.max(0, Number(item?.units || 0)),
+                0
+            )
+            : 0
+    ),
+    derivedFinalAmount: roundCurrency(
+        Number(orderData?.sub_total || 0) +
+            Number(orderData?.shipping_charges || 0) +
+            Number(orderData?.giftwrap_charges || 0) +
+            Number(orderData?.transaction_charges || 0)
+    )
 });
 
 const createOrder = async (orderData, options = {}) => {
@@ -620,6 +1130,7 @@ const buildShiprocketUpdatePayload = ({
     result,
     existingShiprocket = {},
     status = SHIPROCKET_SYNC_STATUS.synced,
+    pricingSnapshot = null,
     lastError = ''
 }) => ({
     'shiprocket.syncStatus': status,
@@ -643,6 +1154,9 @@ const buildShiprocketUpdatePayload = ({
         result?.currentStatus || result?.trackUrl
             ? Date.now()
             : existingShiprocket?.lastTrackedAt ?? null,
+    'shiprocket.pricingSnapshot':
+        normalizeShiprocketPricingSnapshot(pricingSnapshot) ||
+        normalizeShiprocketPricingSnapshot(existingShiprocket?.pricingSnapshot),
     'shiprocket.lastError': truncateText(lastError)
 });
 
@@ -719,6 +1233,26 @@ const syncOrderToShiprocket = async (localOrder, options = {}) => {
     let syncResult = null;
 
     try {
+        const pricingContext = resolveShiprocketPricingContext(currentOrder);
+        const pricingSnapshot = buildShiprocketPricingSnapshot(currentOrder, {
+            capturedAt: Date.now(),
+            source: 'shiprocket_payload_v2'
+        });
+        if (Math.abs(Number(pricingContext.breakdownAmountDelta || 0)) > 0.01) {
+            shiprocketLog.warn(
+                {
+                    finalAmount: pricingContext.finalAmount,
+                    storedSubtotalBeforeDiscount: pricingContext.storedSubtotalBeforeDiscount,
+                    derivedItemsSubtotal: pricingContext.derivedItemsSubtotal,
+                    totalDiscount: pricingContext.totalDiscount,
+                    shippingCharges: pricingContext.shippingCharges,
+                    subtotalAfterDiscountFromBreakdown: pricingContext.subtotalAfterDiscountFromBreakdown,
+                    breakdownAmountDelta: pricingContext.breakdownAmountDelta
+                },
+                'Order pricing fields do not reconcile cleanly; Shiprocket payload will use the final order amount split by charges'
+            );
+        }
+
         const payload = mapLocalOrderToShiprocketPayload(currentOrder, user);
         await orderModel.findByIdAndUpdate(orderId, {
             $set: {
@@ -776,7 +1310,8 @@ const syncOrderToShiprocket = async (localOrder, options = {}) => {
         const updatePayload = buildShiprocketUpdatePayload({
             result: syncResult,
             existingShiprocket: currentOrder.shiprocket || {},
-            status: SHIPROCKET_SYNC_STATUS.synced
+            status: SHIPROCKET_SYNC_STATUS.synced,
+            pricingSnapshot
         });
         const updatedOrder = await orderModel.findByIdAndUpdate(
             orderId,
@@ -833,6 +1368,84 @@ const syncOrderToShiprocket = async (localOrder, options = {}) => {
             success: false,
             error: error?.message || 'Shiprocket sync failed'
         };
+    }
+};
+
+const verifyOrderPricingAgainstLiveShiprocket = async (localOrder, options = {}) => {
+    const orderId = normalizeText(localOrder?._id);
+    const verificationLog = buildShiprocketLogger({
+        log: options.log,
+        action: 'verify_live_pricing',
+        orderId
+    });
+
+    if (!orderId) {
+        const error = new Error('Local order id is required to verify Shiprocket pricing');
+        error.statusCode = 500;
+        throw error;
+    }
+
+    const currentOrder = await orderModel.findById(orderId).lean();
+    if (!currentOrder) {
+        const error = new Error('Order not found for Shiprocket pricing verification');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (!normalizeNumber(currentOrder?.shiprocket?.orderId)) {
+        const error = new Error('Shiprocket order id is not available for live pricing verification');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const persistResult = options.persist !== false;
+    const checkedAt = Date.now();
+
+    try {
+        const shiprocketOrder = await getOrder(currentOrder.shiprocket.orderId, {
+            log: verificationLog
+        });
+        const verification = buildShiprocketLivePricingVerification(currentOrder, shiprocketOrder, {
+            checkedAt
+        });
+
+        let updatedOrder = currentOrder;
+
+        if (persistResult) {
+            updatedOrder = await orderModel.findByIdAndUpdate(
+                orderId,
+                {
+                    $set: {
+                        'shiprocket.livePricingSnapshot': normalizeShiprocketPricingSnapshot(
+                            verification.liveShiprocketSnapshot
+                        ),
+                        'shiprocket.livePricingVerifiedAt': verification.checkedAt,
+                        'shiprocket.livePricingVerificationStatus': verification.status,
+                        'shiprocket.livePricingVerificationError': ''
+                    }
+                },
+                { new: true }
+            );
+        }
+
+        return {
+            ...verification,
+            order: updatedOrder
+        };
+    } catch (error) {
+        if (persistResult) {
+            await orderModel.findByIdAndUpdate(orderId, {
+                $set: {
+                    'shiprocket.livePricingVerifiedAt': checkedAt,
+                    'shiprocket.livePricingVerificationStatus': 'failed',
+                    'shiprocket.livePricingVerificationError': truncateText(
+                        error?.message || 'Live Shiprocket pricing verification failed'
+                    )
+                }
+            });
+        }
+
+        throw error;
     }
 };
 
@@ -914,16 +1527,23 @@ const buildShiprocketWebhookEventKey = (payload = {}) => {
 
 export {
     SHIPROCKET_SYNC_STATUS,
+    buildShiprocketLivePricingVerification,
+    buildShiprocketPricingAudit,
+    buildShiprocketPricingSnapshot,
     buildShiprocketWebhookEventKey,
     createOrder,
+    decorateOrderWithShiprocketPricingAudit,
+    extractShiprocketOrderPricingSnapshot,
     findOrdersByReference,
     getOrder,
     getPickupAddressStatus,
+    isShiprocketThrottleError,
     mapLocalOrderToShiprocketPayload,
     normalizeShiprocketError,
     reconcileExistingShiprocketOrder,
     refreshOrderTracking,
     requestWithAuth,
     syncOrderToShiprocket,
-    trackShipment
+    trackShipment,
+    verifyOrderPricingAgainstLiveShiprocket
 };

@@ -201,6 +201,47 @@ const markSystemJobFailed = async ({
     });
 };
 
+const markSystemJobCancelled = async ({
+    jobKey,
+    provider = '',
+    jobType = '',
+    trigger = '',
+    requestedBy = '',
+    config = null,
+    result = null,
+    durationMs = 0
+} = {}) => {
+    const finishedAt = new Date();
+    const claimedCount = normalizeNumber(result?.claimedCount);
+    const processedCount = normalizeNumber(result?.outcomes?.processed);
+    const retryScheduledCount = normalizeNumber(result?.retryScheduledCount);
+
+    return updateSystemJobState({
+        jobKey,
+        defaults: {
+            provider: normalizeText(provider),
+            jobType: normalizeText(jobType)
+        },
+        updateSet: {
+            provider: normalizeText(provider),
+            jobType: normalizeText(jobType),
+            lastRunStatus: 'cancelled',
+            lastRunFinishedAt: finishedAt,
+            lastTrigger: normalizeText(trigger),
+            lastRequestedBy: normalizeText(requestedBy),
+            lastRunDurationMs: normalizeNumber(durationMs),
+            lastClaimedCount: claimedCount,
+            lastProcessedCount: processedCount,
+            lastRetryScheduledCount: retryScheduledCount,
+            lastConfig: config,
+            lastRunResult: result,
+            lastError: '',
+            activeRunOwnerId: '',
+            activeRunExpiresAt: null
+        }
+    });
+};
+
 const getSystemJobState = async (jobKey) => {
     if (!normalizeText(jobKey)) {
         return null;
@@ -211,8 +252,10 @@ const getSystemJobState = async (jobKey) => {
 
 export {
     getSystemJobState,
+    markSystemJobCancelled,
     markSystemJobCompleted,
     markSystemJobFailed,
     markSystemJobSkipped,
-    markSystemJobStarted
+    markSystemJobStarted,
+    updateSystemJobState
 };

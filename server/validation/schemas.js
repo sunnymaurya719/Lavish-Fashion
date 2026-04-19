@@ -283,6 +283,21 @@ const shiprocketOrderParamsSchema = z.object({
     orderId: objectIdSchema
 });
 
+const shiprocketPricingBackfillSchema = z.object({
+    dryRun: booleanLikeSchema.optional(),
+    limit: optionalPositiveIntSchema.optional()
+});
+
+const shiprocketBulkLiveVerificationSchema = z.object({
+    limit: optionalPositiveIntSchema.optional(),
+    requestsPerMinute: optionalPositiveIntSchema.optional(),
+    scope: z.enum(['high_risk', 'not_verified', 'all_synced']).optional()
+});
+
+const shiprocketBulkLiveVerificationCancelSchema = z.object({
+    reason: z.string().trim().max(120).optional()
+});
+
 const couponValidateSchema = z.object({
     couponCode: z.string().trim().min(3).max(30),
     items: z.array(orderItemSchema).min(1)
@@ -498,6 +513,9 @@ export {
     orderCancelParamsSchema,
     orderPricingPreviewSchema,
     orderStatusSchema,
+    shiprocketBulkLiveVerificationCancelSchema,
+    shiprocketBulkLiveVerificationSchema,
+    shiprocketPricingBackfillSchema,
     shiprocketOrderParamsSchema,
     shiprocketWebhookSchema,
     marketingCampaignCreateSchema,

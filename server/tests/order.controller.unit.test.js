@@ -37,7 +37,10 @@ vi.mock('razorpay', () => ({
 }));
 
 const orderModelMock = {
+    bulkWrite: vi.fn(),
+    countDocuments: vi.fn(),
     create: vi.fn(),
+    find: vi.fn(),
     findById: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
@@ -123,6 +126,9 @@ const queueAutomationEmailMock = vi.fn();
 const sendDeliveredMessageMock = vi.fn();
 const sendOrderPlacedMessageMock = vi.fn();
 const sendOutForDeliveryMessageMock = vi.fn();
+const cancelShiprocketBulkLiveVerificationJobMock = vi.fn();
+const getShiprocketBulkVerifyJobStatusMock = vi.fn();
+const startShiprocketBulkLiveVerificationJobMock = vi.fn();
 
 vi.mock('../models/orderModel.js', () => ({
     default: orderModelMock
@@ -172,10 +178,21 @@ vi.mock('../services/whatsappService.js', () => ({
     sendOutForDeliveryMessage: sendOutForDeliveryMessageMock
 }));
 
+vi.mock('../services/shiprocketBulkLiveVerificationService.js', () => ({
+    cancelShiprocketBulkLiveVerificationJob: cancelShiprocketBulkLiveVerificationJobMock,
+    getShiprocketBulkVerifyJobStatus: getShiprocketBulkVerifyJobStatusMock,
+    startShiprocketBulkLiveVerificationJob: startShiprocketBulkLiveVerificationJobMock
+}));
+
 const {
+    allOrders,
+    backfillShiprocketPricingSnapshots,
+    cancelShiprocketBulkLiveVerification,
     cancelUserOrder,
+    getShiprocketBulkLiveVerificationJob,
     placeOrderStripe,
     placeOrderRazorpay,
+    startShiprocketBulkLiveVerification,
     verifyStripe,
     verifyRazorpay,
     handleStripeWebhook,
@@ -470,6 +487,256 @@ describe('orderController unit tests', () => {
                     total: 548,
                     availableLoyaltyPoints: 180
                 })
+            })
+        );
+    });
+
+    it('includes Shiprocket pricing audit details in the admin order list response', async () => {
+        orderModelMock.find.mockReturnValueOnce({
+            sort: vi.fn().mockResolvedValueOnce([
+                {
+                    _id: '507f1f77bcf86cd799439011',
+                    userId: '507f1f77bcf86cd799439012',
+                    items: [
+                        {
+                            _id: '507f1f77bcf86cd799439013',
+                            name: 'Audit Tee',
+                            price: 300,
+                            quantity: 1
+                        }
+                    ],
+                    subtotal: 300,
+                    deliveryFee: 10,
+                    discountAmount: 0,
+                    amount: 310,
+                    paymentMethod: 'COD',
+                    payment: false,
+                    status: 'Order Placed',
+                    address: {
+                        firstName: 'Sunny',
+                        lastName: 'Maurya'
+                    },
+                    shiprocket: {
+                        referenceOrderId: 'LFTEST123456',
+                        syncStatus: 'synced',
+                        shipmentId: 9388670
+                    },
+                    date: Date.now()
+                }
+            ])
+        });
+
+        const req = {
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await allOrders(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                orders: [
+                    expect.objectContaining({
+                        shiprocketPricingAudit: expect.objectContaining({
+                            status: 'warning',
+                            issueCodes: expect.arrayContaining(['missing_shiprocket_pricing_snapshot'])
+                        })
+                    })
+                ]
+            })
+        );
+    });
+
+    it('backfills missing Shiprocket pricing snapshots for synced orders', async () => {
+        orderModelMock.countDocuments.mockResolvedValueOnce(2);
+        orderModelMock.find.mockReturnValueOnce({
+            sort: vi.fn().mockReturnValue({
+                limit: vi.fn().mockReturnValue({
+                    lean: vi.fn().mockResolvedValueOnce([
+                        {
+                            _id: '507f1f77bcf86cd799439021',
+                            items: [{ _id: '507f1f77bcf86cd799439031', price: 300, quantity: 1 }],
+                            subtotal: 300,
+                            deliveryFee: 10,
+                            discountAmount: 0,
+                            amount: 310,
+                            shiprocket: {
+                                syncStatus: 'synced',
+                                referenceOrderId: 'LFTESTA'
+                            }
+                        },
+                        {
+                            _id: '507f1f77bcf86cd799439022',
+                            items: [{ _id: '507f1f77bcf86cd799439032', price: 500, quantity: 1 }],
+                            subtotal: 500,
+                            deliveryFee: 10,
+                            discountAmount: 200,
+                            amount: 310,
+                            shiprocket: {
+                                syncStatus: 'synced',
+                                referenceOrderId: 'LFTESTB'
+                            }
+                        }
+                    ])
+                })
+            })
+        });
+        orderModelMock.bulkWrite.mockResolvedValueOnce({ modifiedCount: 2 });
+
+        const req = {
+            body: { limit: 25 },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await backfillShiprocketPricingSnapshots(req, res);
+
+        expect(orderModelMock.countDocuments).toHaveBeenCalledWith(
+            expect.objectContaining({
+                'shiprocket.syncStatus': 'synced'
+            })
+        );
+        expect(orderModelMock.bulkWrite).toHaveBeenCalledTimes(1);
+        expect(orderModelMock.bulkWrite.mock.calls[0][0]).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    updateOne: expect.objectContaining({
+                        update: expect.objectContaining({
+                            $set: expect.objectContaining({
+                                'shiprocket.pricingSnapshot': expect.objectContaining({
+                                    source: 'shiprocket_backfill_v2',
+                                    subTotal: 300,
+                                    shippingCharges: 10,
+                                    derivedFinalAmount: 310
+                                })
+                            })
+                        })
+                    })
+                })
+            ])
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                updatedCount: 2
+            })
+        );
+    });
+
+    it('starts the Shiprocket bulk live verification job', async () => {
+        startShiprocketBulkLiveVerificationJobMock.mockResolvedValueOnce({
+            success: true,
+            started: true,
+            skipped: false,
+            config: {
+                scope: 'high_risk',
+                limit: 25,
+                requestsPerMinute: 45
+            },
+            targetCount: 12,
+            job: {
+                status: 'running',
+                progress: {
+                    totalCount: 12,
+                    processedCount: 0
+                }
+            }
+        });
+
+        const req = {
+            admin: { email: 'admin@example.com' },
+            body: { limit: 25, requestsPerMinute: 45, scope: 'high_risk' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await startShiprocketBulkLiveVerification(req, res);
+
+        expect(startShiprocketBulkLiveVerificationJobMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                config: expect.objectContaining({
+                    limit: 25,
+                    requestsPerMinute: 45,
+                    scope: 'high_risk'
+                }),
+                requestedBy: 'admin@example.com',
+                trigger: 'admin_api'
+            })
+        );
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                started: true,
+                targetCount: 12
+            })
+        );
+    });
+
+    it('returns the current Shiprocket bulk live verification job status', async () => {
+        getShiprocketBulkVerifyJobStatusMock.mockResolvedValueOnce({
+            jobKey: 'shiprocket_live_pricing_bulk_verify_job',
+            status: 'running',
+            progress: {
+                totalCount: 20,
+                processedCount: 8,
+                percentComplete: 40
+            }
+        });
+
+        const req = {
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await getShiprocketBulkLiveVerificationJob(req, res);
+
+        expect(getShiprocketBulkVerifyJobStatusMock).toHaveBeenCalledTimes(1);
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                job: expect.objectContaining({
+                    status: 'running'
+                })
+            })
+        );
+    });
+
+    it('requests cancellation for the active Shiprocket bulk live verification job', async () => {
+        cancelShiprocketBulkLiveVerificationJobMock.mockResolvedValueOnce({
+            success: true,
+            cancelled: true,
+            reason: 'cancel_requested',
+            job: {
+                status: 'running',
+                isCancelling: true,
+                cancelRequestedAt: new Date().toISOString()
+            }
+        });
+
+        const req = {
+            admin: { email: 'admin@example.com' },
+            body: { reason: 'manual_cancel' },
+            log: { error: vi.fn() }
+        };
+        const res = createRes();
+
+        await cancelShiprocketBulkLiveVerification(req, res);
+
+        expect(cancelShiprocketBulkLiveVerificationJobMock).toHaveBeenCalledWith({
+            requestedBy: 'admin@example.com',
+            reason: 'manual_cancel'
+        });
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                success: true,
+                cancelled: true,
+                reason: 'cancel_requested'
             })
         );
     });

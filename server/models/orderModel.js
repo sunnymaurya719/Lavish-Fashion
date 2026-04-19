@@ -77,6 +77,22 @@ const shiprocketParcelSchema = new mongoose.Schema(
     { _id: false, strict: true }
 );
 
+const shiprocketPricingSnapshotSchema = new mongoose.Schema(
+    {
+        formulaVersion: { type: Number, default: 2, min: 1 },
+        source: { type: String, default: '', trim: true, maxlength: 40 },
+        capturedAt: { type: Number, default: null },
+        itemsSubtotal: { type: Number, default: 0, min: 0 },
+        localSubtotal: { type: Number, default: 0, min: 0 },
+        totalDiscount: { type: Number, default: 0, min: 0 },
+        shippingCharges: { type: Number, default: 0, min: 0 },
+        subTotal: { type: Number, default: 0, min: 0 },
+        localAmount: { type: Number, default: 0, min: 0 },
+        derivedFinalAmount: { type: Number, default: 0, min: 0 }
+    },
+    { _id: false, strict: true }
+);
+
 const shiprocketSchema = new mongoose.Schema(
     {
         syncStatus: {
@@ -102,6 +118,15 @@ const shiprocketSchema = new mongoose.Schema(
         lastError: { type: String, default: '', trim: true, maxlength: 500 },
         rawCreateResponse: { type: Object, default: null },
         rawTrackingResponse: { type: Object, default: null },
+        pricingSnapshot: { type: shiprocketPricingSnapshotSchema, default: null },
+        livePricingSnapshot: { type: shiprocketPricingSnapshotSchema, default: null },
+        livePricingVerifiedAt: { type: Number, default: null },
+        livePricingVerificationStatus: {
+            type: String,
+            enum: ['not_verified', 'clear', 'warning', 'mismatch', 'failed'],
+            default: 'not_verified'
+        },
+        livePricingVerificationError: { type: String, default: '', trim: true, maxlength: 500 },
         parcel: { type: shiprocketParcelSchema, default: () => ({}) }
     },
     { _id: false, strict: true }

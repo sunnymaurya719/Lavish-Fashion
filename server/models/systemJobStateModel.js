@@ -7,7 +7,7 @@ const systemJobStateSchema = new mongoose.Schema(
         jobType: { type: String, default: '', trim: true, index: true },
         lastRunStatus: {
             type: String,
-            enum: ['idle', 'running', 'completed', 'failed', 'skipped'],
+            enum: ['idle', 'running', 'completed', 'failed', 'skipped', 'cancelled'],
             default: 'idle',
             index: true
         },

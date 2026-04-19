@@ -84,6 +84,27 @@ const releaseDistributedLock = async ({ key, ownerId, metadata = {} } = {}) => {
     return Boolean(releasedLock);
 };
 
+const refreshDistributedLock = async ({ key, ownerId, ttlMs, metadata = {} } = {}) => {
+    if (!key || !ownerId) {
+        return null;
+    }
+
+    return distributedLockModel.findOneAndUpdate(
+        {
+            key,
+            ownerId
+        },
+        {
+            $set: {
+                expiresAt: buildLockExpiryDate(ttlMs),
+                metadata,
+                lastAcquiredAt: new Date()
+            }
+        },
+        { new: true }
+    );
+};
+
 const getDistributedLock = async (key) => {
     if (!key) {
         return null;
@@ -95,5 +116,6 @@ const getDistributedLock = async (key) => {
 export {
     acquireDistributedLock,
     getDistributedLock,
+    refreshDistributedLock,
     releaseDistributedLock
 };
