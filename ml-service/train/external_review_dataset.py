@@ -299,6 +299,8 @@ def load_rent_the_runway_training_dataset(
 
     feature_rows: list[list[float]] = []
     targets: list[float] = []
+    group_ids: list[str] = []
+    segments: list[tuple[str, str, str]] = []
     eligible_items = 0
     used_reviews = 0
     eligible_item_groups: list[dict[str, object]] = []
@@ -414,6 +416,8 @@ def load_rent_the_runway_training_dataset(
                 )
                 feature_rows.append(feature_map_to_vector(evaluation["featureVector"]))
                 targets.append(float(candidate_index - record["idealIndex"]))
+                group_ids.append(f"rtr-{record['itemId']}")
+                segments.append(("Women", str(item_group["fitBias"]), record["preferredFit"]))
 
     features = np.asarray(feature_rows, dtype=np.float32)
     target_values = np.asarray(targets, dtype=np.float32)
@@ -422,6 +426,8 @@ def load_rent_the_runway_training_dataset(
         "features": features,
         "targets": target_values,
         "featureOrder": list(FEATURE_ORDER),
+        "groupIds": list(group_ids),
+        "segments": list(segments),
         "summary": {
             "source": "renttherunway",
             "selectionReason": "Chosen over ModCloth because it includes clearer garment categories plus both height and weight, which align with the current fit model.",

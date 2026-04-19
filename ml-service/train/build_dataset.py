@@ -134,6 +134,8 @@ def build_training_dataset(*, row_target: int = 12_000, seed: int = 17) -> dict[
     rng = np.random.default_rng(seed)
     feature_rows: list[list[float]] = []
     targets: list[float] = []
+    group_ids: list[str] = []
+    segments: list[tuple[str, str, str]] = []
     category_counts = {category: 0 for category in CATEGORY_OPTIONS}
     template_counts = {template: 0 for template in SIZE_LABELS_BY_TEMPLATE}
     fit_bias_counts = {fit_bias: 0 for fit_bias in ("runs_small", "true_to_size", "runs_large")}
@@ -185,6 +187,8 @@ def build_training_dataset(*, row_target: int = 12_000, seed: int = 17) -> dict[
                 )
                 feature_rows.append(feature_map_to_vector(evaluation["featureVector"]))
                 targets.append(float(evaluation["fitScore"]))
+                group_ids.append(f"syn-{product_count:06d}")
+                segments.append((category, fit_bias, preferred_fit))
 
                 if len(feature_rows) >= row_target:
                     break
@@ -199,6 +203,8 @@ def build_training_dataset(*, row_target: int = 12_000, seed: int = 17) -> dict[
         "features": features,
         "targets": target_values,
         "featureOrder": list(FEATURE_ORDER),
+        "groupIds": list(group_ids),
+        "segments": list(segments),
         "summary": {
             "source": "synthetic_bootstrap",
             "rows": int(features.shape[0]),

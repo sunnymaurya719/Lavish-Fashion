@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.config import settings
+
 
 MeasurementTemplate = Literal["topwear", "bottomwear", "dress", "outerwear", "kids_general"]
 FitBias = Literal["runs_small", "true_to_size", "runs_large"]
@@ -26,7 +28,10 @@ class ProductFitProfile(BaseModel):
     fitBias: FitBias = "true_to_size"
     stretchScore: float = Field(default=0.25, ge=0, le=1)
     measurementUnit: Literal["cm"] = "cm"
-    sizeMeasurements: list[SizeMeasurement] = Field(default_factory=list)
+    sizeMeasurements: list[SizeMeasurement] = Field(
+        default_factory=list,
+        max_length=settings.max_size_measurements,
+    )
 
 
 class ProductFitProfileSummary(BaseModel):
@@ -74,11 +79,63 @@ class LandmarkInput(BaseModel):
 class AnalyzeBodyRequest(BaseModel):
     heightCm: float = Field(ge=50, le=260)
     weightKg: float | None = Field(default=None, ge=20, le=350)
-    landmarks: list[LandmarkInput] | None = None
+    landmarks: list[LandmarkInput] | None = Field(default=None, max_length=settings.max_landmarks)
     imageBase64: str | None = None
+    frames: list[str] | None = Field(
+        default=None,
+        max_length=settings.body_max_frames,
+        description=(
+            "Optional multi-frame burst (each entry a data URL). When supplied, the"
+            " service computes per-frame heuristics and fuses them by median for"
+            " stability. The active frame should still be passed in ``imageBase64``"
+            " if both are provided."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_scan_input(self):
-        if not self.landmarks and not self.imageBase64:
-            raise ValueError("Either landmarks or imageBase64 is required")
+        has_frames = bool(self.frames)
+        if not self.landmarks and not self.imageBase64 and not has_frames:
+            raise ValueError("Either landmarks, imageBase64, or frames is required")
+
+        max_chars = int(settings.max_image_bytes * 1.4) + 256
+        if self.imageBase64 is not None and len(self.imageBase64) > max_chars:
+            raise ValueError("The image payload exceeds the maximum allowed size.")
+        if has_frames:
+            for index, frame in enumerate(self.frames or []):
+                if not frame:
+                    raise ValueError(f"frames[{index}] must be a non-empty data URL")
+                if len(frame) > max_chars:
+                    raise ValueError(f"frames[{index}] exceeds the maximum allowed size.")
+
         return self
+
+
+class ForgetRequest(BaseModel):
+    userId: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(default=None, max_length=120)
+
+
+FitFeedbackVerdict = Literal["too_small", "perfect", "too_large"]
+
+
+class FitFeedbackRequest(BaseModel):
+    userId: str = Field(min_length=1, max_length=64)
+    productId: str = Field(min_length=1, max_length=64)
+    orderId: str = Field(min_length=1, max_length=64)
+    selectedSize: str = Field(min_length=1, max_length=10)
+    recommendedSize: str = Field(min_length=1, max_length=10)
+    feedback: FitFeedbackVerdict
+    source: RecommendationMode = "manual"
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    modelVersion: str | None = Field(default=None, max_length=60)
+    requestId: str | None = Field(default=None, max_length=64)
+
+
+class BatchRecommendationItem(BaseModel):
+    key: str | None = Field(default=None, max_length=64)
+    request: RecommendationRequest
+
+
+class BatchRecommendationRequest(BaseModel):
+    items: list[BatchRecommendationItem] = Field(min_length=1, max_length=settings.recommend_batch_max_items)

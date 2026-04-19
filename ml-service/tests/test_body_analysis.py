@@ -22,14 +22,14 @@ class BodyAnalysisTests(unittest.TestCase):
 
         response = analyze_body_request(AnalyzeBodyRequest(heightCm=176, landmarks=landmarks))
 
-        self.assertEqual(response.meta["source"], "landmarks")
+        self.assertEqual(response.meta.source, "landmarks")
         self.assertGreater(response.bodyFeatures.shoulderRatio, 1)
         self.assertGreater(response.bodyFeatures.scanQuality, 0.9)
 
     def test_image_heuristic_analysis_accepts_data_url_images(self) -> None:
         response = analyze_body_request(AnalyzeBodyRequest(heightCm=168, imageBase64=SAMPLE_PNG_DATA_URL))
 
-        self.assertEqual(response.meta["source"], "image_heuristic")
+        self.assertEqual(response.meta.source, "image_heuristic")
         self.assertGreaterEqual(response.bodyFeatures.scanQuality, 0.24)
         self.assertLessEqual(response.bodyFeatures.scanQuality, 0.58)
 
