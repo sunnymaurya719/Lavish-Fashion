@@ -17,8 +17,6 @@ process.env.CLIENT_URL = 'http://localhost:5173';
 process.env.ADMIN_URL = 'http://localhost:5174';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.CORS_ORIGINS = 'http://localhost:5173,http://localhost:5174';
-process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_mock';
 process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_mock';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'rzp_whsec_mock';
@@ -33,45 +31,11 @@ vi.mock('../services/whatsappService.js', () => ({
     },
     handleWhatsAppWebhookEvent: async (_req, res) => res.status(200).json({ received: true }),
     handleWhatsAppWebhookVerification: async (_req, res) => res.status(200).send('ok'),
-    sendCancelledMessage: vi.fn(async () => ({ success: true })),
     sendDeliveredMessage: vi.fn(async () => ({ success: true })),
     sendOrderPlacedMessage: vi.fn(async () => ({ success: true })),
     sendOutForDeliveryMessage: vi.fn(async () => ({ success: true })),
-    sendShippedMessage: vi.fn(async () => ({ success: true })),
     sendTemplateMessage: vi.fn(async () => ({ success: true, messageId: 'wa_mock_1' }))
 }));
-
-vi.mock('stripe', () => {
-    return {
-        default: class StripeMock {
-            constructor() {
-                this.checkout = {
-                    sessions: {
-                        create: vi.fn(async () => ({ id: 'cs_test_mock', url: 'http://localhost/mock' })),
-                        retrieve: vi.fn(async () => ({
-                            id: 'cs_test_mock',
-                            payment_status: 'paid',
-                            client_reference_id: '507f1f77bcf86cd799439011',
-                            metadata: {
-                                orderId: '507f1f77bcf86cd799439011',
-                                userId: '507f1f77bcf86cd799439012'
-                            }
-                        }))
-                    }
-                };
-                this.webhooks = {
-                    constructEvent: (buffer, signature, _secret) => {
-                        if (signature !== 't_stripe_sig') {
-                            throw new Error('invalid stripe signature');
-                        }
-
-                        return JSON.parse(buffer.toString('utf8'));
-                    }
-                };
-            }
-        }
-    };
-});
 
 vi.mock('razorpay', () => {
     return {
@@ -148,68 +112,6 @@ describe('payment webhooks integration', () => {
         await shiprocketWebhookEventModel.deleteMany({});
         await distributedLockModel.deleteMany({});
         await systemJobStateModel.deleteMany({});
-    });
-
-    it('marks Stripe order as paid only after webhook confirmation', async () => {
-        const user = await userModel.create({
-            name: 'Webhook User',
-            email: 'webhook@example.com',
-            password: 'hashed-password',
-            cartData: { '507f1f77bcf86cd799439011': { M: 1 } }
-        });
-
-        const order = await orderModel.create({
-            userId: String(user._id),
-            items: [{ _id: '507f1f77bcf86cd799439011', name: 'Tee', price: 199, quantity: 1, size: 'M' }],
-            amount: 209,
-            address: {
-                firstName: 'A',
-                lastName: 'B',
-                street: 'S',
-                city: 'C',
-                state: 'ST',
-                pincode: '123456',
-                country: 'IN',
-                phone: '9999999999'
-            },
-            paymentMethod: 'Stripe',
-            payment: false,
-            paymentStatus: 'pending',
-            date: Date.now()
-        });
-
-        const webhookPayload = {
-            id: 'evt_test_1',
-            type: 'checkout.session.completed',
-            data: {
-                object: {
-                    id: 'cs_test_1',
-                    client_reference_id: String(order._id),
-                    payment_intent: 'pi_test_1',
-                    metadata: {
-                        orderId: String(order._id),
-                        userId: String(user._id)
-                    }
-                }
-            }
-        };
-
-        const response = await request(app)
-            .post('/api/webhooks/stripe')
-            .set('stripe-signature', 't_stripe_sig')
-            .set('Content-Type', 'application/json')
-            .send(webhookPayload);
-
-        expect(response.status).toBe(200);
-
-        const updatedOrder = await orderModel.findById(order._id).lean();
-        const updatedUser = await userModel.findById(user._id).lean();
-
-        expect(updatedOrder.payment).toBe(true);
-        expect(updatedOrder.paymentStatus).toBe('paid');
-        expect(updatedOrder.stripeSessionId).toBe('cs_test_1');
-        expect(updatedOrder.stripePaymentIntentId).toBe('pi_test_1');
-        expect(updatedUser.cartData).toEqual({});
     });
 
     it('verifies Razorpay webhook signature and marks payment as paid', async () => {

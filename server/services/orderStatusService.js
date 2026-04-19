@@ -12,10 +12,8 @@ import {
 } from './loyaltyService.js';
 import { queueAutomationEmail } from './marketingAutomationService.js';
 import {
-    sendCancelledMessage,
     sendDeliveredMessage,
-    sendOutForDeliveryMessage,
-    sendShippedMessage
+    sendOutForDeliveryMessage
 } from './whatsappService.js';
 
 const ORDER_STATUS = {
@@ -197,20 +195,16 @@ const sendStatusDrivenWhatsAppNotification = async ({ order, status, log }) => {
         return null;
     }
 
-    if (status === ORDER_STATUS.shipped) {
-        return sendShippedMessage(order, { log });
-    }
-
+    // Lavish Fashion sends only the three customer-facing WhatsApp notifications
+    // documented in server/WHATSAPP_SETUP.md: order placed, out for delivery,
+    // and delivered. Other lifecycle transitions (Packing, Shipped, Cancelled)
+    // still update admin and Shiprocket fields but do not generate WhatsApp.
     if (status === ORDER_STATUS.outForDelivery) {
         return sendOutForDeliveryMessage(order, { log });
     }
 
     if (status === ORDER_STATUS.delivered) {
         return sendDeliveredMessage(order, { log });
-    }
-
-    if (status === ORDER_STATUS.cancelled) {
-        return sendCancelledMessage(order, { log });
     }
 
     return null;

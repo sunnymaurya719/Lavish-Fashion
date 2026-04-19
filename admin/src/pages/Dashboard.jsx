@@ -270,9 +270,6 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
                 API {serverStatus}
               </StatusBadge>
               <StatusBadge tone="neutral" size="sm" withDot={false}>
-                Stripe {serverBootstrap?.payments?.stripeEnabled ? 'on' : 'off'}
-              </StatusBadge>
-              <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Razorpay {serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'}
               </StatusBadge>
               <StatusBadge tone="neutral" size="sm" withDot={false}>

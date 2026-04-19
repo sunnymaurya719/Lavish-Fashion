@@ -19,7 +19,6 @@ const getSystemBootstrap = async (req, res) => {
         process.env.CLOUDINARY_API_KEY,
         process.env.CLOUDINARY_SECRET_KEY
     );
-    const stripeEnabled = isConfigured(process.env.STRIPE_SECRET_KEY, process.env.STRIPE_WEBHOOK_SECRET);
     const razorpayEnabled = isConfigured(process.env.RAZORPAY_KEY_ID, process.env.RAZORPAY_KEY_SECRET);
     const marketingEmailMode = String(process.env.MARKETING_EMAIL_MODE || 'simulation').trim().toLowerCase();
     const marketingEmailProvider = String(process.env.MARKETING_EMAIL_PROVIDER || 'resend').trim().toLowerCase();
@@ -67,7 +66,6 @@ const getSystemBootstrap = async (req, res) => {
                 dashboardEnabled: true
             },
             payments: {
-                stripeEnabled,
                 razorpayEnabled,
                 razorpayKeyId: razorpayEnabled ? String(process.env.RAZORPAY_KEY_ID || '').trim() : '',
                 codEnabled: true

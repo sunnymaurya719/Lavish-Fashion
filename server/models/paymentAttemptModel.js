@@ -81,7 +81,7 @@ const paymentAttemptSchema = new mongoose.Schema(
         customerEmail: { type: String, default: '', trim: true, lowercase: true, maxlength: 254 },
         shiprocketReferenceOrderId: { type: String, default: '', trim: true, maxlength: 20, index: true },
         checkoutSource: { type: String, enum: ['cart', 'buy_now'], default: 'cart' },
-        paymentMethod: { type: String, required: true, enum: ['Stripe', 'Razorpay'] },
+        paymentMethod: { type: String, required: true, enum: ['Razorpay'] },
         status: {
             type: String,
             enum: ['pending', 'paid', 'failed', 'cancelled', 'expired', 'order_created'],
@@ -91,8 +91,6 @@ const paymentAttemptSchema = new mongoose.Schema(
         inventoryReserved: { type: Boolean, default: true },
         loyaltyPointsRedeemed: { type: Number, default: 0, min: 0 },
         loyaltyRedemptionStatus: { type: String, enum: ['none', 'reserved', 'redeemed', 'released'], default: 'none' },
-        stripeSessionId: { type: String, default: null, index: true },
-        stripePaymentIntentId: { type: String, default: null },
         razorpayOrderId: { type: String, default: null, index: true },
         razorpayPaymentId: { type: String, default: null },
         gatewayEventId: { type: String, default: null },

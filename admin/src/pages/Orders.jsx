@@ -508,7 +508,30 @@ const getItemImageUrl = (item) => {
 };
 
 const getPaymentLabel = (order) => {
-  if (String(order.paymentStatus || '').trim().toLowerCase() === 'cancelled' || order.status === 'Cancelled') {
+  const refundStatus = String(order?.refundStatus || '').trim().toLowerCase();
+  const refundedAmount = Number(order?.refundedAmount || 0);
+  const orderTotal = Number(order?.amount || 0);
+  const isCancelledLike =
+    String(order.paymentStatus || '').trim().toLowerCase() === 'cancelled' ||
+    order.status === 'Cancelled';
+
+  if (refundStatus === 'processed' || (refundedAmount > 0 && refundedAmount + 0.01 >= orderTotal)) {
+    return 'Refunded';
+  }
+
+  if (refundStatus === 'partial' || (refundedAmount > 0 && refundedAmount + 0.01 < orderTotal)) {
+    return 'Partially refunded';
+  }
+
+  if (refundStatus === 'pending') {
+    return 'Refund processing';
+  }
+
+  if (refundStatus === 'failed') {
+    return 'Refund failed';
+  }
+
+  if (isCancelledLike) {
     return order.payment ? 'Refund pending' : 'Cancelled';
   }
 
@@ -521,6 +544,65 @@ const getPaymentLabel = (order) => {
   }
 
   return 'Pending';
+};
+
+const getPaymentBadgeClass = (order) => {
+  const label = getPaymentLabel(order);
+
+  if (label === 'Refunded') {
+    return 'bg-emerald-50 text-emerald-700';
+  }
+
+  if (label === 'Partially refunded' || label === 'Refund processing') {
+    return 'bg-amber-50 text-amber-800';
+  }
+
+  if (label === 'Refund failed') {
+    return 'bg-rose-100 text-rose-800';
+  }
+
+  if (label === 'Refund pending') {
+    return 'bg-rose-50 text-rose-700';
+  }
+
+  if (order.payment) {
+    return 'bg-emerald-50 text-emerald-700';
+  }
+
+  if (order.status === 'Cancelled') {
+    return 'bg-rose-50 text-rose-700';
+  }
+
+  return 'bg-amber-50 text-amber-700';
+};
+
+const getCancellationBanner = (order) => {
+  if (!order.payment) {
+    return 'Order cancelled. No payment received.';
+  }
+
+  const refundStatus = String(order?.refundStatus || '').trim().toLowerCase();
+  const refundedAmount = Number(order?.refundedAmount || 0);
+  const orderTotal = Number(order?.amount || 0);
+
+  if (refundStatus === 'processed' || (refundedAmount > 0 && refundedAmount + 0.01 >= orderTotal)) {
+    return `Order cancelled. Refund of ₹${Number(refundedAmount).toLocaleString('en-IN')} processed.`;
+  }
+
+  if (refundStatus === 'partial' || (refundedAmount > 0 && refundedAmount + 0.01 < orderTotal)) {
+    const remaining = Math.max(0, Math.round((orderTotal - refundedAmount) * 100) / 100);
+    return `Order cancelled. ₹${refundedAmount.toLocaleString('en-IN')} refunded, ₹${remaining.toLocaleString('en-IN')} pending.`;
+  }
+
+  if (refundStatus === 'pending') {
+    return 'Order cancelled. Refund initiated, awaiting processing.';
+  }
+
+  if (refundStatus === 'failed') {
+    return 'Order cancelled. Refund attempt failed — please retry.';
+  }
+
+  return 'Order cancelled. Refund must be processed.';
 };
 
 const getStatusClasses = (status) => {
@@ -816,6 +898,11 @@ const Orders = ({ token }) => {
   const [pendingCancelOrderId, setPendingCancelOrderId] = useState(null);
   const [cancelReason, setCancelReason] = useState(ORDER_CANCEL_REASONS[0]);
   const [cancelReasonNote, setCancelReasonNote] = useState('');
+  const [pendingRefundOrderId, setPendingRefundOrderId] = useState('');
+  const [refundAmountInput, setRefundAmountInput] = useState('');
+  const [refundReasonInput, setRefundReasonInput] = useState('');
+  const [refundSpeedInput, setRefundSpeedInput] = useState('normal');
+  const [isProcessingRefund, setIsProcessingRefund] = useState(false);
   const [liveUpdatesStatus, setLiveUpdatesStatus] = useState({ status: 'idle', message: '' });
   const [highlightedOrderId, setHighlightedOrderId] = useState('');
   const processedEventIdsRef = useRef(new Set());
@@ -904,6 +991,75 @@ const Orders = ({ token }) => {
       toast.info(`Cancellation reason: ${reasonLabel}`);
     }
   };
+
+  const openRefundDialog = (order) => {
+    if (!order) return;
+    const remaining = Math.max(
+      0,
+      Math.round((Number(order.amount || 0) - Number(order.refundedAmount || 0)) * 100) / 100
+    );
+    setPendingRefundOrderId(String(order._id));
+    setRefundAmountInput(remaining > 0 ? String(remaining) : '');
+    setRefundReasonInput('');
+    setRefundSpeedInput('normal');
+  };
+
+  const closeRefundDialog = () => {
+    if (isProcessingRefund) return;
+    setPendingRefundOrderId('');
+    setRefundAmountInput('');
+    setRefundReasonInput('');
+    setRefundSpeedInput('normal');
+  };
+
+  const submitRefund = async () => {
+    if (!pendingRefundOrderId) return;
+
+    const amountNumber = Number(refundAmountInput);
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      toast.error('Enter a positive refund amount');
+      return;
+    }
+
+    setIsProcessingRefund(true);
+    try {
+      const idempotencyKey = `refund-${pendingRefundOrderId}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+      const response = await axios.post(
+        `${ORDER_API_BASE}/${pendingRefundOrderId}/refund`,
+        {
+          amount: amountNumber,
+          reason: refundReasonInput.trim(),
+          speed: refundSpeedInput,
+          notes: {},
+        },
+        { headers: { token, 'idempotency-key': idempotencyKey } }
+      );
+
+      if (response.data.success) {
+        toast.success(response.data.message || 'Refund initiated');
+        if (response.data.order) {
+          setOrders((current) => upsertOrderById(current, response.data.order));
+        } else {
+          await fetchAllOrders({ silent: true });
+        }
+        closeRefundDialog();
+        return;
+      }
+
+      toast.error(response.data.message || 'Refund failed');
+    } catch (error) {
+      toast.error(error?.response?.data?.message || error.message || 'Refund failed');
+    } finally {
+      setIsProcessingRefund(false);
+    }
+  };
+
+  const pendingRefundOrder = useMemo(
+    () => orders.find((order) => String(order._id) === pendingRefundOrderId) || null,
+    [orders, pendingRefundOrderId]
+  );
 
   const setShiprocketActionState = useCallback((orderId, action) => {
     setShiprocketActionByOrderId((currentState) => {
@@ -2079,13 +2235,7 @@ const Orders = ({ token }) => {
                         {order.status}
                       </span>
                       <span
-                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-                          order.payment
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : order.status === 'Cancelled'
-                              ? 'bg-rose-50 text-rose-700'
-                              : 'bg-amber-50 text-amber-700'
-                        }`}
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${getPaymentBadgeClass(order)}`}
                       >
                         {getPaymentLabel(order)}
                       </span>
@@ -2202,7 +2352,7 @@ const Orders = ({ token }) => {
                   </div>
                 ) : (
                   <div className='border-t border-slate-100 bg-rose-50/50 px-5 py-2 text-xs text-rose-700'>
-                    Order cancelled. {order.payment ? 'Refund must be processed.' : 'No payment received.'}
+                    {getCancellationBanner(order)}
                   </div>
                 )}
 
@@ -2370,6 +2520,96 @@ const Orders = ({ token }) => {
                                 <p className='mt-1 text-sm font-semibold text-slate-900'>{formatDate(order.date)}</p>
                               </div>
                             </div>
+
+                            {order.paymentMethod === 'Razorpay' ? (
+                              <div className='mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs'>
+                                <div className='flex items-center justify-between gap-2'>
+                                  <span className='text-slate-500'>Razorpay order</span>
+                                  <span className='break-all font-mono text-[11px] text-slate-800'>
+                                    {order.razorpayOrderId || '—'}
+                                  </span>
+                                </div>
+                                <div className='flex items-center justify-between gap-2'>
+                                  <span className='text-slate-500'>Razorpay payment</span>
+                                  <span className='break-all font-mono text-[11px] text-slate-800'>
+                                    {order.razorpayPaymentId || '—'}
+                                  </span>
+                                </div>
+                                {order.paymentCapturedAt ? (
+                                  <div className='flex items-center justify-between gap-2'>
+                                    <span className='text-slate-500'>Captured at</span>
+                                    <span className='text-slate-800'>{formatDateTime(order.paymentCapturedAt)}</span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {order.paymentMethod === 'Razorpay' && order.payment ? (
+                              <div className='mt-3 flex flex-wrap items-center justify-between gap-2'>
+                                <div className='text-xs text-slate-500'>
+                                  Refunded {formatCurrency(order.refundedAmount || 0)} of {formatCurrency(order.amount)}
+                                  {order.refundStatus && order.refundStatus !== 'none' ? (
+                                    <span className='ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700'>
+                                      {order.refundStatus}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {Number(order.refundedAmount || 0) < Number(order.amount || 0) - 0.01 ? (
+                                  <button
+                                    type='button'
+                                    onClick={() => openRefundDialog(order)}
+                                    className='rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white hover:bg-slate-800'
+                                  >
+                                    Issue refund
+                                  </button>
+                                ) : (
+                                  <span className='rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800'>
+                                    Fully refunded
+                                  </span>
+                                )}
+                              </div>
+                            ) : null}
+
+                            {Array.isArray(order.refunds) && order.refunds.length > 0 ? (
+                              <div className='mt-3 space-y-2'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Refund history</p>
+                                {order.refunds.map((refund) => (
+                                  <div
+                                    key={refund.refundId}
+                                    className='rounded-xl border border-slate-200 bg-white p-2.5 text-xs'
+                                  >
+                                    <div className='flex items-center justify-between gap-2'>
+                                      <span className='font-mono text-[11px] text-slate-700'>{refund.refundId}</span>
+                                      <span
+                                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                          refund.status === 'processed'
+                                            ? 'bg-emerald-100 text-emerald-800'
+                                            : refund.status === 'failed'
+                                              ? 'bg-rose-100 text-rose-800'
+                                              : 'bg-amber-100 text-amber-800'
+                                        }`}
+                                      >
+                                        {refund.status}
+                                      </span>
+                                    </div>
+                                    <div className='mt-1 flex items-center justify-between gap-2 text-slate-600'>
+                                      <span>{formatCurrency(refund.amount)}</span>
+                                      <span className='capitalize'>{refund.speed || 'normal'}</span>
+                                    </div>
+                                    {refund.reason ? (
+                                      <p className='mt-1 text-slate-500'>Reason: {refund.reason}</p>
+                                    ) : null}
+                                    {refund.failureReason ? (
+                                      <p className='mt-1 text-rose-700'>{refund.failureReason}</p>
+                                    ) : null}
+                                    <p className='mt-1 text-[10px] text-slate-400'>
+                                      Initiated {formatDateTime(refund.createdAt)}
+                                      {refund.processedAt ? ` • Processed ${formatDateTime(refund.processedAt)}` : ''}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                           <div className='rounded-2xl border border-slate-200 bg-white p-4'>
                             <p className='text-sm font-semibold text-slate-900'>Pricing breakdown</p>
@@ -2398,6 +2638,12 @@ const Orders = ({ token }) => {
                                   {formatCurrency(order.amount)}
                                 </span>
                               </div>
+                              {Number(order.refundedAmount || 0) > 0 ? (
+                                <div className='flex items-center justify-between text-rose-700'>
+                                  <span>Refunded</span>
+                                  <span className='font-medium'>-{formatCurrency(order.refundedAmount)}</span>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -2746,6 +2992,63 @@ const Orders = ({ token }) => {
               />
             </label>
           ) : null}
+        </div>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={Boolean(pendingRefundOrderId)}
+        title='Issue Razorpay refund'
+        description={
+          pendingRefundOrder
+            ? `Refunding ₹${Number(pendingRefundOrder.amount || 0).toLocaleString('en-IN')} order #${
+                pendingRefundOrder.orderId || pendingRefundOrder._id
+              }. Already refunded: ₹${Number(pendingRefundOrder.refundedAmount || 0).toLocaleString('en-IN')}.`
+            : ''
+        }
+        confirmLabel={isProcessingRefund ? 'Refunding…' : 'Issue refund'}
+        cancelLabel='Cancel'
+        destructive
+        confirmDisabled={isProcessingRefund || !refundAmountInput || Number(refundAmountInput) <= 0}
+        onCancel={closeRefundDialog}
+        onConfirm={submitRefund}
+      >
+        <div className='mt-2 space-y-3'>
+          <label className='block text-sm font-medium text-slate-700'>
+            Amount (INR)
+            <input
+              type='number'
+              min='0'
+              step='0.01'
+              value={refundAmountInput}
+              onChange={(event) => setRefundAmountInput(event.target.value)}
+              className='mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm ui-focus-ring'
+              disabled={isProcessingRefund}
+              required
+            />
+          </label>
+          <label className='block text-sm font-medium text-slate-700'>
+            Speed
+            <select
+              value={refundSpeedInput}
+              onChange={(event) => setRefundSpeedInput(event.target.value)}
+              className='mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm ui-focus-ring'
+              disabled={isProcessingRefund}
+            >
+              <option value='normal'>Normal (5–7 working days)</option>
+              <option value='optimum'>Optimum (instant when available)</option>
+            </select>
+          </label>
+          <label className='block text-sm font-medium text-slate-700'>
+            Reason
+            <textarea
+              value={refundReasonInput}
+              onChange={(event) => setRefundReasonInput(event.target.value)}
+              className='mt-1 min-h-20 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm ui-focus-ring'
+              placeholder='Optional internal note shared with Razorpay.'
+              maxLength={500}
+              disabled={isProcessingRefund}
+            />
+          </label>
         </div>
       </ConfirmDialog>
     </div>

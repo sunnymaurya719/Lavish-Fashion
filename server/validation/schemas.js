@@ -337,12 +337,6 @@ const adminCustomerNotesSchema = z.object({
     adminNotes: z.string().trim().max(1000)
 });
 
-const stripeVerifySchema = z.object({
-    orderId: objectIdSchema,
-    success: z.enum(['true', 'false']).optional(),
-    session_id: z.string().trim().min(1).optional()
-});
-
 const razorpayVerifySchema = z.object({
     razorpay_order_id: z.string().trim().min(1),
     razorpay_payment_id: z.string().trim().min(1),
@@ -445,24 +439,6 @@ const marketingCampaignDispatchSchema = z.object({
     campaignId: objectIdSchema
 });
 
-const stripeWebhookEventSchema = z.object({
-    id: z.string().trim().min(1),
-    type: z.string().trim().min(1),
-    data: z.object({
-        object: z.object({
-            id: z.string().trim().min(1),
-            client_reference_id: z.string().trim().optional().nullable(),
-            payment_intent: z.union([z.string().trim().min(1), z.null()]).optional(),
-            metadata: z
-                .object({
-                    orderId: z.string().trim().optional(),
-                    userId: z.string().trim().optional()
-                })
-                .optional()
-        })
-    })
-});
-
 const razorpayWebhookEventSchema = z.object({
     event: z.string().trim().min(1),
     payload: z
@@ -473,14 +449,75 @@ const razorpayWebhookEventSchema = z.object({
                         .object({
                             id: z.string().trim().optional(),
                             order_id: z.string().trim().optional(),
-                            status: z.string().trim().optional()
+                            status: z.string().trim().optional(),
+                            amount: z.union([z.string(), z.number()]).optional(),
+                            currency: z.string().trim().optional()
                         })
+                        .passthrough()
                         .optional()
                 })
+                .passthrough()
+                .optional(),
+            order: z
+                .object({
+                    entity: z
+                        .object({
+                            id: z.string().trim().optional(),
+                            status: z.string().trim().optional(),
+                            amount_paid: z.union([z.string(), z.number()]).optional()
+                        })
+                        .passthrough()
+                        .optional()
+                })
+                .passthrough()
+                .optional(),
+            refund: z
+                .object({
+                    entity: z
+                        .object({
+                            id: z.string().trim().optional(),
+                            payment_id: z.string().trim().optional(),
+                            amount: z.union([z.string(), z.number()]).optional(),
+                            status: z.string().trim().optional(),
+                            speed_processed: z.string().trim().optional(),
+                            speed_requested: z.string().trim().optional(),
+                            notes: z.any().optional()
+                        })
+                        .passthrough()
+                        .optional()
+                })
+                .passthrough()
                 .optional()
         })
+        .passthrough()
         .optional()
 });
+
+const razorpayPaymentAttemptCancelSchema = z.object({
+    attemptId: objectIdSchema
+});
+
+const orderRefundSchema = z
+    .object({
+        amount: z
+            .union([z.string(), z.number()])
+            .optional()
+            .transform((value) => {
+                if (value === undefined || value === '' || value === null) {
+                    return undefined;
+                }
+
+                const numericValue = Number(value);
+                return Number.isFinite(numericValue) ? numericValue : NaN;
+            })
+            .refine((value) => value === undefined || (typeof value === 'number' && value > 0), {
+                message: 'Refund amount must be a positive number'
+            }),
+        reason: z.string().trim().max(500).optional().default(''),
+        speed: z.enum(['normal', 'optimum']).optional().default('normal'),
+        notes: z.record(z.string()).optional().default({})
+    })
+    .strict();
 
 const shiprocketWebhookSchema = z
     .object({
@@ -534,8 +571,8 @@ export {
     reviewStatusSchema,
     razorpayVerifySchema,
     razorpayWebhookEventSchema,
-    stripeVerifySchema,
-    stripeWebhookEventSchema,
+    razorpayPaymentAttemptCancelSchema,
+    orderRefundSchema,
     userGoogleAuthSchema,
     userLoginSchema,
     userProfileUpdateSchema,

@@ -26,8 +26,6 @@ const optionalButRecommendedEnvVars = [
     'FRONTEND_URL',
     'CORS_ORIGINS',
     'GOOGLE_CLIENT_ID',
-    'STRIPE_SECRET_KEY',
-    'STRIPE_WEBHOOK_SECRET',
     'RAZORPAY_KEY_ID',
     'RAZORPAY_KEY_SECRET',
     'RAZORPAY_WEBHOOK_SECRET',

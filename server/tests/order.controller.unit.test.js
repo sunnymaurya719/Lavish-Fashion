@@ -1,30 +1,9 @@
 import crypto from 'crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
-process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'rzp_whsec_test';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_key_secret_test';
 process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
-
-const stripeRetrieveMock = vi.fn();
-const stripeConstructEventMock = vi.fn();
-
-vi.mock('stripe', () => ({
-    default: class StripeMock {
-        constructor() {
-            this.checkout = {
-                sessions: {
-                    retrieve: stripeRetrieveMock,
-                    create: vi.fn()
-                }
-            };
-            this.webhooks = {
-                constructEvent: stripeConstructEventMock
-            };
-        }
-    }
-}));
 
 vi.mock('razorpay', () => ({
     default: class RazorpayMock {
@@ -61,6 +40,12 @@ const userModelMock = {
 
 const productModelMock = {
     find: vi.fn()
+};
+
+const razorpayWebhookEventModelMock = {
+    create: vi.fn(),
+    findByIdAndUpdate: vi.fn(),
+    findOneAndUpdate: vi.fn()
 };
 
 const beginIdempotentRequestMock = vi.fn();
@@ -146,6 +131,10 @@ vi.mock('../models/productModel.js', () => ({
     default: productModelMock
 }));
 
+vi.mock('../models/razorpayWebhookEventModel.js', () => ({
+    default: razorpayWebhookEventModelMock
+}));
+
 vi.mock('../services/idempotencyService.js', () => ({
     beginIdempotentRequest: beginIdempotentRequestMock,
     completeIdempotentRequest: completeIdempotentRequestMock
@@ -190,12 +179,9 @@ const {
     cancelShiprocketBulkLiveVerification,
     cancelUserOrder,
     getShiprocketBulkLiveVerificationJob,
-    placeOrderStripe,
     placeOrderRazorpay,
     startShiprocketBulkLiveVerification,
-    verifyStripe,
     verifyRazorpay,
-    handleStripeWebhook,
     handleRazorpayWebhook,
     placeOrderCOD,
     updateOrderStatus
@@ -215,40 +201,10 @@ describe('orderController unit tests', () => {
         vi.clearAllMocks();
     });
 
-    it('returns 400 when Stripe order creation misses idempotency key', async () => {
-        const req = {
-            headers: {},
-            userId: 'user_1',
-            body: { items: [], address: {} },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await placeOrderStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-        expect(beginIdempotentRequestMock).not.toHaveBeenCalled();
-    });
-
-    it('returns replay payload from idempotency service for Stripe order creation', async () => {
-        beginIdempotentRequestMock.mockResolvedValueOnce({
-            action: 'replay',
-            statusCode: 200,
-            body: { success: true, session: { id: 'cs_replay' } }
-        });
-
-        const req = {
-            headers: { 'idempotency-key': 'idem_1' },
-            userId: 'user_1',
-            body: { items: [{ _id: '507f1f77bcf86cd799439011', quantity: 1, size: 'M' }], address: {} },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await placeOrderStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(200);
-        expect(res.json).toHaveBeenCalledWith({ success: true, session: { id: 'cs_replay' } });
+    beforeEach(() => {
+        razorpayWebhookEventModelMock.create.mockResolvedValue({ _id: 'mock_event_id' });
+        razorpayWebhookEventModelMock.findByIdAndUpdate.mockResolvedValue(null);
+        razorpayWebhookEventModelMock.findOneAndUpdate.mockResolvedValue(null);
     });
 
     it('returns conflict from idempotency service for Razorpay order creation', async () => {
@@ -741,35 +697,6 @@ describe('orderController unit tests', () => {
         );
     });
 
-    it('returns 400 for invalid Stripe order id in verifyStripe', async () => {
-        const req = {
-            userId: 'user_1',
-            body: { orderId: 'invalid_order_id', success: 'true', session_id: 'cs_1' },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await verifyStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-    });
-
-    it('returns 400 when Stripe verify request misses session id', async () => {
-        orderModelMock.findById.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011', userId: 'user_1', payment: false });
-
-        const req = {
-            userId: 'user_1',
-            body: { orderId: '507f1f77bcf86cd799439011', success: 'true' },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await verifyStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
-    });
-
     it('cancels an order for the owning user within the six-hour window', async () => {
         const createdAt = new Date(Date.now() - 60 * 60 * 1000);
 
@@ -918,49 +845,6 @@ describe('orderController unit tests', () => {
         );
     });
 
-    it('returns 400 when Stripe session does not belong to order/user', async () => {
-        orderModelMock.findById.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011', userId: 'user_1', payment: false });
-        stripeRetrieveMock.mockResolvedValueOnce({
-            id: 'cs_test_1',
-            client_reference_id: '507f1f77bcf86cd799439099',
-            metadata: { orderId: '507f1f77bcf86cd799439099', userId: 'user_2' },
-            payment_status: 'paid'
-        });
-
-        const req = {
-            userId: 'user_1',
-            body: { orderId: '507f1f77bcf86cd799439011', success: 'true', session_id: 'cs_test_1' },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await verifyStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-        expect(orderModelMock.findByIdAndUpdate).not.toHaveBeenCalled();
-    });
-
-    it('returns 402 when Stripe payment status is not paid', async () => {
-        orderModelMock.findById.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011', userId: 'user_1', payment: false });
-        stripeRetrieveMock.mockResolvedValueOnce({
-            id: 'cs_test_1',
-            client_reference_id: '507f1f77bcf86cd799439011',
-            metadata: { orderId: '507f1f77bcf86cd799439011', userId: 'user_1' },
-            payment_status: 'unpaid'
-        });
-
-        const req = {
-            userId: 'user_1',
-            body: { orderId: '507f1f77bcf86cd799439011', success: 'true', session_id: 'cs_test_1' },
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await verifyStripe(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(402);
-    });
-
     it('returns 400 when Razorpay verify is missing required fields', async () => {
         const req = {
             userId: 'user_1',
@@ -1015,97 +899,6 @@ describe('orderController unit tests', () => {
         await verifyRazorpay(req, res);
 
         expect(res.status).toHaveBeenCalledWith(404);
-    });
-
-    it('returns 400 when Stripe webhook signature is missing', async () => {
-        const req = {
-            headers: {},
-            body: Buffer.from('{}'),
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await handleStripeWebhook(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-        expect(res.send).toHaveBeenCalledWith('Missing Stripe signature');
-    });
-
-    it('returns 400 when Stripe webhook payload fails schema validation', async () => {
-        stripeConstructEventMock.mockReturnValueOnce({ id: 'evt_1', type: 'checkout.session.completed' });
-
-        const req = {
-            headers: { 'stripe-signature': 'sig_1' },
-            body: Buffer.from('{}'),
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await handleStripeWebhook(req, res);
-
-        expect(res.status).toHaveBeenCalledWith(400);
-        expect(res.send).toHaveBeenCalledWith('Invalid Stripe webhook payload');
-    });
-
-    it('marks order as paid for valid checkout.session.completed webhook', async () => {
-        paymentAttemptModelMock.findById.mockResolvedValueOnce(null);
-
-        stripeConstructEventMock.mockReturnValueOnce({
-            id: 'evt_paid_1',
-            type: 'checkout.session.completed',
-            data: {
-                object: {
-                    id: 'cs_test_1',
-                    client_reference_id: '507f1f77bcf86cd799439011',
-                    payment_intent: 'pi_1',
-                    metadata: {
-                        orderId: '507f1f77bcf86cd799439011',
-                        userId: 'user_1'
-                    }
-                }
-            }
-        });
-
-        orderModelMock.findById.mockResolvedValueOnce({
-            _id: '507f1f77bcf86cd799439011',
-            userId: 'user_1',
-            payment: false,
-            gatewayEventId: null
-        });
-        orderModelMock.findByIdAndUpdate.mockResolvedValueOnce({
-            _id: '507f1f77bcf86cd799439011',
-            payment: true
-        });
-
-        const req = {
-            headers: { 'stripe-signature': 'sig_1' },
-            body: Buffer.from('{}'),
-            log: { error: vi.fn() }
-        };
-        const res = createRes();
-
-        await handleStripeWebhook(req, res);
-
-        expect(orderModelMock.findByIdAndUpdate).toHaveBeenCalledWith(
-            '507f1f77bcf86cd799439011',
-            expect.objectContaining({
-                payment: true,
-                paymentStatus: 'paid',
-                inventoryReserved: true,
-                stripeSessionId: 'cs_test_1',
-                stripePaymentIntentId: 'pi_1'
-            }),
-            { new: true }
-        );
-        expect(finalizeReservedLoyaltyRedemptionMock).toHaveBeenCalledWith(
-            expect.objectContaining({
-                order: expect.objectContaining({
-                    _id: '507f1f77bcf86cd799439011'
-                })
-            })
-        );
-        expect(userModelMock.findByIdAndUpdate).toHaveBeenCalledWith('user_1', { cartData: {} });
-        expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('returns 400 for invalid Razorpay webhook signature', async () => {

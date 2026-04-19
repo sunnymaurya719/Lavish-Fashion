@@ -396,7 +396,7 @@ const Product = () => {
       `Style: ${productData?.subCategory || 'N/A'}`,
       `Stock status: ${isOutOfStock ? 'Out of stock' : `${productData?.stock ?? 'Available'} units available`}`,
       '100% original product sourced for the Lavish Fashion catalog.',
-      'Cash on delivery, Stripe, and Razorpay checkout are supported.',
+      'Cash on delivery and Razorpay checkout are supported.',
       'Easy return and exchange requests can be initiated within 7 days of delivery.',
     ],
     [isOutOfStock, productData?.category, productData?.stock, productData?.subCategory]

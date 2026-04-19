@@ -38,20 +38,6 @@ const notificationConfigs = {
         webhookTimestampField: 'placedWebhookTimestamp',
         lastErrorField: 'placedLastError'
     },
-    shipped: {
-        templateEnv: 'WHATSAPP_TEMPLATE_ORDER_SHIPPED',
-        defaultTemplate: 'order_shipped',
-        statusLabel: 'Shipped',
-        sentField: 'shippedSent',
-        sendingField: 'shippedSending',
-        lockExpiresAtField: 'shippedLockExpiresAt',
-        lastAttemptAtField: 'shippedLastAttemptAt',
-        sentAtField: 'shippedSentAt',
-        messageIdField: 'shippedMessageId',
-        webhookStatusField: 'shippedWebhookStatus',
-        webhookTimestampField: 'shippedWebhookTimestamp',
-        lastErrorField: 'shippedLastError'
-    },
     outForDelivery: {
         templateEnv: 'WHATSAPP_TEMPLATE_OUT_FOR_DELIVERY',
         defaultTemplate: 'order_out_for_delivery',
@@ -79,20 +65,6 @@ const notificationConfigs = {
         webhookStatusField: 'deliveredWebhookStatus',
         webhookTimestampField: 'deliveredWebhookTimestamp',
         lastErrorField: 'deliveredLastError'
-    },
-    cancelled: {
-        templateEnv: 'WHATSAPP_TEMPLATE_ORDER_CANCELLED',
-        defaultTemplate: 'order_cancelled',
-        statusLabel: 'Cancelled',
-        sentField: 'cancelledSent',
-        sendingField: 'cancelledSending',
-        lockExpiresAtField: 'cancelledLockExpiresAt',
-        lastAttemptAtField: 'cancelledLastAttemptAt',
-        sentAtField: 'cancelledSentAt',
-        messageIdField: 'cancelledMessageId',
-        webhookStatusField: 'cancelledWebhookStatus',
-        webhookTimestampField: 'cancelledWebhookTimestamp',
-        lastErrorField: 'cancelledLastError'
     }
 };
 
@@ -877,10 +849,8 @@ const extractWebhookStatusEntries = (payload = {}) => {
 };
 
 const sendOrderPlacedMessage = async (order, options = {}) => sendOrderNotification(order, 'placed', options);
-const sendShippedMessage = async (order, options = {}) => sendOrderNotification(order, 'shipped', options);
 const sendOutForDeliveryMessage = async (order, options = {}) => sendOrderNotification(order, 'outForDelivery', options);
 const sendDeliveredMessage = async (order, options = {}) => sendOrderNotification(order, 'delivered', options);
-const sendCancelledMessage = async (order, options = {}) => sendOrderNotification(order, 'cancelled', options);
 
 const sendTemplateMessage = async ({ to, templateName, parameters, languageCode, log } = {}) => {
     const templateLog = log?.child
@@ -986,10 +956,8 @@ export {
     captureRawRequestBody,
     handleWhatsAppWebhookEvent,
     handleWhatsAppWebhookVerification,
-    sendCancelledMessage,
     sendDeliveredMessage,
     sendOrderPlacedMessage,
-    sendShippedMessage,
     sendOutForDeliveryMessage,
     sendTemplateMessage
 };

@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, memo } from 'react'
+import React, { lazy, Suspense } from 'react'
 import {Routes, Route, useLocation} from 'react-router-dom'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
@@ -18,7 +18,6 @@ const Rewards = lazy(() => import('./pages/Rewards'))
 const PlaceOrder = lazy(() => import('./pages/PlaceOrder'))
 const Orders = lazy(() => import('./pages/Orders'))
 const Wishlist = lazy(() => import('./pages/Wishlist'))
-const Verify = lazy(() => import('./pages/Verify'))
 
 const RouteFallback = () => (
   <div className='min-h-[60vh] flex items-center justify-center'>
@@ -50,7 +49,6 @@ const App = () => {
           <Route path='/rewards' element={<Rewards/>} />
           <Route path='/place-order' element={<PlaceOrder/>} />
           <Route path='/orders' element={<Orders/>} />
-          <Route path='/verify' element={<Verify/>} />
         </Routes>
       </Suspense>
       {isAuthRoute ? null : <Footer />}

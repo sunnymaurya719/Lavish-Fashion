@@ -1,10 +1,7 @@
 import orderModel from '../models/orderModel.js';
 import paymentAttemptModel from '../models/paymentAttemptModel.js';
 import userModel from '../models/userModel.js';
-import {
-    razorpayWebhookEventSchema,
-    stripeWebhookEventSchema
-} from '../validation/schemas.js';
+import { razorpayWebhookEventSchema } from '../validation/schemas.js';
 import { beginIdempotentRequest, completeIdempotentRequest } from '../services/idempotencyService.js';
 import {
     DEFAULT_DELIVERY_CHARGE,
@@ -46,16 +43,22 @@ import {
     performOrderCancellation
 } from '../services/orderStatusService.js';
 import { getShiprocketConfig, getValidToken, isShiprocketConfigured, isShiprocketEnabled } from '../config/shiprocket.js';
-import Stripe from 'stripe';
-import razorpay from 'razorpay';
+import {
+    createCheckoutOrder as createRazorpayCheckoutOrder,
+    createRefund as createRazorpayRefund,
+    fetchPayment as fetchRazorpayPayment,
+    isRazorpayConfigured,
+    isRazorpayWebhookConfigured,
+    secureCompare,
+    verifyCheckoutSignature as verifyRazorpayCheckoutSignature,
+    verifyWebhookSignature as verifyRazorpayWebhookSignature
+} from '../services/razorpayService.js';
+import razorpayWebhookEventModel from '../models/razorpayWebhookEventModel.js';
 import crypto from 'crypto';
 
 //global variables
 const currency = 'inr';
 const deliveryCharge = DEFAULT_DELIVERY_CHARGE;
-
-let stripeClient;
-let razorpayClient;
 
 const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MAX_SHIPROCKET_REFERENCE_LENGTH = 20;
@@ -105,31 +108,12 @@ const resolveCustomerEmail = async (userId) => {
     return normalizeEmail(user?.email);
 };
 
-const getStripeClient = () => {
-    if (!process.env.STRIPE_SECRET_KEY) {
-        return null;
-    }
-
-    if (!stripeClient) {
-        stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
-    }
-
-    return stripeClient;
-};
-
 const getRazorpayClient = () => {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+    if (!isRazorpayConfigured()) {
         return null;
     }
 
-    if (!razorpayClient) {
-        razorpayClient = new razorpay({
-            key_id: process.env.RAZORPAY_KEY_ID,
-            key_secret: process.env.RAZORPAY_KEY_SECRET
-        });
-    }
-
-    return razorpayClient;
+    return true;
 };
 
 const clearCartForCompletedOrder = async (order) => {
@@ -215,81 +199,6 @@ const markOrderAsFailed = async ({ order, gatewayEventId, paymentFields }) => {
 };
 
 const isValidObjectId = (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
-
-const secureCompare = (a, b) => {
-    const left = Buffer.from(String(a || ''), 'utf8');
-    const right = Buffer.from(String(b || ''), 'utf8');
-
-    if (left.length !== right.length) {
-        return false;
-    }
-
-    return crypto.timingSafeEqual(left, right);
-};
-
-const resolveStripeOrder = async (session) => {
-    const orderId = String(session?.client_reference_id || session?.metadata?.orderId || '');
-
-    if (!isValidObjectId(orderId)) {
-        return null;
-    }
-
-    const order = await orderModel.findById(orderId);
-    if (!order) {
-        return null;
-    }
-
-    const metadataOrderId = String(session?.metadata?.orderId || '');
-    const clientReferenceId = String(session?.client_reference_id || '');
-    const metadataUserId = String(session?.metadata?.userId || '');
-
-    if (metadataOrderId && metadataOrderId !== String(order._id)) {
-        return null;
-    }
-
-    if (clientReferenceId && clientReferenceId !== String(order._id)) {
-        return null;
-    }
-
-    if (metadataUserId && metadataUserId !== String(order.userId)) {
-        return null;
-    }
-
-    return order;
-};
-
-const resolveStripePaymentAttempt = async (session) => {
-    const paymentAttemptId = String(
-        session?.metadata?.paymentAttemptId || session?.metadata?.orderId || session?.client_reference_id || ''
-    );
-
-    if (!isValidObjectId(paymentAttemptId)) {
-        return null;
-    }
-
-    const paymentAttempt = await paymentAttemptModel.findById(paymentAttemptId);
-    if (!paymentAttempt) {
-        return null;
-    }
-
-    const metadataAttemptId = String(session?.metadata?.paymentAttemptId || session?.metadata?.orderId || '');
-    const clientReferenceId = String(session?.client_reference_id || '');
-    const metadataUserId = String(session?.metadata?.userId || '');
-
-    if (metadataAttemptId && metadataAttemptId !== String(paymentAttempt._id)) {
-        return null;
-    }
-
-    if (clientReferenceId && clientReferenceId !== String(paymentAttempt._id)) {
-        return null;
-    }
-
-    if (metadataUserId && metadataUserId !== String(paymentAttempt.userId)) {
-        return null;
-    }
-
-    return paymentAttempt;
-};
 
 const getIdempotencyKey = (req) => String(req.headers['idempotency-key'] || '').trim();
 
@@ -510,8 +419,6 @@ const createOrderFromPaymentAttempt = async ({ paymentAttempt, gatewayEventId, p
         payment: true,
         paymentStatus: 'paid',
         paymentVerifiedAt: Date.now(),
-        stripeSessionId: paymentFields.stripeSessionId || latestAttempt.stripeSessionId || null,
-        stripePaymentIntentId: paymentFields.stripePaymentIntentId || latestAttempt.stripePaymentIntentId || null,
         razorpayOrderId: paymentFields.razorpayOrderId || latestAttempt.razorpayOrderId || null,
         razorpayPaymentId: paymentFields.razorpayPaymentId || latestAttempt.razorpayPaymentId || null,
         gatewayEventId: gatewayEventId || latestAttempt.gatewayEventId || null,
@@ -551,51 +458,6 @@ const createOrderFromPaymentAttempt = async ({ paymentAttempt, gatewayEventId, p
     });
 
     return order;
-};
-
-const buildStripeLineItems = ({ normalizedItems, pricing }) => {
-    if (pricing.discountAmount > 0) {
-        return [
-            {
-                price_data: {
-                    currency,
-                    product_data: {
-                        name: pricing.appliedCoupon?.code
-                            ? `Lavish Fashion order total (${pricing.appliedCoupon.code})`
-                            : 'Lavish Fashion order total'
-                    },
-                    unit_amount: Math.round(Number(pricing.amount) * 100)
-                },
-                quantity: 1
-            }
-        ];
-    }
-
-    const lineItems = normalizedItems.map((item) => ({
-        price_data: {
-            currency,
-            product_data: {
-                name: `${item.name}${item.size ? ` (${item.size})` : ''}`
-            },
-            unit_amount: Math.round(Number(item.price) * 100)
-        },
-        quantity: item.quantity
-    }));
-
-    if (pricing.deliveryFee > 0) {
-        lineItems.push({
-            price_data: {
-                currency,
-                product_data: {
-                    name: 'Delivery Charges'
-                },
-                unit_amount: Math.round(Number(pricing.deliveryFee) * 100)
-            },
-            quantity: 1
-        });
-    }
-
-    return lineItems;
 };
 
 const isClientOrderError = (error) =>
@@ -767,300 +629,6 @@ const placeOrderCOD = async (req, res) => {
 // }
 
 
-//Placing orders using Stripe Method
-const placeOrderStripe = async (req, res) => {
-    let idempotencyRecordId;
-    let normalizedItems = [];
-    let reservedInventory = false;
-    let createdPaymentAttemptId;
-    let reservedLoyaltyPoints = 0;
-
-    try {
-        const stripe = getStripeClient();
-        if (!stripe) {
-            return res.status(503).json({ success: false, message: 'Stripe is not configured on server' });
-        }
-
-        const userId = req.userId;
-        const { items, address, checkoutSource = 'cart', couponCode = '', pointsToRedeem = 0 } = req.body;
-        const idempotencyKey = getIdempotencyKey(req);
-
-        if (!idempotencyKey) {
-            return res.status(400).json({ success: false, message: 'Missing idempotency key header' });
-        }
-
-        const idempotencyResult = await beginIdempotentRequest({
-            userId,
-            scope: 'order:create:stripe',
-            key: idempotencyKey,
-            payload: req.body
-        });
-
-        if (idempotencyResult.action === 'replay' || idempotencyResult.action === 'conflict' || idempotencyResult.action === 'in_progress') {
-            return res.status(idempotencyResult.statusCode).json(idempotencyResult.body);
-        }
-
-        idempotencyRecordId = idempotencyResult.recordId;
-
-        const pricing = await calculateOrderDetails({ userId, items, couponCode, pointsToRedeem });
-        const customerEmail = await resolveCustomerEmail(userId);
-        const shiprocketReferenceOrderId = generateShiprocketReferenceOrderId();
-        normalizedItems = pricing.normalizedItems;
-        const { amount } = pricing;
-        const clientBaseUrl = String(process.env.CLIENT_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-
-        if (!clientBaseUrl) {
-            const responseBody = { success: false, message: 'Client URL is not configured' };
-            await completeIdempotentRequest({
-                recordId: idempotencyRecordId,
-                statusCode: 500,
-                body: responseBody
-            });
-
-            return res.status(500).json(responseBody);
-        }
-
-        if (amount <= 0) {
-            throw createCheckoutError('Online payments require a payable order total greater than zero');
-        }
-
-        const paymentAttemptData = buildPaymentAttemptData({
-            userId,
-            normalizedItems,
-            pricing,
-            address,
-            customerEmail,
-            checkoutSource,
-            paymentMethod: 'Stripe',
-            shiprocketReferenceOrderId
-        });
-        if (Number(pricing.loyaltyPointsRedeemed || 0) > 0) {
-            await reserveLoyaltyRedemption({
-                userId,
-                points: pricing.loyaltyPointsRedeemed
-            });
-            reservedLoyaltyPoints = Number(pricing.loyaltyPointsRedeemed || 0);
-        }
-        await reserveInventoryForItems(normalizedItems);
-        reservedInventory = true;
-
-        const paymentAttempt = await paymentAttemptModel.create(paymentAttemptData);
-        createdPaymentAttemptId = paymentAttempt._id;
-
-        const line_items = buildStripeLineItems({ normalizedItems, pricing });
-
-        const session = await stripe.checkout.sessions.create({
-            success_url: `${clientBaseUrl}/verify?orderId=${paymentAttempt._id}&session_id={CHECKOUT_SESSION_ID}&checkoutSource=${checkoutSource}`,
-            cancel_url: `${clientBaseUrl}/verify?success=false&orderId=${paymentAttempt._id}&checkoutSource=${checkoutSource}`,
-            line_items,
-            mode: 'payment',
-            client_reference_id: String(paymentAttempt._id),
-            metadata: {
-                orderId: String(paymentAttempt._id),
-                paymentAttemptId: String(paymentAttempt._id),
-                userId: String(userId),
-                couponCode: pricing.appliedCoupon?.code || ''
-            }
-        })
-
-        await paymentAttemptModel.findByIdAndUpdate(paymentAttempt._id, {
-            stripeSessionId: session.id
-        });
-
-        const responseBody = { success: true, session };
-
-        await completeIdempotentRequest({
-            recordId: idempotencyRecordId,
-            statusCode: 200,
-            body: responseBody
-        });
-
-        res.status(200).json(responseBody);
-        
-    }
-    catch (error) {
-        if (reservedInventory) {
-            await releaseInventoryForItems(normalizedItems);
-        }
-
-        if (reservedLoyaltyPoints > 0) {
-            await releaseUserReservedLoyaltyPoints({
-                userId: req.userId,
-                points: reservedLoyaltyPoints
-            });
-        }
-
-        if (createdPaymentAttemptId) {
-            const paymentAttempt = await paymentAttemptModel.findById(createdPaymentAttemptId);
-
-            if (paymentAttempt) {
-                await markPaymentAttemptAsNotCompleted({
-                    paymentAttempt,
-                    status: 'failed'
-                });
-            }
-        } else {
-            if (reservedInventory) {
-                await releaseInventoryForItems(normalizedItems);
-            }
-
-            if (reservedLoyaltyPoints > 0) {
-                await releaseUserReservedLoyaltyPoints({
-                    userId: req.userId,
-                    points: reservedLoyaltyPoints
-                });
-            }
-        }
-
-        req.log?.error({ err: error }, 'Failed to create Stripe order');
-
-        const statusCode = isClientOrderError(error) ? 400 : 500;
-        const responseBody = {
-            success: false,
-            message: isClientOrderError(error) ? error.message : 'Unable to create Stripe session'
-        };
-        await completeIdempotentRequest({
-            recordId: idempotencyRecordId,
-            statusCode,
-            body: responseBody
-        });
-
-        res.status(statusCode).json(responseBody);
-    }
-};
-
-//verify Stripe
-const verifyStripe = async (req, res) => {
-    const { orderId, success, session_id } = req.body;
-    const userId = req.userId;
-
-    try {
-        const stripe = getStripeClient();
-        if (!stripe) {
-            return res.status(503).json({ success: false, message: 'Stripe is not configured on server' });
-        }
-
-        if (!isValidObjectId(orderId)) {
-            return res.status(400).json({ success: false, message: 'Invalid order id' });
-        }
-
-        const existingOrder = await orderModel.findById(orderId);
-        if (existingOrder && existingOrder.userId === userId) {
-            if (existingOrder.payment) {
-                return res.status(200).json({ success: true, message: 'Payment already confirmed via webhook.' });
-            }
-
-            if (success === 'false' && !session_id) {
-                await releaseInventoryForOrder(existingOrder);
-                await releaseReservedLoyaltyRedemption({ order: existingOrder });
-                await orderModel.findByIdAndUpdate(orderId, {
-                    paymentStatus: 'cancelled',
-                    inventoryReserved: false,
-                    loyaltyRedemptionStatus:
-                        Number(existingOrder.loyaltyPointsRedeemed || 0) > 0
-                            ? 'released'
-                            : existingOrder.loyaltyRedemptionStatus,
-                    loyaltyRedemptionReleasedAt:
-                        Number(existingOrder.loyaltyPointsRedeemed || 0) > 0
-                            ? Date.now()
-                            : existingOrder.loyaltyRedemptionReleasedAt
-                });
-
-                return res.status(200).json({ success: false, message: 'Payment cancelled.' });
-            }
-
-            if (!session_id) {
-                return res.status(400).json({ success: false, message: 'Missing Stripe session id' });
-            }
-
-            const legacySession = await stripe.checkout.sessions.retrieve(session_id);
-            const isLinkedToOrder =
-                legacySession.client_reference_id === String(orderId) &&
-                legacySession.metadata?.orderId === String(orderId) &&
-                legacySession.metadata?.userId === String(userId);
-
-            if (!isLinkedToOrder) {
-                return res.status(400).json({ success: false, message: 'Invalid Stripe session' });
-            }
-
-            if (legacySession.payment_status !== 'paid') {
-                return res.status(402).json({ success: false, message: 'Payment not completed' });
-            }
-
-            await markOrderAsPaid({
-                order: existingOrder,
-                gatewayEventId: legacySession.id,
-                paymentFields: {
-                    stripeSessionId: legacySession.id,
-                    stripePaymentIntentId: legacySession.payment_intent ? String(legacySession.payment_intent) : null
-                },
-                log: req.log
-            });
-
-            return res.status(200).json({ success: true, message: 'Payment verified successfully.' });
-        }
-
-        const paymentAttempt = await paymentAttemptModel.findById(orderId);
-
-        if (!paymentAttempt || paymentAttempt.userId !== userId || paymentAttempt.paymentMethod !== 'Stripe') {
-            return res.status(404).json({ success: false, message: 'Order not found' });
-        }
-
-        if (paymentAttempt.status === 'order_created' && paymentAttempt.createdOrderId) {
-            return res.status(200).json({ success: true, message: 'Payment already confirmed.' });
-        }
-
-        if (success === 'false' && !session_id) {
-            await markPaymentAttemptAsNotCompleted({
-                paymentAttempt,
-                status: 'cancelled',
-                paymentFields: {
-                    stripeSessionId: paymentAttempt.stripeSessionId || null
-                }
-            });
-
-            return res.status(200).json({ success: false, message: 'Payment cancelled.' });
-        }
-
-        if (!session_id) {
-            return res.status(400).json({ success: false, message: 'Missing Stripe session id' });
-        }
-
-        const session = await stripe.checkout.sessions.retrieve(session_id);
-        const linkedAttemptId = String(
-            session.metadata?.paymentAttemptId || session.metadata?.orderId || session.client_reference_id || ''
-        );
-        const isLinkedToAttempt =
-            linkedAttemptId === String(paymentAttempt._id) &&
-            session.metadata?.userId === String(userId);
-
-        if (!isLinkedToAttempt) {
-            return res.status(400).json({ success: false, message: 'Invalid Stripe session' });
-        }
-
-        if (session.payment_status !== 'paid') {
-            return res.status(402).json({ success: false, message: 'Payment not completed' });
-        }
-
-        await createOrderFromPaymentAttempt({
-            paymentAttempt,
-            gatewayEventId: session.id,
-            paymentFields: {
-                stripeSessionId: session.id,
-                stripePaymentIntentId: session.payment_intent ? String(session.payment_intent) : null
-            },
-            log: req.log
-        });
-
-        return res.status(200).json({ success: true, message: 'Payment verified successfully.' });
-    }
-    catch (error) {
-        req.log?.error({ err: error }, 'Failed to verify Stripe payment');
-        res.status(500).json({ success: false, message: 'Failed to verify Stripe payment' });
-    }
-};
-
-
 //Placing orders using razorpay Method
 const placeOrderRazorpay = async (req, res) => {
     let idempotencyRecordId;
@@ -1070,8 +638,7 @@ const placeOrderRazorpay = async (req, res) => {
     let reservedLoyaltyPoints = 0;
 
     try{
-        const razorpayInstance = getRazorpayClient();
-        if (!razorpayInstance) {
+        if (!isRazorpayConfigured()) {
             return res.status(503).json({ success: false, message: 'Razorpay is not configured on server' });
         }
 
@@ -1130,18 +697,32 @@ const placeOrderRazorpay = async (req, res) => {
         const paymentAttempt = await paymentAttemptModel.create(paymentAttemptData);
         createdPaymentAttemptId = paymentAttempt._id;
 
-        const options = {
-            amount: amount * 100,
-            currency:currency.toUpperCase(),
-            receipt:paymentAttempt._id.toString()
-        }
-        const order = await razorpayInstance.orders.create(options);
+        const order = await createRazorpayCheckoutOrder({
+            amountInRupees: amount,
+            receipt: paymentAttempt._id.toString(),
+            notes: {
+                paymentAttemptId: paymentAttempt._id.toString(),
+                userId: String(userId || ''),
+                checkoutSource,
+                shiprocketReferenceOrderId
+            }
+        });
 
         await paymentAttemptModel.findByIdAndUpdate(paymentAttempt._id, {
             razorpayOrderId: order.id
         });
 
-        const responseBody = { success: true, order };
+        const responseBody = {
+            success: true,
+            order: {
+                id: order.id,
+                amount: order.amount,
+                currency: order.currency,
+                receipt: order.receipt,
+                status: order.status,
+                paymentAttemptId: paymentAttempt._id.toString()
+            }
+        };
 
         await completeIdempotentRequest({
             recordId: idempotencyRecordId,
@@ -1210,12 +791,11 @@ const verifyRazorpay = async(req,res) =>{
             return res.status(400).json({success:false,message:'Missing Razorpay verification fields'});
         }
 
-        const generatedSignature = crypto
-            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-            .digest('hex');
-
-        if (!secureCompare(generatedSignature, razorpay_signature)) {
+        if (!verifyRazorpayCheckoutSignature({
+            orderId: razorpay_order_id,
+            paymentId: razorpay_payment_id,
+            signature: razorpay_signature
+        })) {
             return res.status(400).json({success:false,message:'Invalid Razorpay signature'});
         }
 
@@ -1271,90 +851,219 @@ const verifyRazorpay = async(req,res) =>{
     }
 };
 
-const handleStripeWebhook = async (req, res) => {
-    const signature = req.headers['stripe-signature'];
-    const stripe = getStripeClient();
+const RAZORPAY_HANDLED_EVENTS = new Set([
+    'payment.authorized',
+    'payment.captured',
+    'payment.failed',
+    'order.paid',
+    'refund.created',
+    'refund.processed',
+    'refund.failed'
+]);
 
-    if (!signature) {
-        return res.status(400).send('Missing Stripe signature');
+const buildRazorpayWebhookEventId = (event) => {
+    const candidate =
+        event?.id ||
+        event?.payload?.payment?.entity?.id ||
+        event?.payload?.order?.entity?.id ||
+        event?.payload?.refund?.entity?.id;
+    if (candidate) {
+        const eventType = String(event?.event || 'event').trim();
+        return `${eventType}:${candidate}`;
     }
 
-    if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
-        return res.status(503).send('Stripe webhook is not configured');
+    const fallback = crypto
+        .createHash('sha256')
+        .update(JSON.stringify(event || {}))
+        .digest('hex');
+    return `${String(event?.event || 'event')}:hash:${fallback}`;
+};
+
+const recomputeOrderRefundTotals = (order) => {
+    const refunds = Array.isArray(order?.refunds) ? order.refunds : [];
+    const processedAmount = refunds
+        .filter((refund) => refund?.status === 'processed')
+        .reduce((sum, refund) => sum + Number(refund.amount || 0), 0);
+    const hasPending = refunds.some((refund) => refund?.status === 'pending');
+    const hasFailed = refunds.some((refund) => refund?.status === 'failed');
+    const orderTotal = Number(order?.amount || 0);
+
+    let refundStatus = 'none';
+    if (processedAmount > 0 && processedAmount + 0.01 >= orderTotal) {
+        refundStatus = 'processed';
+    } else if (processedAmount > 0) {
+        refundStatus = 'partial';
+    } else if (hasPending) {
+        refundStatus = 'pending';
+    } else if (hasFailed) {
+        refundStatus = 'failed';
     }
 
-    try {
-        const event = stripe.webhooks.constructEvent(
-            req.body,
-            signature,
-            process.env.STRIPE_WEBHOOK_SECRET
-        );
+    return {
+        refundedAmount: Math.round(processedAmount * 100) / 100,
+        refundStatus,
+        refundLastUpdatedAt: Date.now()
+    };
+};
 
-        const parsedEvent = stripeWebhookEventSchema.safeParse(event);
-        if (!parsedEvent.success) {
-            return res.status(400).send('Invalid Stripe webhook payload');
-        }
-
-        if (event.type === 'checkout.session.completed') {
-            const session = event.data.object;
-            const paymentAttempt = await resolveStripePaymentAttempt(session);
-
-            if (paymentAttempt) {
-                await createOrderFromPaymentAttempt({
-                    paymentAttempt,
-                    gatewayEventId: event.id,
-                    paymentFields: {
-                        stripeSessionId: session.id,
-                        stripePaymentIntentId: session.payment_intent ? String(session.payment_intent) : null
-                    },
-                    log: req.log
-                });
-            }
-
-            const order = await resolveStripeOrder(session);
-
-            if (order) {
-                await markOrderAsPaid({
-                    order,
-                    gatewayEventId: event.id,
-                    paymentFields: {
-                        stripeSessionId: session.id,
-                        stripePaymentIntentId: session.payment_intent ? String(session.payment_intent) : null
-                    },
-                    log: req.log
-                });
-            }
-        }
-
-        if (event.type === 'checkout.session.expired') {
-            const session = event.data.object;
-            const paymentAttempt = await resolveStripePaymentAttempt(session);
-
-            if (paymentAttempt) {
-                await markPaymentAttemptAsNotCompleted({
-                    paymentAttempt,
-                    status: 'expired',
-                    gatewayEventId: event.id,
-                    paymentFields: { stripeSessionId: session.id }
-                });
-            }
-
-            const order = await resolveStripeOrder(session);
-
-            if (order) {
-                await markOrderAsFailed({
-                    order,
-                    gatewayEventId: event.id,
-                    paymentFields: { stripeSessionId: session.id }
-                });
-            }
-        }
-
-        return res.status(200).json({ received: true });
-    } catch (error) {
-        req.log?.error({ err: error }, 'Stripe webhook failed');
-        return res.status(400).send(`Webhook Error: ${error.message}`);
+const upsertOrderRefundRecord = async ({ order, refundEntity, initiatedBy = 'webhook' }) => {
+    if (!order || !refundEntity?.id) {
+        return order;
     }
+
+    const refundId = String(refundEntity.id);
+    const amountInRupees = Number(refundEntity.amount || 0) / 100;
+    const status =
+        refundEntity.status === 'processed'
+            ? 'processed'
+            : refundEntity.status === 'failed'
+                ? 'failed'
+                : 'pending';
+
+    const existingRefund = (order.refunds || []).find((refund) => String(refund.refundId) === refundId);
+
+    if (existingRefund) {
+        existingRefund.status = status;
+        existingRefund.amount = amountInRupees;
+        existingRefund.speedProcessed = refundEntity.speed_processed || existingRefund.speedProcessed || '';
+        existingRefund.speedRequested = refundEntity.speed_requested || existingRefund.speedRequested || existingRefund.speed;
+        existingRefund.processedAt = status === 'processed' ? Date.now() : existingRefund.processedAt;
+        existingRefund.failureReason =
+            status === 'failed' ? String(refundEntity.notes?.failure_reason || 'Refund failed') : existingRefund.failureReason;
+        existingRefund.rawResponse = refundEntity;
+    } else {
+        order.refunds = order.refunds || [];
+        order.refunds.push({
+            refundId,
+            paymentId: String(refundEntity.payment_id || order.razorpayPaymentId || ''),
+            amount: amountInRupees,
+            currency: String(refundEntity.currency || 'INR'),
+            status,
+            speed: refundEntity.speed_requested === 'optimum' ? 'optimum' : 'normal',
+            speedRequested: refundEntity.speed_requested || 'normal',
+            speedProcessed: refundEntity.speed_processed || '',
+            reason: String(refundEntity.notes?.reason || ''),
+            notes: refundEntity.notes || {},
+            initiatedBy,
+            createdAt: Date.now(),
+            processedAt: status === 'processed' ? Date.now() : null,
+            failureReason: status === 'failed' ? String(refundEntity.notes?.failure_reason || 'Refund failed') : '',
+            rawResponse: refundEntity
+        });
+    }
+
+    Object.assign(order, recomputeOrderRefundTotals(order));
+    await order.save();
+
+    await publishAdminOrderUpsert({
+        order,
+        source: 'orderController.upsertOrderRefundRecord'
+    });
+
+    return order;
+};
+
+const handleRazorpayPaymentAuthorized = async ({ event, paymentEntity, log }) => {
+    const razorpayOrderId = paymentEntity?.order_id;
+    if (!razorpayOrderId) return;
+    const order = await orderModel.findOne({ razorpayOrderId });
+    if (!order || order.payment) return;
+    await orderModel.findByIdAndUpdate(order._id, {
+        paymentAuthorizedAt: Date.now(),
+        razorpayPaymentId: paymentEntity?.id || order.razorpayPaymentId,
+        gatewayEventId: paymentEntity?.id || order.gatewayEventId
+    });
+    log?.info({ razorpayOrderId, paymentId: paymentEntity?.id }, 'Razorpay payment authorized');
+};
+
+const handleRazorpayPaymentCaptured = async ({ event, paymentEntity, log }) => {
+    const razorpayOrderId = paymentEntity?.order_id;
+    if (!razorpayOrderId) return;
+
+    const paymentAttempt = await paymentAttemptModel.findOne({
+        razorpayOrderId,
+        paymentMethod: 'Razorpay'
+    });
+    const order = paymentAttempt ? null : await orderModel.findOne({ razorpayOrderId });
+
+    if (paymentAttempt) {
+        await createOrderFromPaymentAttempt({
+            paymentAttempt,
+            gatewayEventId: paymentEntity?.id,
+            paymentFields: {
+                razorpayOrderId,
+                razorpayPaymentId: paymentEntity?.id || null,
+                paymentCapturedAt: Date.now()
+            },
+            log
+        });
+        return;
+    }
+
+    if (order) {
+        await markOrderAsPaid({
+            order,
+            gatewayEventId: paymentEntity?.id,
+            paymentFields: {
+                razorpayOrderId,
+                razorpayPaymentId: paymentEntity?.id || null,
+                paymentCapturedAt: Date.now()
+            },
+            log
+        });
+    }
+};
+
+const handleRazorpayPaymentFailed = async ({ event, paymentEntity, log }) => {
+    const razorpayOrderId = paymentEntity?.order_id;
+    if (!razorpayOrderId) return;
+
+    const paymentAttempt = await paymentAttemptModel.findOne({
+        razorpayOrderId,
+        paymentMethod: 'Razorpay'
+    });
+    const order = paymentAttempt ? null : await orderModel.findOne({ razorpayOrderId });
+
+    if (paymentAttempt) {
+        await markPaymentAttemptAsNotCompleted({
+            paymentAttempt,
+            status: 'failed',
+            gatewayEventId: paymentEntity?.id,
+            paymentFields: {
+                razorpayOrderId,
+                razorpayPaymentId: paymentEntity?.id || null
+            }
+        });
+        return;
+    }
+
+    if (order) {
+        await markOrderAsFailed({
+            order,
+            gatewayEventId: paymentEntity?.id,
+            paymentFields: {
+                razorpayOrderId,
+                razorpayPaymentId: paymentEntity?.id || null
+            }
+        });
+    }
+};
+
+const handleRazorpayRefundEvent = async ({ event, refundEntity, log }) => {
+    if (!refundEntity?.id) return;
+    const order = await orderModel.findOne({
+        $or: [
+            { razorpayPaymentId: refundEntity.payment_id },
+            { 'refunds.refundId': refundEntity.id }
+        ]
+    });
+
+    if (!order) {
+        log?.warn({ refundId: refundEntity.id, paymentId: refundEntity.payment_id }, 'Refund webhook received for unknown order');
+        return;
+    }
+
+    await upsertOrderRefundRecord({ order, refundEntity, initiatedBy: 'webhook' });
 };
 
 const handleRazorpayWebhook = async (req, res) => {
@@ -1364,91 +1073,315 @@ const handleRazorpayWebhook = async (req, res) => {
         return res.status(400).send('Missing Razorpay signature');
     }
 
-    if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+    if (!isRazorpayWebhookConfigured()) {
         return res.status(503).send('Razorpay webhook is not configured');
     }
 
+    const rawBody = req.body;
+
+    if (!verifyRazorpayWebhookSignature({ rawBody, signature })) {
+        return res.status(400).send('Invalid webhook signature');
+    }
+
+    let event;
     try {
-        const rawBody = req.body;
-        const computedSignature = crypto
-            .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
-            .update(rawBody)
-            .digest('hex');
+        event = JSON.parse(Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody));
+    } catch (parseError) {
+        req.log?.warn({ err: parseError }, 'Failed to parse Razorpay webhook body');
+        return res.status(400).send('Invalid Razorpay webhook payload');
+    }
 
-        if (!secureCompare(computedSignature, signature)) {
-            return res.status(400).send('Invalid webhook signature');
-        }
+    const parsedEvent = razorpayWebhookEventSchema.safeParse(event);
+    if (!parsedEvent.success) {
+        req.log?.warn({ issues: parsedEvent.error?.issues }, 'Razorpay webhook payload failed schema validation');
+        return res.status(400).send('Invalid Razorpay webhook payload');
+    }
 
-        const event = JSON.parse(rawBody.toString('utf8'));
-        const parsedEvent = razorpayWebhookEventSchema.safeParse(event);
-        if (!parsedEvent.success) {
-            return res.status(400).send('Invalid Razorpay webhook payload');
-        }
+    const eventType = String(event.event || '').trim();
+    const eventId = buildRazorpayWebhookEventId(event);
+    const paymentEntity = event?.payload?.payment?.entity;
+    const refundEntity = event?.payload?.refund?.entity;
+    const orderEntity = event?.payload?.order?.entity;
+    const razorpayOrderId =
+        paymentEntity?.order_id || orderEntity?.id || '';
 
-        const paymentEntity = event?.payload?.payment?.entity;
-        const razorpayOrderId = paymentEntity?.order_id;
-
-        if (!razorpayOrderId) {
-            return res.status(200).json({ received: true });
-        }
-
-        const paymentAttempt = await paymentAttemptModel.findOne({
+    let webhookEventRecord;
+    try {
+        webhookEventRecord = await razorpayWebhookEventModel.create({
+            eventId,
+            eventType,
+            signature: String(signature).slice(0, 256),
             razorpayOrderId,
-            paymentMethod: 'Razorpay'
+            razorpayPaymentId: String(paymentEntity?.id || refundEntity?.payment_id || ''),
+            razorpayRefundId: String(refundEntity?.id || ''),
+            payload: event,
+            attempts: 1
         });
-        const order = paymentAttempt ? null : await orderModel.findOne({ razorpayOrderId });
-
-        if (event.event === 'payment.captured') {
-            if (paymentAttempt) {
-                await createOrderFromPaymentAttempt({
-                    paymentAttempt,
-                    gatewayEventId: event?.payload?.payment?.entity?.id,
-                    paymentFields: {
-                        razorpayOrderId,
-                        razorpayPaymentId: paymentEntity?.id || null
-                    },
-                    log: req.log
-                });
-            } else {
-                await markOrderAsPaid({
-                    order,
-                    gatewayEventId: event?.payload?.payment?.entity?.id,
-                    paymentFields: {
-                        razorpayOrderId,
-                        razorpayPaymentId: paymentEntity?.id || null
-                    },
-                    log: req.log
-                });
-            }
+    } catch (error) {
+        if (error?.code === 11000) {
+            req.log?.info({ eventId, eventType }, 'Razorpay webhook duplicate; ignoring');
+            return res.status(200).json({ received: true, duplicate: true });
         }
 
-        if (event.event === 'payment.failed') {
-            if (paymentAttempt) {
-                await markPaymentAttemptAsNotCompleted({
-                    paymentAttempt,
-                    status: 'failed',
-                    gatewayEventId: event?.payload?.payment?.entity?.id,
-                    paymentFields: {
-                        razorpayOrderId,
-                        razorpayPaymentId: paymentEntity?.id || null
-                    }
-                });
-            } else {
-                await markOrderAsFailed({
-                    order,
-                    gatewayEventId: event?.payload?.payment?.entity?.id,
-                    paymentFields: {
-                        razorpayOrderId,
-                        razorpayPaymentId: paymentEntity?.id || null
-                    }
-                });
-            }
+        req.log?.error({ err: error, eventId }, 'Failed to persist Razorpay webhook event');
+        return res.status(500).send('Webhook persistence failed');
+    }
+
+    if (!RAZORPAY_HANDLED_EVENTS.has(eventType)) {
+        await razorpayWebhookEventModel.findByIdAndUpdate(webhookEventRecord._id, {
+            processed: true,
+            processedAt: Date.now()
+        });
+        return res.status(200).json({ received: true, ignored: true });
+    }
+
+    try {
+        if (eventType === 'payment.authorized') {
+            await handleRazorpayPaymentAuthorized({ event, paymentEntity, log: req.log });
+        } else if (eventType === 'payment.captured' || eventType === 'order.paid') {
+            await handleRazorpayPaymentCaptured({ event, paymentEntity, log: req.log });
+        } else if (eventType === 'payment.failed') {
+            await handleRazorpayPaymentFailed({ event, paymentEntity, log: req.log });
+        } else if (eventType === 'refund.created' || eventType === 'refund.processed' || eventType === 'refund.failed') {
+            await handleRazorpayRefundEvent({ event, refundEntity, log: req.log });
         }
+
+        await razorpayWebhookEventModel.findByIdAndUpdate(webhookEventRecord._id, {
+            processed: true,
+            processedAt: Date.now()
+        });
 
         return res.status(200).json({ received: true });
     } catch (error) {
-        req.log?.error({ err: error }, 'Razorpay webhook failed');
+        req.log?.error({ err: error, eventId, eventType }, 'Razorpay webhook processing failed');
+        await razorpayWebhookEventModel.findByIdAndUpdate(webhookEventRecord._id, {
+            processed: false,
+            lastError: String(error?.message || 'Webhook processing failed').slice(0, 500),
+            $inc: { attempts: 1 }
+        });
         return res.status(500).send('Webhook processing failed');
+    }
+};
+
+const cancelRazorpayPaymentAttempt = async (req, res) => {
+    try {
+        const userId = req.userId;
+        const { attemptId } = req.params;
+
+        const paymentAttempt = await paymentAttemptModel.findById(attemptId);
+
+        if (!paymentAttempt || String(paymentAttempt.userId) !== String(userId)) {
+            return res.status(404).json({ success: false, message: 'Payment attempt not found' });
+        }
+
+        if (paymentAttempt.status === 'order_created') {
+            return res.status(409).json({ success: false, message: 'Payment already completed for this attempt' });
+        }
+
+        if (paymentAttempt.status === 'cancelled') {
+            return res.status(200).json({ success: true, message: 'Payment attempt already cancelled' });
+        }
+
+        await markPaymentAttemptAsNotCompleted({
+            paymentAttempt,
+            status: 'cancelled'
+        });
+
+        return res.status(200).json({ success: true, message: 'Payment attempt cancelled and reservation released' });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to cancel Razorpay payment attempt');
+        return res.status(500).json({ success: false, message: 'Failed to cancel payment attempt' });
+    }
+};
+
+const refundOrder = async (req, res) => {
+    let idempotencyRecordId;
+
+    try {
+        if (!isRazorpayConfigured()) {
+            return res.status(503).json({ success: false, message: 'Razorpay is not configured on server' });
+        }
+
+        const idempotencyKey = getIdempotencyKey(req);
+        if (!idempotencyKey) {
+            return res.status(400).json({ success: false, message: 'Missing idempotency key header' });
+        }
+
+        const adminEmail = String(req.admin?.email || '').trim().toLowerCase();
+        const idempotencyResult = await beginIdempotentRequest({
+            userId: adminEmail || 'admin',
+            scope: 'order:refund',
+            key: idempotencyKey,
+            payload: { orderId: req.params.orderId, ...req.body }
+        });
+
+        if (idempotencyResult.action === 'replay' || idempotencyResult.action === 'conflict' || idempotencyResult.action === 'in_progress') {
+            return res.status(idempotencyResult.statusCode).json(idempotencyResult.body);
+        }
+
+        idempotencyRecordId = idempotencyResult.recordId;
+
+        const { orderId } = req.params;
+        const { amount, reason = '', speed = 'normal', notes = {} } = req.body || {};
+
+        const order = await orderModel.findById(orderId);
+        if (!order) {
+            const responseBody = { success: false, message: 'Order not found' };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 404, body: responseBody });
+            return res.status(404).json(responseBody);
+        }
+
+        if (order.paymentMethod !== 'Razorpay') {
+            const responseBody = { success: false, message: 'Refunds via gateway are only supported for Razorpay orders' };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
+            return res.status(400).json(responseBody);
+        }
+
+        if (!order.payment || !order.razorpayPaymentId) {
+            const responseBody = { success: false, message: 'Order has no captured Razorpay payment to refund' };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
+            return res.status(400).json(responseBody);
+        }
+
+        const orderTotal = Number(order.amount || 0);
+        const alreadyRefunded = Number(order.refundedAmount || 0);
+        const remainingRefundable = Math.max(0, Math.round((orderTotal - alreadyRefunded) * 100) / 100);
+
+        if (remainingRefundable <= 0) {
+            const responseBody = { success: false, message: 'Order has already been fully refunded' };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
+            return res.status(400).json(responseBody);
+        }
+
+        const refundAmount = amount === undefined || amount === null ? remainingRefundable : Number(amount);
+
+        if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+            const responseBody = { success: false, message: 'Refund amount must be a positive number' };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
+            return res.status(400).json(responseBody);
+        }
+
+        if (refundAmount > remainingRefundable + 0.01) {
+            const responseBody = {
+                success: false,
+                message: `Refund amount exceeds the remaining refundable amount of ${remainingRefundable}`
+            };
+            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
+            return res.status(400).json(responseBody);
+        }
+
+        const refundNotes = {
+            ...notes,
+            orderId: String(order._id),
+            initiatedBy: adminEmail || 'admin',
+            reason: reason || 'admin_refund'
+        };
+
+        const refundResponse = await createRazorpayRefund({
+            paymentId: order.razorpayPaymentId,
+            amountInRupees: refundAmount,
+            notes: refundNotes,
+            speed,
+            idempotencyKey
+        });
+
+        // razorpay-node returns the refund entity directly (id, payment_id,
+        // amount, status, …). It does not wrap it in `{ entity: … }`.
+        const refundEntity = refundResponse || {};
+
+        const updatedOrder = await upsertOrderRefundRecord({
+            order,
+            refundEntity: {
+                id: refundEntity.id,
+                payment_id: refundEntity.payment_id || order.razorpayPaymentId,
+                amount: refundEntity.amount,
+                currency: refundEntity.currency || 'INR',
+                status: refundEntity.status || 'pending',
+                speed_requested: refundEntity.speed_requested || speed,
+                speed_processed: refundEntity.speed_processed || '',
+                notes: refundEntity.notes || refundNotes
+            },
+            initiatedBy: adminEmail || 'admin'
+        });
+
+        // Persist reason on the matching refund entry
+        const matchingRefund = (updatedOrder.refunds || []).find(
+            (entry) => String(entry.refundId) === String(refundEntity.id)
+        );
+        if (matchingRefund) {
+            matchingRefund.reason = reason || matchingRefund.reason;
+            matchingRefund.idempotencyKey = idempotencyKey;
+            await updatedOrder.save();
+        }
+
+        const responseBody = {
+            success: true,
+            message: 'Refund initiated successfully',
+            refund: {
+                id: refundEntity.id,
+                amount: refundAmount,
+                status: refundEntity.status || 'pending',
+                speed: refundEntity.speed_requested || speed
+            },
+            order: updatedOrder
+        };
+
+        await completeIdempotentRequest({
+            recordId: idempotencyRecordId,
+            statusCode: 200,
+            body: responseBody
+        });
+
+        return res.status(200).json(responseBody);
+    } catch (error) {
+        req.log?.error({ err: error }, 'Razorpay refund failed');
+
+        const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+        const message =
+            error?.error?.description ||
+            error?.message ||
+            'Failed to issue Razorpay refund';
+        const responseBody = { success: false, message };
+
+        if (idempotencyRecordId) {
+            await completeIdempotentRequest({
+                recordId: idempotencyRecordId,
+                statusCode,
+                body: responseBody
+            });
+        }
+
+        return res.status(statusCode).json(responseBody);
+    }
+};
+
+const getRazorpayPaymentDetails = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const order = await orderModel.findById(orderId).lean();
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        if (order.paymentMethod !== 'Razorpay' || !order.razorpayPaymentId) {
+            return res.status(200).json({ success: true, order, payment: null, refunds: order?.refunds || [] });
+        }
+
+        const payment = await fetchRazorpayPayment(order.razorpayPaymentId).catch((error) => {
+            req.log?.warn({ err: error }, 'Failed to fetch Razorpay payment details');
+            return null;
+        });
+
+        return res.status(200).json({
+            success: true,
+            order,
+            payment,
+            refunds: order?.refunds || []
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Failed to load Razorpay payment details');
+        return res.status(500).json({ success: false, message: 'Failed to load payment details' });
     }
 };
 
@@ -1913,16 +1846,17 @@ const updateOrderStatus = async (req, res) => {
 export {
     allOrders,
     backfillShiprocketPricingSnapshots,
+    cancelRazorpayPaymentAttempt,
     cancelShiprocketBulkLiveVerification,
     cancelUserOrder,
+    getRazorpayPaymentDetails,
     getShiprocketBulkLiveVerificationJob,
     handleRazorpayWebhook,
-    handleStripeWebhook,
     getShiprocketOrderDetails,
     placeOrderCOD,
     placeOrderRazorpay,
-    placeOrderStripe,
     previewCheckoutPricing,
+    refundOrder,
     retryShiprocketSync,
     startShiprocketBulkLiveVerification,
     testShiprocketConnection,
@@ -1930,6 +1864,5 @@ export {
     updateOrderStatus,
     userOrders,
     verifyShiprocketPricingLive,
-    verifyRazorpay,
-    verifyStripe
+    verifyRazorpay
 }

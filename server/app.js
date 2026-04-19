@@ -69,7 +69,6 @@ const buildCorsOptions = () => {
             'Authorization',
             'X-Requested-With',
             'token',
-            'stripe-signature',
             'x-razorpay-signature',
             'x-api-key',
             'idempotency-key',

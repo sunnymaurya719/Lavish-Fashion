@@ -11,8 +11,6 @@ process.env.CLIENT_URL = 'http://localhost:5173';
 process.env.ADMIN_URL = 'http://localhost:5174';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.CORS_ORIGINS = 'http://localhost:5173,http://localhost:5174';
-process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_mock';
 process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_mock';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'rzp_whsec_mock';
@@ -27,10 +25,8 @@ process.env.WHATSAPP_DEFAULT_COUNTRY_CODE = '91';
 process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN = 'wa_verify_token';
 process.env.WHATSAPP_APP_SECRET = 'wa_app_secret';
 
-let stripeSessionCounter = 1;
 let razorpayOrderCounter = 1;
 let whatsappMessageCounter = 1;
-const stripeSessions = new Map();
 const whatsappFetchMock = vi.fn(async () => ({
     ok: true,
     status: 200,
@@ -44,43 +40,6 @@ const whatsappFetchMock = vi.fn(async () => ({
 }));
 
 vi.stubGlobal('fetch', whatsappFetchMock);
-
-vi.mock('stripe', () => {
-    return {
-        default: class StripeMock {
-            constructor() {
-                this.checkout = {
-                    sessions: {
-                        create: vi.fn(async (payload) => {
-                            const id = `cs_test_${stripeSessionCounter++}`;
-                            const session = {
-                                id,
-                                url: `http://localhost/checkout/${id}`,
-                                payment_status: 'paid',
-                                client_reference_id: payload.client_reference_id,
-                                metadata: payload.metadata,
-                                payment_intent: `pi_${id}`
-                            };
-
-                            stripeSessions.set(id, session);
-                            return session;
-                        }),
-                        retrieve: vi.fn(async (sessionId) => stripeSessions.get(sessionId))
-                    }
-                };
-                this.webhooks = {
-                    constructEvent: (buffer, signature, _secret) => {
-                        if (signature !== 't_stripe_sig') {
-                            throw new Error('invalid stripe signature');
-                        }
-
-                        return JSON.parse(buffer.toString('utf8'));
-                    }
-                };
-            }
-        }
-    };
-});
 
 vi.mock('razorpay', () => {
     return {
@@ -148,7 +107,6 @@ describe('checkout and order lifecycle e2e api tests', () => {
     });
 
     beforeEach(async () => {
-        stripeSessions.clear();
         whatsappMessageCounter = 1;
         whatsappFetchMock.mockClear();
         await couponModel.deleteMany({});
@@ -170,7 +128,6 @@ describe('checkout and order lifecycle e2e api tests', () => {
                     timestamp: expect.any(String)
                 }),
                 payments: expect.objectContaining({
-                    stripeEnabled: true,
                     razorpayEnabled: true,
                     razorpayKeyId: process.env.RAZORPAY_KEY_ID
                 }),
@@ -181,108 +138,6 @@ describe('checkout and order lifecycle e2e api tests', () => {
                 })
             })
         );
-    });
-
-    it('completes stripe checkout lifecycle with webhook as source of truth', async () => {
-        const product = await productModel.create({
-            name: 'Stripe Tee',
-            description: 'A premium stripe checkout test product',
-            price: 299,
-            image: ['https://example.com/image.jpg'],
-            category: 'Men',
-            subCategory: 'Topwear',
-            sizes: ['M'],
-            stock: 5,
-            lowStockThreshold: 2,
-            date: Date.now()
-        });
-
-        const registerResponse = await request(app)
-            .post('/api/user/register')
-            .send({ name: 'Stripe User', email: 'stripeuser@example.com', password: 'SecurePass123' });
-
-        expect(registerResponse.status).toBe(201);
-        const token = registerResponse.body.token;
-
-        const orderResponse = await request(app)
-            .post('/api/order/stripe')
-            .set('token', token)
-            .set('idempotency-key', `stripe_${Date.now()}`)
-            .send({
-                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
-                amount: 1,
-                address
-            });
-
-        expect(orderResponse.status).toBe(200);
-        expect(orderResponse.body.success).toBe(true);
-
-        const paymentAttemptId = orderResponse.body.session.client_reference_id;
-        const sessionId = orderResponse.body.session.id;
-        const pendingStripeAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
-        const reservedStripeProduct = await productModel.findById(product._id).lean();
-
-        expect(pendingStripeAttempt.inventoryReserved).toBe(true);
-        expect(pendingStripeAttempt.status).toBe('pending');
-        expect(reservedStripeProduct.stock).toBe(4);
-
-        const verifyResponse = await request(app)
-            .post('/api/order/verifyStripe')
-            .set('token', token)
-            .send({ orderId: paymentAttemptId, success: 'true', session_id: sessionId });
-
-        expect(verifyResponse.status).toBe(200);
-        expect(verifyResponse.body.success).toBe(true);
-
-        const postVerifyStripeAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
-        const createdStripeOrder = await orderModel.findOne({ userId: pendingStripeAttempt.userId }).lean();
-        const postVerifyStripeProduct = await productModel.findById(product._id).lean();
-        expect(postVerifyStripeAttempt.status).toBe('order_created');
-        expect(createdStripeOrder).toBeTruthy();
-        expect(createdStripeOrder.payment).toBe(true);
-        expect(createdStripeOrder.paymentStatus).toBe('paid');
-        expect(createdStripeOrder.inventoryReserved).toBe(true);
-        expect(postVerifyStripeProduct.stock).toBe(4);
-
-        const webhookPayload = {
-            id: 'evt_checkout_complete_1',
-            type: 'checkout.session.completed',
-            data: {
-                object: {
-                    id: sessionId,
-                    client_reference_id: paymentAttemptId,
-                    payment_intent: `pi_${sessionId}`,
-                    metadata: {
-                        orderId: paymentAttemptId,
-                        paymentAttemptId
-                    }
-                }
-            }
-        };
-
-        webhookPayload.data.object.metadata = {
-            orderId: paymentAttemptId,
-            paymentAttemptId,
-            userId: String(pendingStripeAttempt.userId)
-        };
-
-        const webhookResponse = await request(app)
-            .post('/api/webhooks/stripe')
-            .set('stripe-signature', 't_stripe_sig')
-            .set('Content-Type', 'application/json')
-            .send(webhookPayload);
-
-        expect(webhookResponse.status).toBe(200);
-
-        const ordersResponse = await request(app)
-            .post('/api/order/userorders')
-            .set('token', token)
-            .send({});
-
-        expect(ordersResponse.status).toBe(200);
-        expect(ordersResponse.body.orders.length).toBe(1);
-        expect(ordersResponse.body.orders[0].payment).toBe(true);
-        expect(ordersResponse.body.orders[0].paymentStatus).toBe('paid');
     });
 
     it('completes razorpay checkout lifecycle with webhook as source of truth', async () => {
@@ -757,62 +612,6 @@ describe('checkout and order lifecycle e2e api tests', () => {
         expect(unchangedOrder.status).toBe('Order Placed');
         expect(unchangedOrder.inventoryReserved).toBe(true);
         expect(reservedProduct.stock).toBe(3);
-    });
-
-    it('releases reserved inventory when Stripe checkout is cancelled', async () => {
-        const product = await productModel.create({
-            name: 'Stripe Cancel Tee',
-            description: 'A product used to verify inventory release on payment cancellation',
-            price: 399,
-            image: ['https://example.com/image4.jpg'],
-            category: 'Men',
-            subCategory: 'Topwear',
-            sizes: ['M'],
-            stock: 2,
-            lowStockThreshold: 1,
-            date: Date.now()
-        });
-
-        const registerResponse = await request(app)
-            .post('/api/user/register')
-            .send({ name: 'Cancel User', email: 'canceluser@example.com', password: 'SecurePass123' });
-
-        expect(registerResponse.status).toBe(201);
-        const token = registerResponse.body.token;
-
-        const orderResponse = await request(app)
-            .post('/api/order/stripe')
-            .set('token', token)
-            .set('idempotency-key', `stripe_cancel_${Date.now()}`)
-            .send({
-                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
-                amount: 1,
-                address
-            });
-
-        expect(orderResponse.status).toBe(200);
-        expect(orderResponse.body.success).toBe(true);
-
-        const paymentAttemptId = orderResponse.body.session.client_reference_id;
-        const stockAfterReserve = await productModel.findById(product._id).lean();
-        expect(stockAfterReserve.stock).toBe(1);
-
-        const cancelResponse = await request(app)
-            .post('/api/order/verifyStripe')
-            .set('token', token)
-            .send({ orderId: paymentAttemptId, success: 'false' });
-
-        expect(cancelResponse.status).toBe(200);
-        expect(cancelResponse.body.success).toBe(false);
-
-        const cancelledAttempt = await paymentAttemptModel.findById(paymentAttemptId).lean();
-        const userOrdersAfterCancel = await orderModel.find({ userId: cancelledAttempt.userId }).lean();
-        const restoredProduct = await productModel.findById(product._id).lean();
-
-        expect(cancelledAttempt.status).toBe('cancelled');
-        expect(cancelledAttempt.inventoryReserved).toBe(false);
-        expect(userOrdersAfterCancel.length).toBe(0);
-        expect(restoredProduct.stock).toBe(2);
     });
 
     it('applies coupon pricing during validation and COD checkout', async () => {

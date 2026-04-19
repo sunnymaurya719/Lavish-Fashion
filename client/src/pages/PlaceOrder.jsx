@@ -636,6 +636,26 @@ const PlaceOrder = () => {
       return;
     }
 
+    const paymentAttemptId = order.paymentAttemptId || '';
+    let paymentCompleted = false;
+
+    const releasePaymentAttempt = async () => {
+      if (!paymentAttemptId || paymentCompleted) {
+        return;
+      }
+
+      try {
+        await axios.post(
+          `${BACKEND_URL}/api/order/payment-attempt/${paymentAttemptId}/cancel`,
+          {},
+          { headers: { token } }
+        );
+      } catch {
+        // Best-effort: server-side TTL on payment attempts will eventually
+        // release the reservation if this call fails.
+      }
+    };
+
     const options = {
       key: razorpayKeyId,
       amount: order.amount,
@@ -644,7 +664,15 @@ const PlaceOrder = () => {
       description: 'Order Payment',
       order_id: order.id,
       receipt: order.receipt,
+      image: '/logo.png',
+      theme: { color: '#0f172a' },
+      notes: {
+        paymentAttemptId,
+        receipt: order.receipt || '',
+      },
       handler: async (response) => {
+        paymentCompleted = true;
+
         try {
           const res = await axios.post(BACKEND_URL + '/api/order/verifyRazorpay', response, {
             headers: { token },
@@ -666,9 +694,28 @@ const PlaceOrder = () => {
         name: formData.fullName,
         contact: formData.phone,
       },
+      modal: {
+        confirm_close: true,
+        ondismiss: async () => {
+          await releasePaymentAttempt();
+          idempotencyKeyRef.current = '';
+          toast.info('Payment cancelled. Your reserved items have been released.');
+        },
+      },
+      retry: { enabled: true, max_count: 2 },
+      remember_customer: false,
     };
 
     const razorpay = new window.Razorpay(options);
+
+    razorpay.on('payment.failed', async (failure) => {
+      const description =
+        failure?.error?.description || failure?.error?.reason || 'Payment failed';
+      toast.error(`Payment failed: ${description}`);
+      await releasePaymentAttempt();
+      idempotencyKeyRef.current = '';
+    });
+
     razorpay.open();
   };
 

@@ -142,12 +142,10 @@ const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
       tone:
         serverStatus !== 'online'
           ? 'pending'
-          : serverBootstrap?.payments?.stripeEnabled || serverBootstrap?.payments?.razorpayEnabled
+          : serverBootstrap?.payments?.razorpayEnabled
             ? 'on'
             : 'off',
-      tooltip: `Stripe ${serverBootstrap?.payments?.stripeEnabled ? 'on' : 'off'} · Razorpay ${
-        serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'
-      }`,
+      tooltip: `Razorpay ${serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'}`,
     },
     {
       label: 'Email',

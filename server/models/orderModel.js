@@ -93,6 +93,36 @@ const shiprocketPricingSnapshotSchema = new mongoose.Schema(
     { _id: false, strict: true }
 );
 
+const orderRefundSchema = new mongoose.Schema(
+    {
+        refundId: { type: String, required: true, trim: true, maxlength: 80 },
+        paymentId: { type: String, default: '', trim: true, maxlength: 80 },
+        amount: { type: Number, required: true, min: 0 },
+        currency: { type: String, default: 'INR', trim: true, maxlength: 8 },
+        status: {
+            type: String,
+            enum: ['pending', 'processed', 'failed', 'cancelled'],
+            default: 'pending'
+        },
+        speed: {
+            type: String,
+            enum: ['normal', 'optimum', 'instant'],
+            default: 'normal'
+        },
+        speedRequested: { type: String, default: 'normal', trim: true, maxlength: 16 },
+        speedProcessed: { type: String, default: '', trim: true, maxlength: 16 },
+        reason: { type: String, default: '', trim: true, maxlength: 500 },
+        notes: { type: Object, default: {} },
+        initiatedBy: { type: String, default: '', trim: true, maxlength: 254 },
+        idempotencyKey: { type: String, default: '', trim: true, maxlength: 80, index: true, sparse: true },
+        createdAt: { type: Number, default: () => Date.now() },
+        processedAt: { type: Number, default: null },
+        failureReason: { type: String, default: '', trim: true, maxlength: 500 },
+        rawResponse: { type: Object, default: null }
+    },
+    { _id: false, strict: true }
+);
+
 const shiprocketSchema = new mongoose.Schema(
     {
         syncStatus: {
@@ -179,15 +209,23 @@ const orderSchema = new mongoose.Schema({
     status : {type:String, required:true,default:'Order Placed'},
     checkoutSource: { type: String, enum: ['cart', 'buy_now'], default: 'cart' },
     inventoryReserved: { type: Boolean, default: false },
-    paymentMethod : {type:String, required:true, enum: ['COD', 'Stripe', 'Razorpay']},
+    paymentMethod : {type:String, required:true, enum: ['COD', 'Razorpay']},
     payment : {type:Boolean,required:true , default:false},
     paymentStatus: { type: String, enum: ['pending', 'paid', 'failed', 'cancelled'], default: 'pending' },
     paymentVerifiedAt: { type: Number, default: null },
-    stripeSessionId: { type: String, default: null, index: true },
-    stripePaymentIntentId: { type: String, default: null },
     razorpayOrderId: { type: String, default: null, index: true },
     razorpayPaymentId: { type: String, default: null },
     gatewayEventId: { type: String, default: null },
+    paymentAuthorizedAt: { type: Number, default: null },
+    paymentCapturedAt: { type: Number, default: null },
+    refunds: { type: [orderRefundSchema], default: [] },
+    refundedAmount: { type: Number, default: 0, min: 0 },
+    refundStatus: {
+        type: String,
+        enum: ['none', 'pending', 'partial', 'processed', 'failed'],
+        default: 'none'
+    },
+    refundLastUpdatedAt: { type: Number, default: null },
     createdAt: { type: Date, default: Date.now },
     deliveredAt: { type: Number, default: null },
     cancelledAt: { type: Number, default: null },
@@ -211,6 +249,9 @@ orderSchema.index({ date: -1 });
 orderSchema.index({ status: 1, date: -1 });
 orderSchema.index({ userId: 1, payment: 1 });
 orderSchema.index({ paymentMethod: 1 });
+orderSchema.index({ razorpayPaymentId: 1 }, { sparse: true });
+orderSchema.index({ refundStatus: 1 });
+orderSchema.index({ 'refunds.refundId': 1 }, { sparse: true });
 orderSchema.index({ 'shiprocket.referenceOrderId': 1 }, { sparse: true });
 orderSchema.index({ 'shiprocket.orderId': 1 }, { sparse: true });
 orderSchema.index({ 'shiprocket.shipmentId': 1 }, { sparse: true });

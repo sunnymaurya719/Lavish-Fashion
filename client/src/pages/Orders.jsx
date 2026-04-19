@@ -50,12 +50,52 @@ const FIT_FEEDBACK_LABELS = {
 };
 const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const ORDER_CANCELLATION_ERROR_MESSAGE = 'Order can only be cancelled within 6 hours of placing it.';
+const formatINR = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
+
+const getOrderRefundSummary = (order) => {
+  const refundStatus = String(order?.refundStatus || '').trim().toLowerCase();
+  const refundedAmount = Number(order?.refundedAmount || 0);
+  const orderTotal = Number(order?.amount || 0);
+  const fullyRefunded =
+    refundStatus === 'processed' || (refundedAmount > 0 && refundedAmount + 0.01 >= orderTotal);
+  const partiallyRefunded =
+    refundStatus === 'partial' || (refundedAmount > 0 && refundedAmount + 0.01 < orderTotal);
+
+  return {
+    refundStatus,
+    refundedAmount,
+    orderTotal,
+    fullyRefunded,
+    partiallyRefunded,
+    refundInitiated: ['pending', 'partial', 'processed'].includes(refundStatus) || refundedAmount > 0,
+    refundFailed: refundStatus === 'failed',
+  };
+};
+
 const getOrderCancellationRefundMessage = (order) => {
   const method = String(order?.paymentMethod || '').trim().toUpperCase();
   const wasPaid = Boolean(order?.payment);
 
   if (method === 'COD' && !wasPaid) {
     return 'Order cancelled. No payment was collected.';
+  }
+
+  const summary = getOrderRefundSummary(order);
+
+  if (summary.fullyRefunded) {
+    return `Refund of ${formatINR(summary.refundedAmount)} has been processed to your original payment method.`;
+  }
+
+  if (summary.partiallyRefunded) {
+    return `${formatINR(summary.refundedAmount)} refunded so far. Remaining refund will be processed shortly.`;
+  }
+
+  if (summary.refundStatus === 'pending') {
+    return 'Refund initiated. It will reflect in your account within 5–7 working days.';
+  }
+
+  if (summary.refundFailed) {
+    return 'Refund attempt failed. Our team will retry shortly — please contact support if it persists.';
   }
 
   return 'Refund will be processed within 2 working days';
@@ -152,6 +192,35 @@ const getPaymentMeta = (order) => {
   const method = order.paymentMethod || 'Payment';
   const paymentState = String(order.paymentStatus || '').toLowerCase();
   const orderStatus = normalizeOrderStatus(order.status);
+  const summary = getOrderRefundSummary(order);
+
+  if (summary.fullyRefunded) {
+    return {
+      summary: 'Refunded',
+      badgeClass: 'bg-emerald-50 text-emerald-700',
+    };
+  }
+
+  if (summary.partiallyRefunded) {
+    return {
+      summary: 'Partially refunded',
+      badgeClass: 'bg-amber-50 text-amber-800',
+    };
+  }
+
+  if (summary.refundStatus === 'pending') {
+    return {
+      summary: 'Refund processing',
+      badgeClass: 'bg-amber-50 text-amber-800',
+    };
+  }
+
+  if (summary.refundFailed) {
+    return {
+      summary: 'Refund failed',
+      badgeClass: 'bg-rose-100 text-rose-800',
+    };
+  }
 
   if (paymentState === 'cancelled' || orderStatus === 'cancelled') {
     return {
@@ -765,10 +834,41 @@ const Orders = () => {
                   ) : null}
 
                   {isCancelled ? (
-                    <div className='rounded-2xl bg-rose-50 px-4 py-3'>
-                      <p className='text-[10px] uppercase tracking-[0.2em] text-rose-600'>Cancelled</p>
-                      <p className='mt-1 text-sm font-medium text-rose-700'>{getOrderCancellationRefundMessage(order)}</p>
-                    </div>
+                    (() => {
+                      const refundSummary = getOrderRefundSummary(order);
+                      const headerLabel = refundSummary.fullyRefunded
+                        ? 'Refunded'
+                        : refundSummary.partiallyRefunded
+                          ? 'Partially refunded'
+                          : refundSummary.refundStatus === 'pending'
+                            ? 'Refund processing'
+                            : refundSummary.refundFailed
+                              ? 'Refund failed'
+                              : 'Cancelled';
+                      const containerClass = refundSummary.fullyRefunded
+                        ? 'rounded-2xl bg-emerald-50 px-4 py-3'
+                        : refundSummary.refundFailed
+                          ? 'rounded-2xl bg-rose-100 px-4 py-3'
+                          : 'rounded-2xl bg-rose-50 px-4 py-3';
+                      const headerClass = refundSummary.fullyRefunded
+                        ? 'text-[10px] uppercase tracking-[0.2em] text-emerald-700'
+                        : 'text-[10px] uppercase tracking-[0.2em] text-rose-600';
+                      const bodyClass = refundSummary.fullyRefunded
+                        ? 'mt-1 text-sm font-medium text-emerald-800'
+                        : 'mt-1 text-sm font-medium text-rose-700';
+
+                      return (
+                        <div className={containerClass}>
+                          <p className={headerClass}>{headerLabel}</p>
+                          <p className={bodyClass}>{getOrderCancellationRefundMessage(order)}</p>
+                          {refundSummary.refundedAmount > 0 ? (
+                            <p className='mt-1 text-xs text-slate-600'>
+                              {formatINR(refundSummary.refundedAmount)} of {formatINR(refundSummary.orderTotal)} refunded
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <>
                       <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Delivery timeline</p>
@@ -794,6 +894,45 @@ const Orders = () => {
 
                 {isExpanded && (
                   <div className='mt-4 space-y-3 border-t border-slate-100 pt-4'>
+                    {Array.isArray(order.refunds) && order.refunds.length > 0 ? (
+                      <div className='rounded-2xl bg-[#f7f7f7] p-3'>
+                        <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Refund history</p>
+                        <ul className='mt-2 space-y-2'>
+                          {order.refunds.map((refund) => {
+                            const refundStatus = String(refund.status || '').toLowerCase();
+                            const statusBadge =
+                              refundStatus === 'processed'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : refundStatus === 'failed'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-amber-100 text-amber-800';
+                            return (
+                              <li
+                                key={refund.refundId || refund._id}
+                                className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700'
+                              >
+                                <div className='flex items-center justify-between gap-2'>
+                                  <span className='font-semibold text-slate-900'>{formatINR(refund.amount)}</span>
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${statusBadge}`}
+                                  >
+                                    {refund.status || 'pending'}
+                                  </span>
+                                </div>
+                                <p className='mt-1 text-[11px] text-slate-500'>
+                                  Initiated {formatDate(refund.createdAt)}
+                                  {refund.processedAt ? ` • Processed ${formatDate(refund.processedAt)}` : ''}
+                                </p>
+                                {refund.speed ? (
+                                  <p className='text-[11px] text-slate-500 capitalize'>Speed: {refund.speed}</p>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : null}
+
                     <div className='rounded-2xl bg-[#f7f7f7] p-3'>
                       <p className='text-[10px] uppercase tracking-[0.2em] text-slate-500'>Shipping</p>
                       {addressData.compactName || addressData.compactCity || addressData.phone ? (

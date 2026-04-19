@@ -2,22 +2,23 @@ import express from 'express';
 import {
     allOrders,
     backfillShiprocketPricingSnapshots,
+    cancelRazorpayPaymentAttempt,
     cancelShiprocketBulkLiveVerification,
     cancelUserOrder,
+    getRazorpayPaymentDetails,
     getShiprocketBulkLiveVerificationJob,
     getShiprocketOrderDetails,
     placeOrderCOD,
     placeOrderRazorpay,
-    placeOrderStripe,
     previewCheckoutPricing,
+    refundOrder,
     retryShiprocketSync,
     startShiprocketBulkLiveVerification,
     trackShiprocketOrder,
     updateOrderStatus,
     userOrders,
     verifyShiprocketPricingLive,
-    verifyRazorpay,
-    verifyStripe
+    verifyRazorpay
 } from '../controllers/orderController.js';
 import adminAuth from '../middleware/adminAuth.js';
 import authUser from '../middleware/auth.js';
@@ -26,13 +27,14 @@ import {
     orderCreateSchema,
     orderCancelParamsSchema,
     orderPricingPreviewSchema,
+    orderRefundSchema,
     orderStatusSchema,
+    razorpayPaymentAttemptCancelSchema,
     razorpayVerifySchema,
     shiprocketBulkLiveVerificationCancelSchema,
     shiprocketBulkLiveVerificationSchema,
     shiprocketPricingBackfillSchema,
-    shiprocketOrderParamsSchema,
-    stripeVerifySchema
+    shiprocketOrderParamsSchema
 } from '../validation/schemas.js';
 
 const orderRouter = express.Router();
@@ -48,7 +50,6 @@ orderRouter.post('/status',adminAuth,validateRequest(orderStatusSchema),updateOr
 orderRouter.post('/preview',authUser,validateRequest(orderPricingPreviewSchema),previewCheckoutPricing);
 orderRouter.post('/create',authUser,validateRequest(orderCreateSchema),placeOrderCOD);
 orderRouter.post('/place',authUser,validateRequest(orderCreateSchema),placeOrderCOD);
-orderRouter.post('/stripe',authUser,validateRequest(orderCreateSchema),placeOrderStripe);
 orderRouter.post('/razorpay',authUser,validateRequest(orderCreateSchema),placeOrderRazorpay);
 
 
@@ -88,7 +89,32 @@ orderRouter.get('/:orderId/shiprocket', adminAuth, validateRequest(shiprocketOrd
 orderRouter.get('/:orderId/shiprocket/track', adminAuth, validateRequest(shiprocketOrderParamsSchema, 'params'), trackShiprocketOrder);
 
 //Verify payment
-orderRouter.post('/verifyStripe',authUser,validateRequest(stripeVerifySchema),verifyStripe);
 orderRouter.post('/verifyRazorpay',authUser,validateRequest(razorpayVerifySchema),verifyRazorpay);
+
+// Cancel a Razorpay payment attempt (releases reserved inventory & loyalty points
+// when the user dismisses the Razorpay checkout modal without paying).
+orderRouter.post(
+    '/payment-attempt/:attemptId/cancel',
+    authUser,
+    validateRequest(razorpayPaymentAttemptCancelSchema, 'params'),
+    cancelRazorpayPaymentAttempt
+);
+
+// Admin: fetch Razorpay payment details + refund history for an order.
+orderRouter.get(
+    '/:orderId/razorpay/payment',
+    adminAuth,
+    validateRequest(shiprocketOrderParamsSchema, 'params'),
+    getRazorpayPaymentDetails
+);
+
+// Admin: issue a Razorpay refund (full or partial) against a paid order.
+orderRouter.post(
+    '/:orderId/refund',
+    adminAuth,
+    validateRequest(shiprocketOrderParamsSchema, 'params'),
+    validateRequest(orderRefundSchema),
+    refundOrder
+);
 
 export default orderRouter;

@@ -1,5 +1,5 @@
 import express from 'express';
-import { handleRazorpayWebhook, handleStripeWebhook } from '../controllers/orderController.js';
+import { handleRazorpayWebhook } from '../controllers/orderController.js';
 import { handleShiprocketWebhook } from '../controllers/webhookController.js';
 import {
     captureRawRequestBody,
@@ -10,7 +10,6 @@ import {
 const webhookRouter = express.Router();
 const jsonWebhookBody = express.json({ limit: '256kb' });
 
-webhookRouter.post('/stripe', express.raw({ type: 'application/json' }), handleStripeWebhook);
 webhookRouter.post('/razorpay', express.raw({ type: 'application/json' }), handleRazorpayWebhook);
 webhookRouter.post('/shiprocket', jsonWebhookBody, handleShiprocketWebhook);
 webhookRouter.post('/tracking-events', jsonWebhookBody, handleShiprocketWebhook);
