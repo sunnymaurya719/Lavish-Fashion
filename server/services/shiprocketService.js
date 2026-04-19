@@ -18,6 +18,7 @@ const SHIPROCKET_SYNC_STATUS = {
     pendingRetry: 'pending_retry',
     failed: 'failed'
 };
+const VALID_SHIPROCKET_SYNC_STATUSES = new Set(Object.values(SHIPROCKET_SYNC_STATUS));
 const SHIPROCKET_PRICING_FORMULA_VERSION = 2;
 
 const normalizeText = (value) => String(value || '').trim();
@@ -30,6 +31,34 @@ const roundCurrency = (value) => Number(Number(value || 0).toFixed(2));
 const truncateText = (value, maxLength = 500) => normalizeText(value).slice(0, maxLength);
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isAxios401Error = (error) => Number(error?.response?.status) === 401;
+const normalizeShiprocketSyncStatusValue = (value) => {
+    const normalizedValue = normalizeText(value).toLowerCase();
+    return VALID_SHIPROCKET_SYNC_STATUSES.has(normalizedValue) ? normalizedValue : '';
+};
+const resolveEffectiveShiprocketSyncStatus = (order = {}) => {
+    const explicitSyncStatus = normalizeShiprocketSyncStatusValue(order?.shiprocket?.syncStatus);
+
+    if (explicitSyncStatus) {
+        return explicitSyncStatus;
+    }
+
+    if (
+        normalizeNumber(order?.shiprocket?.shipmentId) ||
+        normalizeNumber(order?.shiprocket?.orderId) ||
+        normalizeText(order?.shiprocket?.awbCode) ||
+        normalizeNumber(order?.shiprocket?.syncedAt)
+    ) {
+        return SHIPROCKET_SYNC_STATUS.synced;
+    }
+
+    if (normalizeText(order?.shiprocket?.referenceOrderId)) {
+        return normalizeText(order?.shiprocket?.lastError)
+            ? SHIPROCKET_SYNC_STATUS.pendingRetry
+            : SHIPROCKET_SYNC_STATUS.pending;
+    }
+
+    return SHIPROCKET_SYNC_STATUS.notRequired;
+};
 const calculateOrderItemsSubtotal = (items = []) =>
     roundCurrency(
         Array.isArray(items)
@@ -345,7 +374,7 @@ const isShiprocketOrderTrackedRemotely = (order = {}) =>
     Boolean(
         order?.shiprocket?.shipmentId ||
             order?.shiprocket?.orderId ||
-            normalizeText(order?.shiprocket?.syncStatus) === SHIPROCKET_SYNC_STATUS.synced
+            resolveEffectiveShiprocketSyncStatus(order) === SHIPROCKET_SYNC_STATUS.synced
     );
 const buildShiprocketPricingAudit = (order = {}) => {
     const pricing = resolveShiprocketPricingContext(order);
@@ -432,8 +461,10 @@ const buildShiprocketPricingAudit = (order = {}) => {
         hasWarning,
         issueCount: issues.length,
         issueCodes: issues.map((issue) => issue.code),
-        syncStatus: normalizeText(order?.shiprocket?.syncStatus) || SHIPROCKET_SYNC_STATUS.notRequired,
+        syncStatus: resolveEffectiveShiprocketSyncStatus(order),
         remoteVerificationAvailable: Boolean(storedShiprocketSnapshot),
+        remoteOrderTracked: isShiprocketOrderTrackedRemotely(order),
+        referenceAssigned: Boolean(normalizeText(order?.shiprocket?.referenceOrderId)),
         local: {
             amount: pricing.finalAmount,
             expectedAmount: expectedLocalAmount,
@@ -1540,8 +1571,10 @@ export {
     isShiprocketThrottleError,
     mapLocalOrderToShiprocketPayload,
     normalizeShiprocketError,
+    normalizeShiprocketSyncStatusValue,
     reconcileExistingShiprocketOrder,
     refreshOrderTracking,
+    resolveEffectiveShiprocketSyncStatus,
     requestWithAuth,
     syncOrderToShiprocket,
     trackShipment,

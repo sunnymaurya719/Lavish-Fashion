@@ -6,6 +6,8 @@ import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
 import { mergeOrderSnapshot, upsertOrderById } from '../utils/orderMerge';
 
 const orderStatusOptions = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered', 'Cancelled'];
+const ORDER_API_BASE = `${BACKEND_URL}/api/order`;
+const VALID_SHIPROCKET_SYNC_STATUSES = new Set(['not_required', 'pending', 'synced', 'pending_retry', 'failed']);
 
 const getAvailableStatusOptions = (order) => {
   if (order?.status === 'Cancelled') {
@@ -113,6 +115,142 @@ const formatEnumLabel = (value, fallback = 'Unknown') => {
     .filter(Boolean)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(' ');
+};
+
+const normalizeShiprocketSyncStatusValue = (value) => {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  return VALID_SHIPROCKET_SYNC_STATUSES.has(normalizedValue) ? normalizedValue : '';
+};
+
+const resolveOrderShiprocketSyncStatus = (order = {}, audit = {}) => {
+  const auditSyncStatus = normalizeShiprocketSyncStatusValue(audit?.syncStatus);
+
+  if (auditSyncStatus) {
+    return auditSyncStatus;
+  }
+
+  const rawSyncStatus = normalizeShiprocketSyncStatusValue(order?.shiprocket?.syncStatus);
+
+  if (rawSyncStatus) {
+    return rawSyncStatus;
+  }
+
+  if (
+    Number(order?.shiprocket?.shipmentId || 0) > 0 ||
+    Number(order?.shiprocket?.orderId || 0) > 0 ||
+    String(order?.shiprocket?.awbCode || '').trim() ||
+    Number(order?.shiprocket?.syncedAt || 0) > 0
+  ) {
+    return 'synced';
+  }
+
+  if (String(order?.shiprocket?.referenceOrderId || '').trim()) {
+    return String(order?.shiprocket?.lastError || '').trim() ? 'pending_retry' : 'pending';
+  }
+
+  return 'not_required';
+};
+
+const buildFallbackShiprocketAudit = (order = {}) => {
+  const itemsSubtotal = Array.isArray(order?.items)
+    ? order.items.reduce(
+        (sum, item) => sum + Math.max(0, Number(item?.price || 0)) * Math.max(0, Number(item?.quantity || 0)),
+        0
+      )
+    : 0;
+  const storedSubtotal = Number(order?.subtotal || 0);
+  const shippingCharges = Math.max(0, Number(order?.deliveryFee || 0));
+  const totalDiscount = Math.max(0, Number(order?.discountAmount || 0));
+  const finalAmount = Math.max(0, Number(order?.amount || 0));
+  const fallbackSubtotal = storedSubtotal > 0 ? storedSubtotal : itemsSubtotal;
+  const derivedSubTotal =
+    finalAmount > 0 || shippingCharges > 0 ? Math.max(0, finalAmount - shippingCharges) : Math.max(0, fallbackSubtotal - totalDiscount);
+  const syncStatus = resolveOrderShiprocketSyncStatus(order);
+  const remoteOrderTracked =
+    syncStatus === 'synced' ||
+    Number(order?.shiprocket?.shipmentId || 0) > 0 ||
+    Number(order?.shiprocket?.orderId || 0) > 0 ||
+    Boolean(String(order?.shiprocket?.awbCode || '').trim());
+  const storedShiprocketSnapshot = order?.shiprocket?.pricingSnapshot || null;
+  const liveShiprocketSnapshot = order?.shiprocket?.livePricingSnapshot || null;
+  const liveVerificationStatus = String(order?.shiprocket?.livePricingVerificationStatus || '').trim() || 'not_verified';
+  const issueCodes = [];
+
+  if (remoteOrderTracked && !storedShiprocketSnapshot) {
+    issueCodes.push('missing_shiprocket_pricing_snapshot');
+  }
+
+  if (liveVerificationStatus === 'failed' && String(order?.shiprocket?.livePricingVerificationError || '').trim()) {
+    issueCodes.push('shiprocket_live_verification_failed');
+  }
+
+  return {
+    status: issueCodes.length > 0 ? 'warning' : 'clear',
+    hasMismatch: false,
+    hasWarning: issueCodes.length > 0,
+    issueCount: issueCodes.length,
+    issueCodes,
+    syncStatus,
+    referenceAssigned: Boolean(String(order?.shiprocket?.referenceOrderId || '').trim()),
+    remoteOrderTracked,
+    expectedShiprocket: {
+      subTotal: derivedSubTotal,
+      shippingCharges,
+      totalDiscount,
+      derivedFinalAmount: finalAmount > 0 ? finalAmount : derivedSubTotal + shippingCharges,
+    },
+    storedShiprocketSnapshot,
+    liveVerification: {
+      status: liveVerificationStatus,
+      available: Boolean(liveShiprocketSnapshot),
+      verifiedAt: order?.shiprocket?.livePricingVerifiedAt || null,
+      error: order?.shiprocket?.livePricingVerificationError || '',
+      snapshot: liveShiprocketSnapshot,
+    },
+    local: {
+      amount: finalAmount,
+      expectedAmount: Math.max(0, fallbackSubtotal - totalDiscount + shippingCharges),
+      amountDelta: finalAmount - Math.max(0, fallbackSubtotal - totalDiscount + shippingCharges),
+      storedSubtotal,
+      itemsSubtotal,
+      shippingCharges,
+      discountAmount: totalDiscount,
+    },
+    issues: issueCodes.map((code) => ({
+      code,
+      severity: 'warning',
+      message:
+        code === 'missing_shiprocket_pricing_snapshot'
+          ? 'This Shiprocket-linked order has no persisted pricing snapshot, so the remote amount cannot be auto-verified.'
+          : 'Live Shiprocket verification failed for this order.',
+    })),
+  };
+};
+
+const resolveOrderShiprocketAudit = (order = {}) => {
+  const incomingAudit = order?.shiprocketPricingAudit;
+
+  if (incomingAudit && typeof incomingAudit === 'object') {
+    return {
+      ...buildFallbackShiprocketAudit(order),
+      ...incomingAudit,
+      syncStatus: resolveOrderShiprocketSyncStatus(order, incomingAudit),
+      referenceAssigned:
+        typeof incomingAudit.referenceAssigned === 'boolean'
+          ? incomingAudit.referenceAssigned
+          : Boolean(String(order?.shiprocket?.referenceOrderId || '').trim()),
+      remoteOrderTracked:
+        typeof incomingAudit.remoteOrderTracked === 'boolean'
+          ? incomingAudit.remoteOrderTracked
+          : Boolean(
+              Number(order?.shiprocket?.shipmentId || 0) > 0 ||
+                Number(order?.shiprocket?.orderId || 0) > 0 ||
+                String(order?.shiprocket?.awbCode || '').trim()
+            ),
+    };
+  }
+
+  return buildFallbackShiprocketAudit(order);
 };
 
 const getShiprocketAuditBadge = (audit = {}) => {
@@ -246,7 +384,7 @@ const Orders = ({ token }) => {
     }
 
     try {
-      const response = await axios.post(BACKEND_URL + '/api/order/list', {}, { headers: { token } });
+      const response = await axios.post(`${ORDER_API_BASE}/list`, {}, { headers: { token } });
 
       if (response.data.success) {
         setOrders(mergeOrderSnapshot(response.data.orders || []));
@@ -272,7 +410,7 @@ const Orders = ({ token }) => {
 
     try {
       const response = await axios.post(
-        BACKEND_URL + '/api/order/status',
+        `${ORDER_API_BASE}/status`,
         { orderId, status: event.target.value },
         { headers: { token } }
       );
@@ -320,7 +458,7 @@ const Orders = ({ token }) => {
       }
 
       try {
-        const response = await axios.get(BACKEND_URL + '/api/orders/shiprocket/live-verification-job', {
+        const response = await axios.get(`${ORDER_API_BASE}/shiprocket/live-verification-job`, {
           headers: { token },
         });
 
@@ -352,7 +490,7 @@ const Orders = ({ token }) => {
 
     try {
       const response = await axios.post(
-        BACKEND_URL + '/api/orders/shiprocket/backfill-pricing-snapshots',
+        `${ORDER_API_BASE}/shiprocket/backfill-pricing-snapshots`,
         { limit: 200 },
         { headers: { token } }
       );
@@ -399,7 +537,7 @@ const Orders = ({ token }) => {
         limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
         requestsPerMinute: Number.isFinite(parsedRequestsPerMinute) ? parsedRequestsPerMinute : undefined,
       };
-      const response = await axios.post(BACKEND_URL + '/api/orders/shiprocket/verify-live-bulk', payload, {
+      const response = await axios.post(`${ORDER_API_BASE}/shiprocket/verify-live-bulk`, payload, {
         headers: { token },
       });
 
@@ -435,7 +573,7 @@ const Orders = ({ token }) => {
 
     try {
       const response = await axios.post(
-        BACKEND_URL + '/api/orders/shiprocket/verify-live-bulk/cancel',
+        `${ORDER_API_BASE}/shiprocket/verify-live-bulk/cancel`,
         {},
         { headers: { token } }
       );
@@ -464,7 +602,7 @@ const Orders = ({ token }) => {
 
       try {
         const response = await axios.post(
-          `${BACKEND_URL}/api/orders/${orderId}/shiprocket/verify-live`,
+          `${ORDER_API_BASE}/${orderId}/shiprocket/verify-live`,
           {},
           { headers: { token } }
         );
@@ -607,7 +745,7 @@ const Orders = ({ token }) => {
   const visibleOrders = useMemo(() => {
     return orders.filter((order) => {
       const customerName = `${order.address?.firstName || ''} ${order.address?.lastName || ''}`.trim();
-      const audit = order.shiprocketPricingAudit || {};
+      const audit = resolveOrderShiprocketAudit(order);
       const haystack = `${customerName} ${order._id} ${order.paymentMethod} ${
         order.shiprocket?.referenceOrderId || ''
       } ${(audit.issueCodes || []).join(' ')}`.toLowerCase();
@@ -642,12 +780,12 @@ const Orders = ({ token }) => {
   }, [orders, search, shiprocketAuditFilter, statusFilter]);
 
   const shiprocketAuditCounts = useMemo(() => {
-    const mismatchCount = orders.filter((order) => order.shiprocketPricingAudit?.status === 'mismatch').length;
-    const warningCount = orders.filter((order) => order.shiprocketPricingAudit?.status === 'warning').length;
-    const clearCount = orders.filter((order) => order.shiprocketPricingAudit?.status === 'clear').length;
+    const mismatchCount = orders.filter((order) => resolveOrderShiprocketAudit(order)?.status === 'mismatch').length;
+    const warningCount = orders.filter((order) => resolveOrderShiprocketAudit(order)?.status === 'warning').length;
+    const clearCount = orders.filter((order) => resolveOrderShiprocketAudit(order)?.status === 'clear').length;
     const missingSnapshotCount = orders.filter((order) =>
-      Array.isArray(order.shiprocketPricingAudit?.issueCodes) &&
-      order.shiprocketPricingAudit.issueCodes.includes('missing_shiprocket_pricing_snapshot')
+      Array.isArray(resolveOrderShiprocketAudit(order)?.issueCodes) &&
+      resolveOrderShiprocketAudit(order).issueCodes.includes('missing_shiprocket_pricing_snapshot')
     ).length;
 
     return {
@@ -1051,7 +1189,7 @@ const Orders = ({ token }) => {
         ) : (
           visibleOrders.map((order) => {
             const customerName = `${order.address?.firstName || ''} ${order.address?.lastName || ''}`.trim();
-            const shiprocketAudit = order.shiprocketPricingAudit || {};
+            const shiprocketAudit = resolveOrderShiprocketAudit(order);
             const shiprocketAuditBadge = getShiprocketAuditBadge(shiprocketAudit);
             const expectedShiprocket = shiprocketAudit.expectedShiprocket || {};
             const storedShiprocketSnapshot = shiprocketAudit.storedShiprocketSnapshot || null;
@@ -1201,6 +1339,13 @@ const Orders = ({ token }) => {
                         <p className='mt-1 font-medium text-slate-900'>
                           {order.shiprocket?.referenceOrderId || 'Not assigned'}
                         </p>
+                        {order.shiprocket?.referenceOrderId ? (
+                          <p className='mt-2 text-xs text-slate-500'>
+                            {shiprocketAudit.remoteOrderTracked
+                              ? 'Shiprocket has a remote order linked to this reference.'
+                              : 'This reference is reserved locally. Shiprocket sync has not finished yet.'}
+                          </p>
+                        ) : null}
                         <div className='mt-3 flex flex-wrap gap-2'>
                           <button
                             type='button'

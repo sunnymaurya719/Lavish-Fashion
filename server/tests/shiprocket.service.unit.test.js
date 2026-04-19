@@ -115,6 +115,22 @@ describe('shiprocketService pricing payload mapping', () => {
         expect(audit.issueCodes).toContain('missing_shiprocket_pricing_snapshot');
     });
 
+    it('infers synced status from remote Shiprocket identifiers when syncStatus is missing', () => {
+        const audit = buildShiprocketPricingAudit(
+            createOrder({
+                shiprocket: {
+                    referenceOrderId: 'LFTEST123456',
+                    shipmentId: 9388670,
+                    syncStatus: ''
+                }
+            })
+        );
+
+        expect(audit.syncStatus).toBe('synced');
+        expect(audit.remoteOrderTracked).toBe(true);
+        expect(audit.referenceAssigned).toBe(true);
+    });
+
     it('flags mismatches when the stored Shiprocket pricing snapshot differs from the current expected payload', () => {
         const audit = buildShiprocketPricingAudit(
             createOrder({
