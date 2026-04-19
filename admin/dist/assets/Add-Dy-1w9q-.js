@@ -1,0 +1,1 @@
+import{j as r}from"./index-Bt8pmIjD.js";import"./vendor-router-CSWoNGyw.js";import{P as o}from"./ProductForm-B6NZuB5L.js";import"./vendor-react-BbgdciZl.js";import"./vendor-axios-BPTwnBaP.js";import"./vendor-toast-C-NYyC4Y.js";const t=({token:t,serverBootstrap:e,serverStatus:s})=>r.jsx(o,{token:t,mode:"create",serverBootstrap:e,serverStatus:s});export{t as default};
