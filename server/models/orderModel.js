@@ -127,6 +127,15 @@ const shiprocketSchema = new mongoose.Schema(
             default: 'not_verified'
         },
         livePricingVerificationError: { type: String, default: '', trim: true, maxlength: 500 },
+        cancelStatus: {
+            type: String,
+            enum: ['not_required', 'pending', 'cancelled', 'failed'],
+            default: 'not_required'
+        },
+        cancelAttemptedAt: { type: Number, default: null },
+        cancelledAt: { type: Number, default: null },
+        cancelError: { type: String, default: '', trim: true, maxlength: 500 },
+        rawCancelResponse: { type: Object, default: null },
         parcel: { type: shiprocketParcelSchema, default: () => ({}) }
     },
     { _id: false, strict: true }

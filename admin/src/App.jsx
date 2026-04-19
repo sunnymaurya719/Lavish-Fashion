@@ -127,7 +127,23 @@ const App = () => {
 
   return (
     <div className='min-h-screen bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#f1f5f9_100%)]'>
-      <ToastContainer position='top-right' autoClose={3000} />
+      {/*
+        Toast policy (ADMIN_UI_OPTIMIZATION_PLAN §1.4):
+          - Default auto-close raised from 3s → 6s so agents on slow networks
+            can read success messages.
+          - Errors are configured per-toast with autoClose:false at the call
+            site where appropriate; defaultOptions keep the existing 6s timing
+            so we don't accidentally hold older toast call-sites open forever.
+      */}
+      <ToastContainer
+        position='top-right'
+        autoClose={6000}
+        closeOnClick
+        pauseOnHover
+        pauseOnFocusLoss
+        newestOnTop
+        theme='light'
+      />
       {token === '' ? (
         <Login
           setToken={setToken}

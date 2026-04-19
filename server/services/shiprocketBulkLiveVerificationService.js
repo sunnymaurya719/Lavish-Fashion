@@ -313,8 +313,32 @@ const persistRunningJobProgress = async ({
     trigger = '',
     activeRunExpiresAt = null,
     cancellationState = null
-} = {}) =>
-    updateSystemJobState({
+} = {}) => {
+    // `markSystemJobStarted` resets `lastRunResult` to `null` at the beginning
+    // of every run, so dot-path `$set` updates such as
+    // `lastRunResult.progress` would fail with "Cannot create field 'progress'
+    // in element {lastRunResult: null}". Build the full sub-document once and
+    // overwrite it atomically. Any cancellation flags already captured on the
+    // job state are merged back in via `cancellationState`.
+    const updatedAt = new Date().toISOString();
+    const lastRunResult = {
+        success: true,
+        skipped: false,
+        trigger: normalizeText(trigger),
+        requestedBy: normalizeText(requestedBy),
+        config,
+        progress,
+        updatedAt,
+        ...(cancellationState?.cancelRequestedAt
+            ? {
+                cancelRequestedAt: cancellationState.cancelRequestedAt,
+                cancelRequestedBy: normalizeText(cancellationState.cancelRequestedBy),
+                cancelReason: normalizeText(cancellationState.cancelReason)
+            }
+            : {})
+    };
+
+    return updateSystemJobState({
         jobKey: SHIPROCKET_BULK_VERIFY_JOB_KEY,
         updateSet: {
             provider: SHIPROCKET_BULK_VERIFY_PROVIDER,
@@ -324,23 +348,11 @@ const persistRunningJobProgress = async ({
             lastProcessedCount: Number(progress?.processedCount || 0),
             lastRetryScheduledCount: Number(progress?.retryScheduledCount || 0),
             lastConfig: config,
-            'lastRunResult.success': true,
-            'lastRunResult.skipped': false,
-            'lastRunResult.trigger': normalizeText(trigger),
-            'lastRunResult.requestedBy': normalizeText(requestedBy),
-            'lastRunResult.config': config,
-            'lastRunResult.progress': progress,
-            'lastRunResult.updatedAt': new Date().toISOString(),
-            ...(cancellationState?.cancelRequestedAt
-                ? {
-                    'lastRunResult.cancelRequestedAt': cancellationState.cancelRequestedAt,
-                    'lastRunResult.cancelRequestedBy': normalizeText(cancellationState.cancelRequestedBy),
-                    'lastRunResult.cancelReason': normalizeText(cancellationState.cancelReason)
-                }
-                : {}),
+            lastRunResult,
             activeRunExpiresAt: activeRunExpiresAt || null
         }
     });
+};
 
 const serializeShiprocketBulkVerifyJobState = (jobState = null) => {
     if (!jobState) {
@@ -1097,13 +1109,26 @@ const cancelShiprocketBulkLiveVerificationJob = async ({ requestedBy = '', reaso
         };
     }
 
+    // Merge into the existing `lastRunResult` object instead of using dot-path
+    // `$set`. When a job has just been started, `markSystemJobStarted` resets
+    // `lastRunResult` to `null`, and MongoDB cannot create nested fields under
+    // a null element ("Cannot create field 'cancelReason' in element
+    // {lastRunResult: null}"). Building the full sub-document here avoids that
+    // failure while preserving any progress fields already captured by the
+    // running worker.
+    const cancelRequestedAt = new Date().toISOString();
+    const mergedCancelResult = {
+        ...(jobState?.lastRunResult || {}),
+        cancelRequestedAt,
+        cancelRequestedBy: requestedByText,
+        cancelReason: normalizedReason,
+        updatedAt: cancelRequestedAt
+    };
+
     await updateSystemJobState({
         jobKey: SHIPROCKET_BULK_VERIFY_JOB_KEY,
         updateSet: {
-            'lastRunResult.cancelRequestedAt': new Date().toISOString(),
-            'lastRunResult.cancelRequestedBy': requestedByText,
-            'lastRunResult.cancelReason': normalizedReason,
-            'lastRunResult.updatedAt': new Date().toISOString()
+            lastRunResult: mergedCancelResult
         }
     });
 

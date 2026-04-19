@@ -50,9 +50,27 @@ const FIT_FEEDBACK_LABELS = {
 };
 const ORDER_CANCELLATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const ORDER_CANCELLATION_ERROR_MESSAGE = 'Order can only be cancelled within 6 hours of placing it.';
-const ORDER_CANCELLATION_REFUND_MESSAGE = 'Refund will be processed within 2 working days';
-const ORDER_CANCELLATION_CONFIRM_MESSAGE =
-  'Are you sure you want to cancel this order?\nThe payment will be refunded to your account within 2 working days.';
+const getOrderCancellationRefundMessage = (order) => {
+  const method = String(order?.paymentMethod || '').trim().toUpperCase();
+  const wasPaid = Boolean(order?.payment);
+
+  if (method === 'COD' && !wasPaid) {
+    return 'Order cancelled. No payment was collected.';
+  }
+
+  return 'Refund will be processed within 2 working days';
+};
+
+const getOrderCancellationConfirmMessage = (order) => {
+  const method = String(order?.paymentMethod || '').trim().toUpperCase();
+  const wasPaid = Boolean(order?.payment);
+
+  if (method === 'COD' && !wasPaid) {
+    return 'Are you sure you want to cancel this order?\nNo payment was collected — nothing to refund.';
+  }
+
+  return 'Are you sure you want to cancel this order?\nThe payment will be refunded to your account within 2 working days.';
+};
 
 const normalizeOrderStatus = (status) => String(status || '').trim().toLowerCase();
 
@@ -383,6 +401,8 @@ const Orders = () => {
 
     setActiveCancelOrder({
       _id: order._id,
+      paymentMethod: order.paymentMethod,
+      payment: order.payment,
     });
   };
 
@@ -436,7 +456,7 @@ const Orders = () => {
             : order
         )
       );
-      toast.success(`Order cancelled successfully. ${ORDER_CANCELLATION_REFUND_MESSAGE}.`);
+      toast.success(`Order cancelled successfully. ${getOrderCancellationRefundMessage(previousOrder)}`);
     } catch (error) {
       setOrderData((current) =>
         current.map((order) => (String(order._id) === orderId ? previousOrder : order))
@@ -747,7 +767,7 @@ const Orders = () => {
                   {isCancelled ? (
                     <div className='rounded-2xl bg-rose-50 px-4 py-3'>
                       <p className='text-[10px] uppercase tracking-[0.2em] text-rose-600'>Cancelled</p>
-                      <p className='mt-1 text-sm font-medium text-rose-700'>{ORDER_CANCELLATION_REFUND_MESSAGE}</p>
+                      <p className='mt-1 text-sm font-medium text-rose-700'>{getOrderCancellationRefundMessage(order)}</p>
                     </div>
                   ) : (
                     <>
@@ -909,7 +929,7 @@ const Orders = () => {
       <ConfirmModal
         open={Boolean(activeCancelOrder)}
         title='Cancel Order'
-        message={ORDER_CANCELLATION_CONFIRM_MESSAGE}
+        message={getOrderCancellationConfirmMessage(activeCancelOrder)}
         confirmLabel='Confirm'
         cancelLabel='Cancel'
         isLoading={Boolean(cancellingOrderId)}

@@ -4,38 +4,28 @@ import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { BACKEND_URL } from '../config/api';
 import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
+import {
+  PageHeader,
+  MetricGrid,
+  MetricCard,
+  StatusBadge,
+  SkeletonCard,
+  SkeletonTable,
+  ErrorState,
+  formatMoney,
+  formatNumber,
+  formatDate,
+} from '../components/ui';
 
 const realtimeEnabled = String(import.meta.env.VITE_REALTIME_ENABLED || 'true').trim().toLowerCase() !== 'false';
 const DASHBOARD_REFRESH_DEBOUNCE_MS = 1200;
 const DASHBOARD_FALLBACK_REFRESH_MS = 60000;
 
-const formatCurrency = (value, currency = 'INR') =>
-  new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0,
-  }).format(Number(value || 0));
-
 const formatCompact = (value) =>
   new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0));
 
-const formatDate = (value) => {
-  if (!value) {
-    return 'Recently';
-  }
-
-  return new Date(value).toLocaleDateString('en-IN', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-};
-
 const formatSyncTime = (value) => {
-  if (!value) {
-    return 'Not yet';
-  }
-
+  if (!value) return 'Not yet';
   return new Date(value).toLocaleString('en-IN', {
     month: 'short',
     day: 'numeric',
@@ -43,6 +33,35 @@ const formatSyncTime = (value) => {
     minute: '2-digit',
   });
 };
+
+/* ── live-dot indicator ─────────────────────────────────── */
+
+const LiveIndicator = ({ status, message, lastSync, isRefreshing }) => {
+  const dotColor =
+    status === 'connected' ? 'bg-emerald-500' : status === 'connecting' ? 'bg-amber-500' : 'bg-slate-400';
+  const label =
+    status === 'connected'
+      ? 'Live'
+      : status === 'connecting'
+        ? 'Syncing'
+        : status === 'disabled'
+          ? 'Polling'
+          : 'Reconnecting';
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={message || ''}>
+      <span className={`h-2 w-2 rounded-full ${dotColor} ${status === 'connected' ? 'animate-pulse' : ''}`} />
+      {label}
+      {isRefreshing ? (
+        <span className="text-slate-400"> · refreshing</span>
+      ) : lastSync ? (
+        <span className="text-slate-400"> · {formatSyncTime(lastSync)}</span>
+      ) : null}
+    </span>
+  );
+};
+
+/* ── main component ────────────────────────────────────── */
 
 const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus }) => {
   const [metrics, setMetrics] = useState(null);
@@ -53,6 +72,8 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
   const hasMetricsRef = useRef(false);
   const scheduledRefreshTimerRef = useRef(null);
   const processedEventIdsRef = useRef(new Set());
+
+  /* ── data fetching ──────────────────────────────────── */
 
   const fetchDashboard = useCallback(async ({ silent = false, showToastOnError = true } = {}) => {
     const backgroundRefresh = silent || hasMetricsRef.current;
@@ -69,9 +90,7 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
       });
 
       if (!response.data.success) {
-        if (showToastOnError) {
-          toast.error(response.data.message || 'Failed to fetch dashboard metrics');
-        }
+        if (showToastOnError) toast.error(response.data.message || 'Failed to fetch dashboard metrics');
         return;
       }
 
@@ -79,23 +98,15 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
       hasMetricsRef.current = true;
       setLastMetricsSyncAt(new Date().toISOString());
     } catch (error) {
-      if (showToastOnError) {
-        toast.error(error?.response?.data?.message || error.message);
-      }
+      if (showToastOnError) toast.error(error?.response?.data?.message || error.message);
     } finally {
-      if (backgroundRefresh) {
-        setIsRefreshing(false);
-      } else {
-        setIsLoading(false);
-      }
+      if (backgroundRefresh) setIsRefreshing(false);
+      else setIsLoading(false);
     }
   }, [token]);
 
   const scheduleDashboardRefresh = useCallback(({ delayMs = DASHBOARD_REFRESH_DEBOUNCE_MS } = {}) => {
-    if (scheduledRefreshTimerRef.current) {
-      clearTimeout(scheduledRefreshTimerRef.current);
-    }
-
+    if (scheduledRefreshTimerRef.current) clearTimeout(scheduledRefreshTimerRef.current);
     scheduledRefreshTimerRef.current = setTimeout(() => {
       scheduledRefreshTimerRef.current = null;
       void fetchDashboard({ silent: true, showToastOnError: false });
@@ -113,6 +124,7 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
     void fetchDashboard();
   }, [fetchDashboard]);
 
+  /* realtime */
   useEffect(() => {
     if (!token || !realtimeEnabled) {
       setLiveUpdatesStatus({ status: 'disabled', message: 'Live updates disabled' });
@@ -126,28 +138,15 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
       },
       onOrderUpsert: (eventPayload, message) => {
         const eventId = String(eventPayload?.eventId || message?.id || '');
-
         if (eventId) {
-          if (processedEventIdsRef.current.has(eventId)) {
-            return;
-          }
-
+          if (processedEventIdsRef.current.has(eventId)) return;
           processedEventIdsRef.current.add(eventId);
-
           if (processedEventIdsRef.current.size > 500) {
-            const iterator = processedEventIdsRef.current.values();
-            const oldest = iterator.next().value;
-
-            if (oldest) {
-              processedEventIdsRef.current.delete(oldest);
-            }
+            const oldest = processedEventIdsRef.current.values().next().value;
+            if (oldest) processedEventIdsRef.current.delete(oldest);
           }
         }
-
-        if (!eventPayload?.order?._id) {
-          return;
-        }
-
+        if (!eventPayload?.order?._id) return;
         scheduleDashboardRefresh();
       },
     });
@@ -158,18 +157,16 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
     };
   }, [scheduleDashboardRefresh, token]);
 
+  /* fallback poll */
   useEffect(() => {
-    if (!token) {
-      return undefined;
-    }
-
+    if (!token) return undefined;
     const intervalId = setInterval(() => {
       void fetchDashboard({ silent: true, showToastOnError: false });
     }, DASHBOARD_FALLBACK_REFRESH_MS);
-
     return () => clearInterval(intervalId);
   }, [fetchDashboard, token]);
 
+  /* cleanup */
   useEffect(() => () => {
     if (scheduledRefreshTimerRef.current) {
       clearTimeout(scheduledRefreshTimerRef.current);
@@ -177,410 +174,425 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
     }
   }, []);
 
-  const summaryCards = useMemo(() => {
-    if (!metrics) {
-      return [];
-    }
+  /* ── derived data ───────────────────────────────────── */
 
+  const actionCenterItems = useMemo(() => {
+    if (!metrics) return [];
     return [
       {
-        label: 'Realized revenue',
-        value: formatCurrency(metrics.totals.revenue, metrics.currency),
-        helper: `${metrics.totals.paidOrders} paid orders`,
+        label: 'Awaiting fulfillment',
+        value: (metrics.statusBreakdown || [])
+          .filter((s) => ['Order Placed', 'Packing'].includes(s.status))
+          .reduce((sum, s) => sum + s.count, 0),
+        to: '/orders?status=Order Placed,Packing',
+        tone: 'info',
       },
       {
-        label: 'Total orders',
-        value: formatCompact(metrics.totals.orders),
-        helper: `${metrics.totals.pendingOrders} still in motion`,
+        label: 'Pending reviews',
+        value: (metrics.statusBreakdown || []).find((s) => s.status === 'pending')?.count || metrics.totals?.pendingReviews || 0,
+        to: '/reviews?status=pending',
+        tone: 'warning',
       },
       {
-        label: 'Customers',
-        value: formatCompact(metrics.totals.customers),
-        helper: `${metrics.totals.newCustomersLast30Days} joined in 30 days`,
+        label: 'Low-stock SKUs',
+        value: metrics.totals?.lowStockProducts || metrics.inventoryHealth?.lowStock || 0,
+        to: '/inventory?filter=low_stock',
+        tone: 'danger',
       },
       {
-        label: 'Inventory units',
-        value: formatCompact(metrics.totals.inventoryUnits),
-        helper: `${metrics.totals.lowStockProducts} products need attention`,
+        label: 'Failed dispatches',
+        value: metrics.totals?.failedDispatches || 0,
+        to: '/marketing?status=failed',
+        tone: 'muted',
       },
     ];
   }, [metrics]);
+
+  const revenueMax = metrics ? Math.max(...metrics.revenueSeries.map((i) => i.revenue), 1) : 1;
+  const statusMax = metrics ? Math.max(...metrics.statusBreakdown.map((i) => i.count), 1) : 1;
 
   const catalogHighlights = useMemo(() => {
-    if (!metrics) {
-      return [];
-    }
-
-    const findCatalogCount = (status) =>
-      metrics.catalogStatusBreakdown?.find((item) => item.status === status)?.count || 0;
-
+    if (!metrics) return [];
+    const find = (status) => metrics.catalogStatusBreakdown?.find((i) => i.status === status)?.count || 0;
     return [
-      {
-        label: 'Active',
-        value: findCatalogCount('active'),
-        tone: 'bg-emerald-50 text-emerald-900',
-      },
-      {
-        label: 'Draft',
-        value: findCatalogCount('draft'),
-        tone: 'bg-amber-50 text-amber-900',
-      },
-      {
-        label: 'Archived',
-        value: findCatalogCount('archived'),
-        tone: 'bg-slate-100 text-slate-800',
-      },
-      {
-        label: 'Featured',
-        value: metrics.totals.featuredProducts || 0,
-        tone: 'bg-sky-50 text-sky-900',
-      },
+      { label: 'Active', value: find('active'), tone: 'bg-emerald-50 text-emerald-900' },
+      { label: 'Draft', value: find('draft'), tone: 'bg-amber-50 text-amber-900' },
+      { label: 'Archived', value: find('archived'), tone: 'bg-slate-100 text-slate-800' },
+      { label: 'Featured', value: (metrics.totals.featuredProducts || 0), tone: 'bg-sky-50 text-sky-900' },
     ];
   }, [metrics]);
 
-  const revenueMax = metrics ? Math.max(...metrics.revenueSeries.map((item) => item.revenue), 1) : 1;
-  const statusMax = metrics ? Math.max(...metrics.statusBreakdown.map((item) => item.count), 1) : 1;
+  /* ── loading state ──────────────────────────────────── */
 
   if (isLoading) {
-    return <div className='ui-loading-state'>Loading dashboard metrics...</div>;
-  }
-
-  if (!metrics) {
     return (
-      <div className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-        <p className='font-medium text-slate-700'>Dashboard unavailable</p>
-        <button
-          type='button'
-          onClick={fetchDashboard}
-          className='mt-4 rounded-xl bg-slate-900 px-4 py-2 text-white'
-        >
-          Retry
-        </button>
+      <div className="flex flex-col gap-6">
+        <div className="h-10 w-64 rounded-xl bg-slate-100 animate-pulse" />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+        <SkeletonTable rows={5} columns={4} />
       </div>
     );
   }
 
+  if (!metrics) {
+    return (
+      <ErrorState
+        title="Dashboard unavailable"
+        message="Could not load dashboard metrics."
+        onRetry={fetchDashboard}
+      />
+    );
+  }
+
+  /* ── render ─────────────────────────────────────────── */
+
   return (
-    <div className='flex flex-col gap-6'>
-      <section className='relative overflow-hidden rounded-[32px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-8 text-white shadow-lg'>
-        <div className='relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between'>
-          <div className='max-w-2xl'>
-            <p className='text-xs uppercase tracking-[0.35em] text-slate-300'>Operations overview</p>
-            <h1 className='mt-3 text-3xl font-semibold leading-tight'>
-              Industry-style admin dashboard, now backed by live server metrics.
-            </h1>
-            <p className='mt-3 max-w-xl text-sm text-slate-300'>
-              Revenue, order flow, customer growth, inventory health, and low-stock risk are all being read
-              from the same API layer that powers the rest of the platform.
-            </p>
-            <div className='mt-4 flex flex-wrap gap-2'>
-              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
+    <div className="flex flex-col gap-6">
+      {/* header + action center */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-semibold text-slate-900">Operations overview</h1>
+              <LiveIndicator
+                status={liveUpdatesStatus.status}
+                message={liveUpdatesStatus.message}
+                lastSync={lastMetricsSyncAt}
+                isRefreshing={isRefreshing}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <StatusBadge tone={serverStatus === 'healthy' ? 'success' : 'warning'} size="sm" withDot={false}>
                 API {serverStatus}
-              </span>
-              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
+              </StatusBadge>
+              <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Stripe {serverBootstrap?.payments?.stripeEnabled ? 'on' : 'off'}
-              </span>
-              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
+              </StatusBadge>
+              <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Razorpay {serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'}
-              </span>
-              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
+              </StatusBadge>
+              <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Media {serverBootstrap?.features?.reviewMediaEnabled ? 'on' : 'off'}
-              </span>
-              <span
-                className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'
-                title={liveUpdatesStatus.message || 'Live dashboard metrics'}
-              >
-                Live {liveUpdatesStatus.status === 'connected'
-                  ? 'on'
-                  : liveUpdatesStatus.status === 'connecting'
-                    ? 'syncing'
-                    : liveUpdatesStatus.status === 'disabled'
-                      ? 'off'
-                      : 'reconnecting'}
-              </span>
-              <span className='rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white'>
-                Sync {isRefreshing ? 'refreshing' : formatSyncTime(lastMetricsSyncAt)}
-              </span>
+              </StatusBadge>
             </div>
           </div>
 
-          <div className='flex flex-wrap gap-3'>
-            <button
-              type='button'
-              onClick={handleManualRefresh}
-              disabled={isRefreshing}
-              className='rounded-2xl border border-slate-600 px-4 py-3 text-sm font-medium text-white disabled:opacity-60'
-            >
-              {isRefreshing ? 'Refreshing...' : 'Refresh live data'}
-            </button>
-            <Link to='/products/new' className='rounded-2xl bg-white px-4 py-3 text-sm font-medium text-slate-900'>
-              Add product
-            </Link>
-            <Link
-              to='/inventory'
-              className='rounded-2xl border border-slate-600 px-4 py-3 text-sm font-medium text-white'
-            >
-              Review inventory
-            </Link>
+          {/* action center */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {actionCenterItems.map((item) => (
+              <Link
+                key={item.label}
+                to={item.to}
+                className="flex flex-col items-center rounded-xl border border-slate-200 px-4 py-3 text-center transition hover:bg-slate-50"
+              >
+                <span className="text-2xl font-semibold tabular-nums text-slate-900">{item.value}</span>
+                <span className="mt-1 text-xs text-slate-500">{item.label}</span>
+              </Link>
+            ))}
           </div>
         </div>
-      </section>
 
-      <section className='grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
-        {summaryCards.map((card) => (
-          <article key={card.label} className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
-            <p className='text-sm text-slate-500'>{card.label}</p>
-            <p className='mt-3 text-3xl font-semibold text-slate-900'>{card.value}</p>
-            <p className='mt-2 text-sm text-slate-500'>{card.helper}</p>
-          </article>
-        ))}
-      </section>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {isRefreshing ? 'Refreshing…' : 'Refresh live data'}
+          </button>
+          <Link to="/products/new" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+            Add product
+          </Link>
+          <Link to="/inventory" className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            Review inventory
+          </Link>
+        </div>
+      </div>
 
-      <section className='grid gap-6 xl:grid-cols-[1.4fr_1fr]'>
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-6 flex items-center justify-between'>
+      {/* summary cards — each links to its drill-down page */}
+      <MetricGrid>
+        <Link to="/orders" className="contents">
+          <MetricCard
+            label="Realized revenue"
+            value={formatMoney(metrics.totals.revenue)}
+            helper={`${metrics.totals.paidOrders} paid orders`}
+          />
+        </Link>
+        <Link to="/orders" className="contents">
+          <MetricCard
+            label="Total orders"
+            value={formatCompact(metrics.totals.orders)}
+            helper={`${metrics.totals.pendingOrders} still in motion`}
+          />
+        </Link>
+        <Link to="/customers" className="contents">
+          <MetricCard
+            label="Customers"
+            value={formatCompact(metrics.totals.customers)}
+            helper={`${metrics.totals.newCustomersLast30Days} joined in 30 days`}
+          />
+        </Link>
+        <Link to="/inventory" className="contents">
+          <MetricCard
+            label="Inventory units"
+            value={formatCompact(metrics.totals.inventoryUnits)}
+            helper={`${metrics.totals.lowStockProducts} products need attention`}
+          />
+        </Link>
+      </MetricGrid>
+
+      {/* charts row */}
+      <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+        {/* revenue trend */}
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-6 flex items-center justify-between">
             <div>
-              <p className='text-lg font-semibold text-slate-900'>Revenue trend</p>
-              <p className='text-sm text-slate-500'>Last 7 days of realized revenue and order volume.</p>
+              <p className="text-base font-semibold text-slate-900">Revenue trend</p>
+              <p className="text-sm text-slate-500">Last 7 days of realized revenue.</p>
             </div>
-            <p className='text-sm text-slate-500'>
-              Avg order value: {formatCurrency(metrics.totals.averageOrderValue, metrics.currency)}
+            <p className="text-sm text-slate-500">
+              AOV: {formatMoney(metrics.totals.averageOrderValue)}
             </p>
           </div>
-          <div className='grid h-64 grid-cols-7 items-end gap-3'>
+          <div className="grid h-56 grid-cols-7 items-end gap-3">
             {metrics.revenueSeries.map((item) => (
-              <div key={item.key} className='flex flex-col items-center gap-3'>
-                <div className='relative w-full flex-1 overflow-hidden rounded-2xl bg-slate-100'>
+              <div key={item.key} className="flex flex-col items-center gap-2">
+                <div className="relative w-full flex-1 overflow-hidden rounded-xl bg-slate-100">
                   <div
-                    className='absolute inset-x-0 bottom-0 rounded-2xl bg-gradient-to-t from-slate-900 via-slate-700 to-slate-500'
+                    className="absolute inset-x-0 bottom-0 rounded-xl bg-gradient-to-t from-slate-800 to-slate-500"
                     style={{ height: `${Math.max((item.revenue / revenueMax) * 100, item.revenue > 0 ? 12 : 4)}%` }}
-                  ></div>
+                  />
                 </div>
-                <div className='text-center'>
-                  <p className='text-xs font-medium text-slate-700'>{item.label}</p>
-                  <p className='text-[11px] text-slate-500'>{formatCompact(item.revenue)}</p>
+                <div className="text-center">
+                  <p className="text-xs font-medium text-slate-700">{item.label}</p>
+                  <p className="text-[11px] text-slate-500">{formatCompact(item.revenue)}</p>
                 </div>
               </div>
             ))}
           </div>
         </article>
 
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-6'>
-            <p className='text-lg font-semibold text-slate-900'>Fulfillment pulse</p>
-            <p className='text-sm text-slate-500'>How current orders are distributed across the pipeline.</p>
+        {/* fulfillment pulse */}
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-6">
+            <p className="text-base font-semibold text-slate-900">Fulfillment pulse</p>
+            <p className="text-sm text-slate-500">Order pipeline distribution.</p>
           </div>
-          <div className='space-y-4'>
+          <div className="space-y-4">
             {metrics.statusBreakdown.map((item) => (
               <div key={item.status}>
-                <div className='mb-2 flex items-center justify-between text-sm'>
-                  <span className='text-slate-600'>{item.status}</span>
-                  <span className='font-medium text-slate-900'>{item.count}</span>
+                <div className="mb-1.5 flex items-center justify-between text-sm">
+                  <span className="text-slate-600">{item.status}</span>
+                  <span className="font-medium text-slate-900 tabular-nums">{item.count}</span>
                 </div>
-                <div className='h-3 overflow-hidden rounded-full bg-slate-100'>
+                <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
                   <div
-                    className='h-full rounded-full bg-gradient-to-r from-slate-900 to-slate-500'
+                    className="h-full rounded-full bg-slate-700"
                     style={{ width: `${(item.count / statusMax) * 100}%` }}
-                  ></div>
+                  />
                 </div>
               </div>
             ))}
           </div>
 
-          <div className='mt-8 grid grid-cols-3 gap-3'>
-            <div className='rounded-2xl bg-emerald-50 px-4 py-3'>
-              <p className='text-xs uppercase tracking-[0.2em] text-emerald-700'>Healthy</p>
-              <p className='mt-2 text-2xl font-semibold text-emerald-900'>{metrics.inventoryHealth.healthy}</p>
+          <div className="mt-6 grid grid-cols-3 gap-3">
+            <div className="rounded-xl bg-emerald-50 px-3 py-2.5 text-center">
+              <p className="text-xs text-emerald-700">Healthy</p>
+              <p className="mt-1 text-xl font-semibold text-emerald-900 tabular-nums">{metrics.inventoryHealth.healthy}</p>
             </div>
-            <div className='rounded-2xl bg-amber-50 px-4 py-3'>
-              <p className='text-xs uppercase tracking-[0.2em] text-amber-700'>Low</p>
-              <p className='mt-2 text-2xl font-semibold text-amber-900'>{metrics.inventoryHealth.lowStock}</p>
+            <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-center">
+              <p className="text-xs text-amber-700">Low</p>
+              <p className="mt-1 text-xl font-semibold text-amber-900 tabular-nums">{metrics.inventoryHealth.lowStock}</p>
             </div>
-            <div className='rounded-2xl bg-rose-50 px-4 py-3'>
-              <p className='text-xs uppercase tracking-[0.2em] text-rose-700'>Out</p>
-              <p className='mt-2 text-2xl font-semibold text-rose-900'>{metrics.inventoryHealth.outOfStock}</p>
+            <div className="rounded-xl bg-rose-50 px-3 py-2.5 text-center">
+              <p className="text-xs text-rose-700">Out</p>
+              <p className="mt-1 text-xl font-semibold text-rose-900 tabular-nums">{metrics.inventoryHealth.outOfStock}</p>
             </div>
           </div>
         </article>
-      </section>
+      </div>
 
-      <section className='grid gap-6 xl:grid-cols-[1.2fr_1fr]'>
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-5 flex items-center justify-between'>
+      {/* low stock + top products */}
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex items-center justify-between">
             <div>
-              <p className='text-lg font-semibold text-slate-900'>Low-stock alerts</p>
-              <p className='text-sm text-slate-500'>Products closest to stock risk right now.</p>
+              <p className="text-base font-semibold text-slate-900">Low-stock alerts</p>
+              <p className="text-sm text-slate-500">Products closest to stock risk right now.</p>
             </div>
-            <Link to='/inventory' className='text-sm font-medium text-slate-900'>
+            <Link to="/inventory" className="text-sm font-medium text-slate-700 hover:underline">
               Open inventory
             </Link>
           </div>
-          <div className='space-y-3'>
+          <div className="space-y-3">
             {metrics.lowStockProducts.length === 0 ? (
-              <div className='rounded-2xl bg-emerald-50 px-4 py-5 text-sm text-emerald-900'>
-                No low-stock alerts right now. Inventory health is stable.
+              <div className="rounded-xl bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
+                No low-stock alerts. Inventory health is stable.
               </div>
             ) : (
               metrics.lowStockProducts.map((product) => (
                 <div
                   key={product.id}
-                  className='grid gap-3 rounded-2xl border border-slate-200 px-4 py-4 md:grid-cols-[2fr_1fr_1fr_auto]'
+                  className="grid items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 md:grid-cols-[2fr_1fr_1fr_auto]"
                 >
                   <div>
-                    <p className='font-medium text-slate-900'>{product.name}</p>
-                    <p className='text-sm text-slate-500'>
+                    <p className="font-medium text-slate-900">{product.name}</p>
+                    <p className="text-sm text-slate-500">
                       {product.category}
                       {product.sku ? ` / ${product.sku}` : ''}
                     </p>
                   </div>
                   <div>
-                    <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Stock</p>
-                    <p className='text-lg font-semibold text-slate-900'>{product.stock}</p>
+                    <p className="text-xs text-slate-400">Stock</p>
+                    <p className="text-lg font-semibold text-slate-900 tabular-nums">{product.stock}</p>
                   </div>
                   <div>
-                    <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Threshold</p>
-                    <p className='text-lg font-semibold text-slate-900'>{product.lowStockThreshold}</p>
+                    <p className="text-xs text-slate-400">Threshold</p>
+                    <p className="text-lg font-semibold text-slate-900 tabular-nums">{product.lowStockThreshold}</p>
                   </div>
-                  <div className='self-center'>
-                    <span className='rounded-full bg-amber-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-amber-800'>
-                      {product.status}
-                    </span>
-                  </div>
+                  <StatusBadge status={product.status} size="sm" />
                 </div>
               ))
             )}
           </div>
         </article>
 
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-5'>
-            <p className='text-lg font-semibold text-slate-900'>Top products</p>
-            <p className='text-sm text-slate-500'>Most ordered items across all tracked orders.</p>
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5">
+            <p className="text-base font-semibold text-slate-900">Top products</p>
+            <p className="text-sm text-slate-500">Most ordered items across all tracked orders.</p>
           </div>
           {metrics.topProducts.length === 0 ? (
-            <div className='rounded-2xl bg-slate-50 px-4 py-5 text-sm text-slate-500'>
-              Product performance will appear here as orders start coming in.
+            <div className="rounded-xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Product performance will appear as orders start coming in.
             </div>
           ) : (
-            <div className='space-y-4'>
+            <div className="space-y-3">
               {metrics.topProducts.map((product, index) => (
-                <div key={product.productId} className='flex items-center justify-between gap-4'>
-                  <div className='flex items-center gap-4'>
-                    <div className='flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-sm font-semibold text-slate-900'>
+                <div key={product.productId} className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-sm font-semibold text-slate-700">
                       {index + 1}
                     </div>
                     <div>
-                      <p className='font-medium text-slate-900'>{product.name}</p>
-                      <p className='text-sm text-slate-500'>{product.quantitySold} units ordered</p>
+                      <p className="font-medium text-slate-900">{product.name}</p>
+                      <p className="text-xs text-slate-500">{product.quantitySold} units</p>
                     </div>
                   </div>
-                  <p className='text-sm font-medium text-slate-900'>
-                    {formatCurrency(product.revenue, metrics.currency)}
+                  <p className="text-sm font-medium text-slate-900 tabular-nums">
+                    {formatMoney(product.revenue)}
                   </p>
                 </div>
               ))}
             </div>
           )}
         </article>
-      </section>
+      </div>
 
-      <section className='grid gap-6 xl:grid-cols-[1.15fr_1fr]'>
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-5'>
-            <p className='text-lg font-semibold text-slate-900'>Recent orders</p>
-            <p className='text-sm text-slate-500'>Latest order activity coming directly from the server.</p>
+      {/* recent orders + payment mix */}
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5">
+            <p className="text-base font-semibold text-slate-900">Recent orders</p>
+            <p className="text-sm text-slate-500">Latest order activity from the server.</p>
           </div>
           {metrics.recentOrders.length === 0 ? (
-            <div className='rounded-2xl bg-slate-50 px-4 py-5 text-sm text-slate-500'>
+            <div className="rounded-xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Recent orders will appear once the first purchases land.
             </div>
           ) : (
-            <div className='space-y-3'>
+            <div className="space-y-3">
               {metrics.recentOrders.map((order) => (
                 <div
                   key={order.orderId}
-                  className='grid gap-3 rounded-2xl border border-slate-200 px-4 py-4 lg:grid-cols-[2fr_1fr_1fr_auto]'
+                  className="grid items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 lg:grid-cols-[2fr_1fr_1fr_auto]"
                 >
                   <div>
-                    <p className='font-medium text-slate-900'>{order.customerName || 'Customer'}</p>
-                    <p className='text-sm text-slate-500'>#{order.orderId.slice(-6).toUpperCase()}</p>
+                    <p className="font-medium text-slate-900">{order.customerName || 'Customer'}</p>
+                    <p className="text-sm text-slate-500">#{order.orderId.slice(-6).toUpperCase()}</p>
                   </div>
                   <div>
-                    <p className='text-sm text-slate-500'>Amount</p>
-                    <p className='font-medium text-slate-900'>
-                      {formatCurrency(order.amount, metrics.currency)}
+                    <p className="text-xs text-slate-400">Amount</p>
+                    <p className="font-medium text-slate-900 tabular-nums">
+                      {formatMoney(order.amount)}
                     </p>
                   </div>
                   <div>
-                    <p className='text-sm text-slate-500'>Payment</p>
-                    <p className='font-medium text-slate-900'>{order.paymentMethod}</p>
+                    <p className="text-xs text-slate-400">Payment</p>
+                    <p className="font-medium text-slate-900">{order.paymentMethod}</p>
                   </div>
-                  <div className='self-center'>
-                    <span className='rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-700'>
-                      {order.status}
-                    </span>
-                  </div>
+                  <StatusBadge status={order.status} size="sm" />
                 </div>
               ))}
             </div>
           )}
         </article>
 
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-5'>
-            <p className='text-lg font-semibold text-slate-900'>Payment mix</p>
-            <p className='text-sm text-slate-500'>Current split across COD and online payment methods.</p>
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5">
+            <p className="text-base font-semibold text-slate-900">Payment mix</p>
+            <p className="text-sm text-slate-500">Current split across COD and online methods.</p>
           </div>
-          <div className='space-y-4'>
+          <div className="space-y-4">
             {metrics.paymentMethodBreakdown.map((item) => {
               const totalCount = metrics.totals.orders || 1;
-              const width = `${(item.count / totalCount) * 100}%`;
-
+              const pct = ((item.count / totalCount) * 100).toFixed(1);
               return (
                 <div key={item.method}>
-                  <div className='mb-2 flex items-center justify-between text-sm'>
-                    <span className='text-slate-600'>{item.method}</span>
-                    <span className='font-medium text-slate-900'>{item.count}</span>
+                  <div className="mb-1.5 flex items-center justify-between text-sm">
+                    <span className="text-slate-600">{item.method}</span>
+                    <span className="font-medium text-slate-900 tabular-nums">{item.count} ({pct}%)</span>
                   </div>
-                  <div className='h-3 overflow-hidden rounded-full bg-slate-100'>
-                    <div className='h-full rounded-full bg-slate-900' style={{ width }}></div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-slate-700"
+                      style={{ width: `${(item.count / totalCount) * 100}%` }}
+                    />
                   </div>
                 </div>
               );
             })}
           </div>
         </article>
-      </section>
+      </div>
 
-      <section className='grid gap-6 xl:grid-cols-[1fr_1fr]'>
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-6'>
-            <p className='text-lg font-semibold text-slate-900'>Catalog health</p>
-            <p className='text-sm text-slate-500'>Publishing mix across active, draft, and archived inventory.</p>
+      {/* catalog health + customer radar */}
+      <div className="grid gap-6 xl:grid-cols-2">
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5">
+            <p className="text-base font-semibold text-slate-900">Catalog health</p>
+            <p className="text-sm text-slate-500">Publishing mix across active, draft, and archived inventory.</p>
           </div>
 
-          <div className='grid grid-cols-2 gap-3'>
+          <div className="grid grid-cols-2 gap-3">
             {catalogHighlights.map((item) => (
-              <div key={item.label} className={`rounded-2xl px-4 py-4 ${item.tone}`}>
-                <p className='text-xs uppercase tracking-[0.2em]'>{item.label}</p>
-                <p className='mt-2 text-2xl font-semibold'>{item.value}</p>
+              <div key={item.label} className={`rounded-xl px-4 py-3 ${item.tone}`}>
+                <p className="text-xs uppercase tracking-wide">{item.label}</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">{item.value}</p>
               </div>
             ))}
           </div>
 
-          <div className='mt-8 space-y-4'>
+          <div className="mt-6 space-y-3">
             {(metrics.catalogStatusBreakdown || []).map((item) => {
               const totalProducts = metrics.totals.products || 1;
-              const width = `${(item.count / totalProducts) * 100}%`;
-
+              const pct = ((item.count / totalProducts) * 100).toFixed(1);
               return (
                 <div key={item.status}>
-                  <div className='mb-2 flex items-center justify-between text-sm'>
-                    <span className='capitalize text-slate-600'>{item.status}</span>
-                    <span className='font-medium text-slate-900'>{item.count}</span>
+                  <div className="mb-1.5 flex items-center justify-between text-sm">
+                    <span className="capitalize text-slate-600">{item.status}</span>
+                    <span className="font-medium text-slate-900 tabular-nums">{item.count} ({pct}%)</span>
                   </div>
-                  <div className='h-3 overflow-hidden rounded-full bg-slate-100'>
-                    <div className='h-full rounded-full bg-slate-900' style={{ width }}></div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-slate-700"
+                      style={{ width: `${(item.count / totalProducts) * 100}%` }}
+                    />
                   </div>
                 </div>
               );
@@ -588,46 +600,47 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
           </div>
         </article>
 
-        <article className='rounded-3xl border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='mb-6'>
-            <p className='text-lg font-semibold text-slate-900'>Customer radar</p>
-            <p className='text-sm text-slate-500'>Newest customers and their order activity so far.</p>
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5">
+            <p className="text-base font-semibold text-slate-900">Customer radar</p>
+            <p className="text-sm text-slate-500">Newest customers and their order activity.</p>
           </div>
 
           {metrics.recentCustomers.length === 0 ? (
-            <div className='rounded-2xl bg-slate-50 px-4 py-5 text-sm text-slate-500'>
+            <div className="rounded-xl bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Customer insights will appear once accounts start getting created.
             </div>
           ) : (
-            <div className='space-y-3'>
+            <div className="space-y-3">
               {metrics.recentCustomers.map((customer) => (
-                <div
+                <Link
                   key={customer.id}
-                  className='grid gap-3 rounded-2xl border border-slate-200 px-4 py-4 md:grid-cols-[1.4fr_0.8fr_0.8fr]'
+                  to={`/customers?id=${customer.id}`}
+                  className="grid gap-3 rounded-xl border border-slate-200 px-4 py-3 transition hover:bg-slate-50 md:grid-cols-[1.4fr_0.8fr_0.8fr]"
                 >
                   <div>
-                    <p className='font-medium text-slate-900'>{customer.name}</p>
-                    <p className='text-sm text-slate-500'>{customer.email}</p>
-                    <p className='mt-1 text-xs uppercase tracking-[0.2em] text-slate-400'>
+                    <p className="font-medium text-slate-900">{customer.name}</p>
+                    <p className="text-sm text-slate-500">{customer.email}</p>
+                    <p className="mt-1 text-xs text-slate-400">
                       Joined {formatDate(customer.joinedAt)}
                     </p>
                   </div>
                   <div>
-                    <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Orders</p>
-                    <p className='mt-2 text-lg font-semibold text-slate-900'>{customer.orderCount}</p>
+                    <p className="text-xs text-slate-400">Orders</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">{customer.orderCount}</p>
                   </div>
                   <div>
-                    <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Spent</p>
-                    <p className='mt-2 text-lg font-semibold text-slate-900'>
-                      {formatCurrency(customer.totalSpent, metrics.currency)}
+                    <p className="text-xs text-slate-400">Spent</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">
+                      {formatMoney(customer.totalSpent)}
                     </p>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           )}
         </article>
-      </section>
+      </div>
     </div>
   );
 };

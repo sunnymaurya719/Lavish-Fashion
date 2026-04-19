@@ -1,12 +1,28 @@
+// Section order is intentionally support-first (ADMIN_UI_OPTIMIZATION_PLAN §2.1):
+//   Daily Operations → Catalog → Promotions → Insights.
+// "New Product" is intentionally NOT listed here — it now lives as a primary
+// action inside the Products page toolbar to avoid crowding the menu.
 const adminNavigationSections = [
   {
-    label: 'Overview',
+    label: 'Daily Operations',
     items: [
       {
-        label: 'Dashboard',
-        to: '/dashboard',
-        icon: 'dashboard',
-        description: 'Revenue, customers, and fulfillment'
+        label: 'Orders',
+        to: '/orders',
+        icon: 'orders',
+        description: 'Track and update fulfillment'
+      },
+      {
+        label: 'Customers',
+        to: '/customers',
+        icon: 'customers',
+        description: 'Profiles, notes, and lifecycle value'
+      },
+      {
+        label: 'Reviews',
+        to: '/reviews',
+        icon: 'reviews',
+        description: 'Moderation queue and trust signals'
       }
     ]
   },
@@ -24,58 +40,17 @@ const adminNavigationSections = [
         to: '/inventory',
         icon: 'inventory',
         description: 'Live stock, thresholds, and status'
-      },
-      {
-        label: 'New Product',
-        to: '/products/new',
-        icon: 'create',
-        description: 'Launch new catalog items'
       }
     ]
   },
   {
-    label: 'Commerce',
+    label: 'Promotions',
     items: [
-      {
-        label: 'Orders',
-        to: '/orders',
-        icon: 'orders',
-        description: 'Track and update fulfillment'
-      },
-      {
-        label: 'Customers',
-        to: '/customers',
-        icon: 'customers',
-        description: 'Profiles, notes, and lifecycle value'
-      },
       {
         label: 'Coupons',
         to: '/coupons',
         icon: 'coupons',
         description: 'Launch and control promotions'
-      }
-    ]
-  },
-  {
-    label: 'Growth',
-    items: [
-      {
-        label: 'Loyalty',
-        to: '/loyalty',
-        icon: 'loyalty',
-        description: 'Rewards, tiers, and referral performance'
-      },
-      {
-        label: 'Reviews',
-        to: '/reviews',
-        icon: 'reviews',
-        description: 'Moderation queue and trust signals'
-      },
-      {
-        label: 'Fit Analytics',
-        to: '/fit-analytics',
-        icon: 'fit',
-        description: 'Rollout health, confidence, and shopper fit outcomes'
       },
       {
         label: 'Marketing',
@@ -84,8 +59,33 @@ const adminNavigationSections = [
         description: 'Campaigns, automations, and email activity'
       }
     ]
+  },
+  {
+    label: 'Insights',
+    items: [
+      {
+        label: 'Dashboard',
+        to: '/dashboard',
+        icon: 'dashboard',
+        description: 'Revenue, customers, and fulfillment'
+      },
+      {
+        label: 'Loyalty',
+        to: '/loyalty',
+        icon: 'loyalty',
+        description: 'Rewards, tiers, and referral performance'
+      },
+      {
+        label: 'Fit Analytics',
+        to: '/fit-analytics',
+        icon: 'fit',
+        description: 'Rollout health, confidence, and shopper fit outcomes'
+      }
+    ]
   }
 ];
+
+// Breadcrumb parents are derived in `resolveAdminBreadcrumbs` below.
 
 const defaultPageMeta = {
   title: 'Admin Workspace',
@@ -228,4 +228,16 @@ const isNavItemActive = (pathname = '', to = '') => {
   return pathname === to;
 };
 
-export { adminNavigationSections, defaultPageMeta, isNavItemActive, resolveAdminPageMeta };
+export { adminNavigationSections, defaultPageMeta, isNavItemActive, resolveAdminPageMeta, resolveAdminBreadcrumbs };
+
+function resolveAdminBreadcrumbs(pathname = '') {
+  const trail = [];
+  if (pathname === '/products/new' || pathname === '/add') {
+    trail.push({ label: 'Products', to: '/products' });
+  }
+  if (/^\/products\/[^/]+\/edit$/.test(pathname) || /^\/edit\/[^/]+$/.test(pathname)) {
+    trail.push({ label: 'Products', to: '/products' });
+  }
+  trail.push({ label: resolveAdminPageMeta(pathname).title, to: pathname });
+  return trail;
+}

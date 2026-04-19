@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { BACKEND_URL } from '../config/api';
 import { assets } from '../assets/assets';
+
+const CREATE_DRAFT_KEY = 'admin.productForm.createDraft.v1';
 
 const imageFieldNames = ['image1', 'image2', 'image3', 'image4'];
 const categoryOptions = ['Men', 'Women', 'Kids'];
@@ -153,6 +155,9 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
   const [sizeMeasurements, setSizeMeasurements] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingProduct, setIsLoadingProduct] = useState(isEditMode);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState(null);
+  const initialMountRef = useRef(true);
   const submitDisabled = isSubmitting || (!mediaUploadsEnabled && !isEditMode);
 
   useEffect(() => {
@@ -226,6 +231,124 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     [measurementTemplate, sizeMeasurements, sizes]
   );
 
+  // Track form dirty state for confirm-on-leave + autosave (create mode only).
+  const formSnapshot = useMemo(
+    () => ({
+      name,
+      description,
+      price,
+      category,
+      subCategory,
+      sku,
+      stock,
+      lowStockThreshold,
+      status,
+      isFeatured,
+      sizes,
+      fitEnabled,
+      sizeScale,
+      measurementTemplate,
+      fitBias,
+      stretchScore,
+      sizeMeasurements,
+    }),
+    [
+      name, description, price, category, subCategory, sku, stock,
+      lowStockThreshold, status, isFeatured, sizes, fitEnabled, sizeScale,
+      measurementTemplate, fitBias, stretchScore, sizeMeasurements,
+    ]
+  );
+
+  const isDirty = useMemo(() => {
+    return (
+      name.trim() !== '' ||
+      description.trim() !== '' ||
+      price !== '' ||
+      sku.trim() !== '' ||
+      sizes.length > 0 ||
+      imageSlots.some((slot) => slot?.kind === 'file')
+    );
+  }, [name, description, price, sku, sizes, imageSlots]);
+
+  // Validation summary (computed every render; banner shows after submit attempt or whenever invalid in edit mode).
+  const validationIssues = useMemo(() => {
+    const issues = [];
+    if (!name.trim()) issues.push('Product name is required');
+    if (!description.trim()) issues.push('Product description is required');
+    if (price === '' || Number(price) < 1) issues.push('Price must be at least 1');
+    if (sizes.length === 0) issues.push('Add at least one size');
+    if (!isEditMode && imageSlots.every((slot) => slot === null)) {
+      issues.push('Upload at least one product image');
+    }
+    if (fitEnabled && !fitCompleteness.ready) {
+      issues.push(
+        `AI fit needs complete measurements for at least ${fitCompleteness.minimumReadySizes} size(s)`
+      );
+    }
+    return issues;
+  }, [name, description, price, sizes, imageSlots, fitEnabled, fitCompleteness, isEditMode]);
+
+  // Restore create-mode draft from localStorage on mount.
+  useEffect(() => {
+    if (isEditMode) return;
+    try {
+      const raw = localStorage.getItem(CREATE_DRAFT_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (!draft || typeof draft !== 'object') return;
+      if (draft.name) setName(draft.name);
+      if (draft.description) setDescription(draft.description);
+      if (draft.price !== undefined) setPrice(String(draft.price));
+      if (draft.category) setCategory(draft.category);
+      if (draft.subCategory) setSubCategory(draft.subCategory);
+      if (draft.sku) setSku(draft.sku);
+      if (draft.stock !== undefined) setStock(String(draft.stock));
+      if (draft.lowStockThreshold !== undefined) setLowStockThreshold(String(draft.lowStockThreshold));
+      if (draft.status) setStatus(draft.status);
+      if (typeof draft.isFeatured === 'boolean') setIsFeatured(draft.isFeatured);
+      if (Array.isArray(draft.sizes)) setSizes(draft.sizes);
+      if (typeof draft.fitEnabled === 'boolean') setFitEnabled(draft.fitEnabled);
+      if (draft.sizeScale) setSizeScale(draft.sizeScale);
+      if (draft.measurementTemplate) setMeasurementTemplate(draft.measurementTemplate);
+      if (draft.fitBias) setFitBias(draft.fitBias);
+      if (draft.stretchScore !== undefined) setStretchScore(String(draft.stretchScore));
+      if (Array.isArray(draft.sizeMeasurements)) setSizeMeasurements(draft.sizeMeasurements);
+    } catch (error) {
+      // Ignore corrupt drafts silently.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave create-mode drafts to localStorage (debounced).
+  useEffect(() => {
+    if (isEditMode) return;
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
+    const tid = setTimeout(() => {
+      try {
+        // Strip non-serializable bits (image files); only persist text fields.
+        localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify(formSnapshot));
+        setDraftSavedAt(new Date());
+      } catch (error) {
+        // Quota errors are non-fatal.
+      }
+    }, 600);
+    return () => clearTimeout(tid);
+  }, [formSnapshot, isEditMode]);
+
+  // Confirm-on-leave guard for unsaved changes.
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const handler = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
   const resetCreateForm = () => {
     setName('');
     setDescription('');
@@ -246,6 +369,13 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
     setStretchScore('0.25');
     setSizeMeasurements([]);
     setImageSlots([null, null, null, null]);
+    setSubmitAttempted(false);
+    setDraftSavedAt(null);
+    try {
+      localStorage.removeItem(CREATE_DRAFT_KEY);
+    } catch (error) {
+      // ignore
+    }
   };
 
   const handleImageChange = (index, file) => {
@@ -348,6 +478,7 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
 
   const onSubmitHandler = async (event) => {
     event.preventDefault();
+    setSubmitAttempted(true);
 
     if (submitDisabled) {
       if (!mediaUploadsEnabled && !isEditMode) {
@@ -356,18 +487,10 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
       return;
     }
 
-    if (sizes.length === 0) {
-      toast.error('Please add at least one size');
-      return;
-    }
-
-    if (fitEnabled && !fitCompleteness.ready) {
-      toast.error('Add complete measurements for at least the minimum required sizes before enabling AI fit');
-      return;
-    }
-
-    if (imageSlots.every((slot) => slot === null)) {
-      toast.error('Please upload at least one image');
+    if (validationIssues.length > 0) {
+      toast.error(`Fix ${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'} before saving`);
+      // Scroll to validation banner if present.
+      document.getElementById('product-form-issues')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
 
@@ -404,7 +527,23 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
   }
 
   return (
-    <form onSubmit={onSubmitHandler} className='flex flex-col gap-6'>
+    <form onSubmit={onSubmitHandler} className='flex flex-col gap-6 pb-24'>
+      {submitAttempted && validationIssues.length > 0 ? (
+        <div
+          id='product-form-issues'
+          className='rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-900'
+          role='alert'
+        >
+          <p className='font-semibold'>
+            {validationIssues.length} issue{validationIssues.length === 1 ? '' : 's'} to fix before saving
+          </p>
+          <ul className='mt-2 list-inside list-disc space-y-1 text-rose-800'>
+            {validationIssues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className='grid gap-6 xl:grid-cols-[1.7fr_1fr]'>
         <div className='bg-white border border-slate-200 rounded-3xl p-6 shadow-sm'>
           <div className='flex items-center justify-between mb-5'>
@@ -790,7 +929,47 @@ const ProductForm = ({ token, mode = 'create', productId = '', serverBootstrap, 
         </div>
       </div>
 
-      <div className='flex items-center gap-3'>
+      <div className='fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur lg:left-72'>
+        <div className='mx-auto flex max-w-screen-2xl flex-wrap items-center justify-between gap-3'>
+          <div className='flex flex-wrap items-center gap-3 text-xs text-slate-500'>
+            {!isEditMode && draftSavedAt ? (
+              <span>
+                Draft saved {new Date(draftSavedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            ) : null}
+            {validationIssues.length > 0 ? (
+              <span className='rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700'>
+                {validationIssues.length} issue{validationIssues.length === 1 ? '' : 's'}
+              </span>
+            ) : (
+              <span className='rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700'>
+                Ready to save
+              </span>
+            )}
+          </div>
+          <div className='flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={() => {
+                if (isDirty && !window.confirm('Discard unsaved changes and leave?')) return;
+                navigate('/products');
+              }}
+              className='rounded-2xl border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50'
+            >
+              Cancel
+            </button>
+            <button
+              type='submit'
+              disabled={submitDisabled}
+              className='rounded-2xl bg-slate-900 px-6 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
+            >
+              {isSubmitting ? 'Saving…' : isEditMode ? 'Update product' : 'Create product'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className='hidden items-center gap-3'>
         <button
           type='submit'
           disabled={submitDisabled}

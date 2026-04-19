@@ -1,29 +1,38 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { BACKEND_URL } from '../config/api';
+import {
+  PageHeader,
+  MetricGrid,
+  MetricCard,
+  Toolbar,
+  Tabs,
+  DataTable,
+  ConfirmDialog,
+  StatusBadge,
+  Drawer,
+  formatDate,
+} from '../components/ui';
+import {
+  useAdminQuery,
+  useDebouncedValue,
+  usePersistedState,
+} from '../hooks';
 
-const formatDate = (value) => {
-  if (!value) {
-    return 'Not scheduled';
-  }
-
-  return new Date(value).toLocaleDateString('en-IN', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-};
+/* ── helpers ───────────────────────────────────────────── */
 
 const toDateTimeLocalValue = (value) => {
-  if (!value) {
-    return '';
-  }
-
+  if (!value) return '';
   const date = new Date(value);
   const offset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 };
+
+/* shared field styles */
+const inputCls = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-900/10 transition';
+const selectCls = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-900/10 transition';
+const labelCls = 'mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500';
 
 const createEmptyFormState = () => ({
   name: '',
@@ -49,137 +58,147 @@ const buildFormStateFromCampaign = (campaign) => ({
   sendAt: toDateTimeLocalValue(campaign.sendAt),
 });
 
+const STATUS_TAB_IDS = ['all', 'draft', 'scheduled', 'active', 'paused', 'sent'];
+
+const AUDIENCE_LABELS = {
+  subscribed_users: 'Subscribed users',
+  all_users: 'All users',
+  loyalty_members: 'Loyalty members',
+  recent_customers: 'Recent customers',
+};
+
+/* ── main component ────────────────────────────────────── */
+
 const Marketing = ({ token }) => {
-  const [campaigns, setCampaigns] = useState([]);
-  const [activity, setActivity] = useState([]);
-  const [metrics, setMetrics] = useState(null);
-  const [deliveryConfig, setDeliveryConfig] = useState(null);
+  /* data */
+  const {
+    data: overviewRaw,
+    isLoading,
+    error: fetchError,
+    refetch: fetchOverview,
+  } = useAdminQuery(
+    'marketing',
+    ({ token: t, signal }) =>
+      axios.get(BACKEND_URL + '/api/marketing/admin', { headers: { token: t }, signal }).then((r) => r.data),
+    { token },
+  );
+
+  const campaigns = overviewRaw?.campaigns || [];
+  const activity = overviewRaw?.activity || [];
+  const metrics = overviewRaw?.metrics || null;
+  const deliveryConfig = overviewRaw?.deliveryConfig || null;
+
+  /* persisted filters */
+  const [statusFilter, setStatusFilter] = usePersistedState('marketing.statusFilter', 'all');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [selectedCampaignId, setSelectedCampaignId] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 200);
+
+  /* form */
   const [formMode, setFormMode] = useState('create');
+  const [selectedCampaignId, setSelectedCampaignId] = useState('');
   const [formData, setFormData] = useState(createEmptyFormState());
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [statusLoadingId, setStatusLoadingId] = useState('');
-  const [dispatchLoadingId, setDispatchLoadingId] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const fetchMarketingOverview = useCallback(async () => {
-    setIsLoading(true);
+  /* confirm dialog */
+  const [dispatchConfirmOpen, setDispatchConfirmOpen] = useState(false);
+  const [pendingDispatchCampaign, setPendingDispatchCampaign] = useState(null);
 
-    try {
-      const response = await axios.get(BACKEND_URL + '/api/marketing/admin', {
-        headers: { token },
-      });
+  /* activity rail */
+  const [activityFilter, setActivityFilter] = usePersistedState('marketing.activityFilter', 'all');
 
-      if (!response.data.success) {
-        toast.error(response.data.message || 'Failed to fetch marketing overview');
-        return;
-      }
-
-      setCampaigns(response.data.campaigns || []);
-      setActivity(response.data.activity || []);
-      setMetrics(response.data.metrics || null);
-      setDeliveryConfig(response.data.deliveryConfig || null);
-    } catch (error) {
-      toast.error(error?.response?.data?.message || error.message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    fetchMarketingOverview();
-  }, [fetchMarketingOverview]);
-
+  /* derived lists */
   const visibleCampaigns = useMemo(() => {
-    return campaigns.filter((campaign) => {
-      const haystack = `${campaign.name} ${campaign.subject} ${campaign.audience}`.toLowerCase();
-      const matchesSearch = haystack.includes(search.toLowerCase().trim());
-
-      if (!matchesSearch) {
-        return false;
-      }
-
-      if (statusFilter !== 'all' && campaign.status !== statusFilter) {
-        return false;
-      }
-
+    const q = debouncedSearch.toLowerCase().trim();
+    return campaigns.filter((c) => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (q && !`${c.name} ${c.subject} ${c.audience}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [campaigns, search, statusFilter]);
+  }, [campaigns, debouncedSearch, statusFilter]);
 
-  const summaryCards = useMemo(() => {
-    if (!metrics) {
-      return [];
-    }
+  const statusCounts = useMemo(() => {
+    const counts = { all: campaigns.length, draft: 0, scheduled: 0, active: 0, paused: 0, sent: 0 };
+    campaigns.forEach((c) => {
+      if (counts[c.status] !== undefined) counts[c.status]++;
+    });
+    return counts;
+  }, [campaigns]);
 
-    return [
-      {
-        label: 'Total campaigns',
-        value: metrics.totalCampaigns,
-      },
-      {
-        label: 'Active campaigns',
-        value: metrics.activeCampaigns,
-      },
-      {
-        label: 'Emails sent',
-        value: metrics.emailsSent,
-      },
-      {
-        label: 'Emails failed',
-        value: metrics.emailsFailed,
-      },
-      {
-        label: 'Automation events',
-        value: metrics.automationEvents,
-      },
-    ];
-  }, [metrics]);
+  const tabs = useMemo(
+    () =>
+      STATUS_TAB_IDS.map((id) => ({
+        id,
+        label: id === 'all' ? 'All' : id.charAt(0).toUpperCase() + id.slice(1),
+        count: statusCounts[id],
+      })),
+    [statusCounts],
+  );
 
-  const resetForm = () => {
-    setSelectedCampaignId('');
+  const filteredActivity = useMemo(() => {
+    if (activityFilter === 'all') return activity;
+    return activity.filter((a) => a.status === activityFilter);
+  }, [activity, activityFilter]);
+
+  /* mutations */
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDispatching, setIsDispatching] = useState(false);
+
+  /* form helpers */
+  const openCreate = () => {
     setFormMode('create');
+    setSelectedCampaignId('');
+    setFormData(createEmptyFormState());
+    setDrawerOpen(true);
+  };
+
+  const openEdit = (campaign) => {
+    setFormMode('edit');
+    setSelectedCampaignId(campaign._id);
+    setFormData(buildFormStateFromCampaign(campaign));
+    setDrawerOpen(true);
+  };
+
+  const openClone = (campaign) => {
+    setFormMode('create');
+    setSelectedCampaignId('');
+    const base = buildFormStateFromCampaign(campaign);
+    setFormData({
+      ...base,
+      name: (base.name || '') + ' (copy)',
+      sendAt: '',
+      status: 'draft',
+    });
+    setDrawerOpen(true);
+  };
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setFormMode('create');
+    setSelectedCampaignId('');
     setFormData(createEmptyFormState());
   };
 
-  const setEditingCampaign = (campaign) => {
-    setSelectedCampaignId(campaign._id);
-    setFormMode('edit');
-    setFormData(buildFormStateFromCampaign(campaign));
-  };
-
-  const saveCampaign = async (event) => {
-    event.preventDefault();
-
-    if (isSaving) {
-      return;
-    }
-
+  const handleSaveCampaign = async (e) => {
+    e.preventDefault();
+    if (isSaving) return;
     setIsSaving(true);
-
     try {
-      const endpoint = formMode === 'edit' ? '/api/marketing/admin/update' : '/api/marketing/admin/create';
-      const method = formMode === 'edit' ? 'put' : 'post';
+      const isEdit = formMode === 'edit';
+      const endpoint = isEdit ? '/api/marketing/admin/update' : '/api/marketing/admin/create';
+      const method = isEdit ? 'put' : 'post';
       const payload = {
         ...formData,
         sendAt: formData.sendAt || null,
-        ...(formMode === 'edit' ? { campaignId: selectedCampaignId } : {}),
+        ...(isEdit ? { campaignId: selectedCampaignId } : {}),
       };
-
-      const response = await axios[method](BACKEND_URL + endpoint, payload, {
-        headers: { token },
-      });
-
+      const response = await axios[method](BACKEND_URL + endpoint, payload, { headers: { token } });
       if (!response.data.success) {
         toast.error(response.data.message || 'Failed to save campaign');
         return;
       }
-
       toast.success(response.data.message || 'Campaign saved');
-      await fetchMarketingOverview();
-      resetForm();
+      fetchOverview();
+      closeDrawer();
     } catch (error) {
       toast.error(error?.response?.data?.message || error.message);
     } finally {
@@ -187,426 +206,325 @@ const Marketing = ({ token }) => {
     }
   };
 
-  const updateCampaignStatus = async (campaign, nextStatus) => {
-    setStatusLoadingId(campaign._id);
-
+  const handleStatusChange = async (campaign, nextStatus) => {
     try {
       const response = await axios.patch(
         BACKEND_URL + '/api/marketing/admin/status',
         { campaignId: campaign._id, status: nextStatus },
-        { headers: { token } }
+        { headers: { token } },
       );
-
       if (!response.data.success) {
-        toast.error(response.data.message || 'Failed to update campaign status');
+        toast.error(response.data.message || 'Failed to update status');
         return;
       }
-
-      toast.success(response.data.message || 'Campaign status updated');
-      await fetchMarketingOverview();
+      toast.success(response.data.message || 'Status updated');
+      fetchOverview();
     } catch (error) {
       toast.error(error?.response?.data?.message || error.message);
-    } finally {
-      setStatusLoadingId('');
     }
   };
 
-  const dispatchCampaign = async (campaignId) => {
-    setDispatchLoadingId(campaignId);
+  const handleDispatchClick = (campaign) => {
+    setPendingDispatchCampaign(campaign);
+    setDispatchConfirmOpen(true);
+  };
 
+  const confirmDispatch = async () => {
+    if (!pendingDispatchCampaign) return;
+    setIsDispatching(true);
     try {
       const response = await axios.post(
         BACKEND_URL + '/api/marketing/admin/dispatch',
-        { campaignId },
-        { headers: { token } }
+        { campaignId: pendingDispatchCampaign._id },
+        { headers: { token } },
       );
-
       if (!response.data.success) {
         toast.error(response.data.message || 'Failed to dispatch campaign');
         return;
       }
-
       toast.success(response.data.message || 'Campaign dispatched');
-      await fetchMarketingOverview();
+      fetchOverview();
+      setDispatchConfirmOpen(false);
+      setPendingDispatchCampaign(null);
     } catch (error) {
       toast.error(error?.response?.data?.message || error.message);
     } finally {
-      setDispatchLoadingId('');
+      setIsDispatching(false);
     }
   };
 
-  return (
-    <div className='flex flex-col gap-6'>
-      <section className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-        <div className='flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between'>
+  /* columns */
+  const columns = useMemo(
+    () => [
+      {
+        key: 'name',
+        header: 'Campaign',
+        render: (row) => (
           <div>
-            <p className='text-lg font-semibold text-slate-900'>Lifecycle marketing and campaign control</p>
-            <p className='text-sm text-slate-500'>
-              Build broadcasts, manage automation templates, and monitor the latest email delivery activity.
-            </p>
-            {deliveryConfig ? (
-              <div className='mt-3 flex flex-wrap gap-2'>
-                <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-700'>
-                  Mode {deliveryConfig.mode}
-                </span>
-                <span className='rounded-full bg-sky-50 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-sky-700'>
-                  Provider {deliveryConfig.provider}
-                </span>
-              </div>
-            ) : null}
+            <p className="font-semibold text-slate-900">{row.name}</p>
+            <p className="mt-0.5 text-xs text-slate-500 truncate max-w-xs">{row.subject}</p>
           </div>
-
-          <div className='flex flex-wrap gap-3'>
-            <button
-              type='button'
-              onClick={fetchMarketingOverview}
-              className='rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
-            >
-              Refresh marketing
-            </button>
-            <button
-              type='button'
-              onClick={resetForm}
-              className='rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white'
-            >
-              New campaign
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className='grid gap-4 md:grid-cols-2 xl:grid-cols-5'>
-        {summaryCards.map((card) => (
-          <article key={card.label} className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
-            <p className='text-sm text-slate-500'>{card.label}</p>
-            <p className='mt-3 text-3xl font-semibold text-slate-900'>{card.value}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className='grid gap-6 xl:grid-cols-[0.95fr_1.05fr]'>
-        <form onSubmit={saveCampaign} className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='flex items-center justify-between gap-4'>
-            <div>
-              <p className='text-lg font-semibold text-slate-900'>
-                {formMode === 'edit' ? 'Edit campaign' : 'Create campaign'}
-              </p>
-              <p className='text-sm text-slate-500'>Changes here are saved directly to the marketing API.</p>
-            </div>
-
-            {formMode === 'edit' ? (
+        ),
+      },
+      {
+        key: 'status',
+        header: 'Status',
+        render: (row) => <StatusBadge status={row.status} size="sm" />,
+      },
+      {
+        key: 'campaignType',
+        header: 'Type',
+        render: (row) => (
+          <span className="text-sm capitalize text-slate-700">{row.campaignType}</span>
+        ),
+      },
+      {
+        key: 'audience',
+        header: 'Audience',
+        render: (row) => (
+          <span className="text-sm text-slate-700">
+            {AUDIENCE_LABELS[row.audience] || row.audience?.replaceAll('_', ' ')}
+          </span>
+        ),
+      },
+      {
+        key: 'sentCount',
+        header: 'Sent',
+        sortable: true,
+        align: 'right',
+        render: (row) => <span className="tabular-nums">{row.sentCount || 0}</span>,
+      },
+      {
+        key: 'sendAt',
+        header: 'Scheduled',
+        sortable: true,
+        render: (row) => (
+          <span className="text-sm text-slate-500">
+            {row.sendAt ? formatDate(row.sendAt) : 'Not scheduled'}
+          </span>
+        ),
+      },
+      {
+        key: 'actions',
+        header: '',
+        width: '180px',
+        render: (row) => {
+          const nextStatus = row.status === 'active' ? 'paused' : 'active';
+          return (
+            <div className="flex items-center gap-1">
               <button
-                type='button'
-                onClick={resetForm}
-                className='rounded-2xl border border-slate-300 px-4 py-2 text-sm text-slate-700'
+                type="button"
+                onClick={(e) => { e.stopPropagation(); openEdit(row); }}
+                className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
               >
-                Cancel edit
+                Edit
               </button>
-            ) : null}
-          </div>
-
-          <div className='mt-5 grid gap-4'>
-            <div>
-              <p className='mb-2 text-sm text-slate-600'>Campaign name</p>
-              <input
-                value={formData.name}
-                onChange={(event) => setFormData((current) => ({ ...current, name: event.target.value }))}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
-                type='text'
-                placeholder='Spring loyalty booster'
-                required
-              />
-            </div>
-
-            <div className='grid gap-4 lg:grid-cols-2'>
-              <div>
-                <p className='mb-2 text-sm text-slate-600'>Campaign type</p>
-                <select
-                  value={formData.campaignType}
-                  onChange={(event) => setFormData((current) => ({ ...current, campaignType: event.target.value }))}
-                  className='w-full rounded-2xl border border-slate-300 bg-white px-4 py-3'
-                >
-                  <option value='broadcast'>Broadcast</option>
-                  <option value='automation'>Automation</option>
-                </select>
-              </div>
-
-              <div>
-                <p className='mb-2 text-sm text-slate-600'>Audience</p>
-                <select
-                  value={formData.audience}
-                  onChange={(event) => setFormData((current) => ({ ...current, audience: event.target.value }))}
-                  className='w-full rounded-2xl border border-slate-300 bg-white px-4 py-3'
-                >
-                  <option value='subscribed_users'>Subscribed users</option>
-                  <option value='all_users'>All users</option>
-                  <option value='loyalty_members'>Loyalty members</option>
-                  <option value='recent_customers'>Recent customers</option>
-                </select>
-              </div>
-            </div>
-
-            <div className='grid gap-4 lg:grid-cols-2'>
-              <div>
-                <p className='mb-2 text-sm text-slate-600'>Automation trigger</p>
-                <select
-                  value={formData.automationTrigger}
-                  onChange={(event) =>
-                    setFormData((current) => ({ ...current, automationTrigger: event.target.value }))
-                  }
-                  className='w-full rounded-2xl border border-slate-300 bg-white px-4 py-3'
-                >
-                  <option value='manual'>Manual</option>
-                  <option value='user_registered'>User registered</option>
-                  <option value='order_delivered'>Order delivered</option>
-                  <option value='review_published'>Review published</option>
-                  <option value='points_milestone'>Points milestone</option>
-                </select>
-              </div>
-
-              <div>
-                <p className='mb-2 text-sm text-slate-600'>Status</p>
-                <select
-                  value={formData.status}
-                  onChange={(event) => setFormData((current) => ({ ...current, status: event.target.value }))}
-                  className='w-full rounded-2xl border border-slate-300 bg-white px-4 py-3'
-                >
-                  <option value='draft'>Draft</option>
-                  <option value='scheduled'>Scheduled</option>
-                  <option value='active'>Active</option>
-                  <option value='paused'>Paused</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <p className='mb-2 text-sm text-slate-600'>Subject line</p>
-              <input
-                value={formData.subject}
-                onChange={(event) => setFormData((current) => ({ ...current, subject: event.target.value }))}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
-                type='text'
-                placeholder='Your next Lavish Fashion reward is ready'
-                required
-              />
-            </div>
-
-            <div>
-              <p className='mb-2 text-sm text-slate-600'>Preview text</p>
-              <input
-                value={formData.previewText}
-                onChange={(event) => setFormData((current) => ({ ...current, previewText: event.target.value }))}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
-                type='text'
-                placeholder='Short preheader copy for inbox previews'
-              />
-            </div>
-
-            <div>
-              <p className='mb-2 text-sm text-slate-600'>Message body</p>
-              <textarea
-                value={formData.body}
-                onChange={(event) => setFormData((current) => ({ ...current, body: event.target.value }))}
-                className='min-h-44 w-full rounded-2xl border border-slate-300 px-4 py-3'
-                placeholder='Use placeholders like {{name}}, {{referralCode}}, and {{loyaltyPoints}} for personalized copy.'
-                required
-              />
-            </div>
-
-            <div>
-              <p className='mb-2 text-sm text-slate-600'>Scheduled send</p>
-              <input
-                value={formData.sendAt}
-                onChange={(event) => setFormData((current) => ({ ...current, sendAt: event.target.value }))}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3'
-                type='datetime-local'
-              />
-            </div>
-          </div>
-
-          <button
-            type='submit'
-            disabled={isSaving}
-            className='mt-6 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-medium text-white disabled:opacity-60'
-          >
-            {isSaving ? 'Saving campaign...' : formMode === 'edit' ? 'Update campaign' : 'Create campaign'}
-          </button>
-        </form>
-
-        <div className='space-y-6'>
-          <div className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-            <div className='grid gap-3 lg:grid-cols-[1.35fr_0.8fr]'>
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                className='rounded-2xl border border-slate-300 px-4 py-3'
-                type='text'
-                placeholder='Search by name, subject, or audience'
-              />
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                className='rounded-2xl border border-slate-300 bg-white px-4 py-3'
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); openClone(row); }}
+                className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
               >
-                <option value='all'>All statuses</option>
-                <option value='draft'>Draft</option>
-                <option value='scheduled'>Scheduled</option>
-                <option value='active'>Active</option>
-                <option value='paused'>Paused</option>
-                <option value='sent'>Sent</option>
+                Clone
+              </button>
+              {row.status !== 'sent' && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleStatusChange(row, nextStatus); }}
+                  className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                >
+                  {row.status === 'active' ? 'Pause' : 'Activate'}
+                </button>
+              )}
+              {row.campaignType === 'broadcast' && row.status !== 'sent' && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleDispatchClick(row); }}
+                  className="rounded-lg px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                >
+                  Dispatch
+                </button>
+              )}
+            </div>
+          );
+        },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  /* sort */
+  const [sortKey, setSortKey] = usePersistedState('marketing.sortKey', '');
+  const [sortDirection, setSortDirection] = usePersistedState('marketing.sortDir', 'asc');
+
+  const handleSortChange = (key, dir) => {
+    setSortKey(key);
+    setSortDirection(dir);
+  };
+
+  const sortedCampaigns = useMemo(() => {
+    if (!sortKey) return visibleCampaigns;
+    const sorted = [...visibleCampaigns].sort((a, b) => {
+      let av = a[sortKey];
+      let bv = b[sortKey];
+      if (sortKey === 'sendAt') {
+        av = av ? new Date(av).getTime() : Infinity;
+        bv = bv ? new Date(bv).getTime() : Infinity;
+      }
+      if (typeof av === 'string') return av.localeCompare(bv);
+      return (Number(av) || 0) - (Number(bv) || 0);
+    });
+    return sortDirection === 'desc' ? sorted.reverse() : sorted;
+  }, [visibleCampaigns, sortKey, sortDirection]);
+
+  /* body word count */
+  const bodyWordCount = useMemo(() => {
+    const words = formData.body.trim().split(/\s+/).filter(Boolean);
+    return words.length;
+  }, [formData.body]);
+
+  /* ── render ──────────────────────────────────────────── */
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* header */}
+      <PageHeader
+        title="Lifecycle marketing"
+        description="Build broadcasts, manage automation templates, and monitor email delivery."
+        actions={
+          <>
+            {deliveryConfig && (
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge tone="neutral" size="sm" withDot={false}>
+                  Mode {deliveryConfig.mode}
+                </StatusBadge>
+                <StatusBadge tone="info" size="sm" withDot={false}>
+                  Provider {deliveryConfig.provider}
+                </StatusBadge>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={fetchOverview}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+            >
+              + New campaign
+            </button>
+          </>
+        }
+      />
+
+      {/* metrics */}
+      {metrics && (
+        <MetricGrid>
+          <MetricCard label="Total campaigns" value={metrics.totalCampaigns} />
+          <MetricCard label="Active" value={metrics.activeCampaigns} />
+          <MetricCard label="Emails sent" value={metrics.emailsSent} />
+          <MetricCard label="Emails failed" value={metrics.emailsFailed} />
+          <MetricCard label="Automation events" value={metrics.automationEvents} />
+        </MetricGrid>
+      )}
+
+      {/* two-pane: campaigns left, activity right */}
+      <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+        {/* campaigns pane */}
+        <div className="flex flex-col gap-4">
+          <Tabs tabs={tabs} value={statusFilter} onChange={setStatusFilter} />
+          <Toolbar
+            searchValue={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search by name, subject, or audience…"
+            actions={
+              <button
+                type="button"
+                onClick={openCreate}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+              >
+                + New campaign
+              </button>
+            }
+          />
+          <DataTable
+            columns={columns}
+            rows={sortedCampaigns}
+            rowKey="_id"
+            loading={isLoading}
+            error={fetchError}
+            onRetry={fetchOverview}
+            emptyTitle="No campaigns found"
+            emptyDescription="Create a campaign to get started, or adjust your filters."
+            emptyAction={
+              <button
+                type="button"
+                onClick={openCreate}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+              >
+                + Create your first campaign
+              </button>
+            }
+            sortKey={sortKey}
+            sortDirection={sortDirection}
+            onSortChange={handleSortChange}
+            onRowClick={openEdit}
+          />
+        </div>
+
+        {/* activity rail */}
+        <aside className="flex flex-col gap-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4">
+              <p className="text-base font-semibold text-slate-900">Recent email activity</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Latest sends, skips, and automation-triggered messages.
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <select
+                value={activityFilter}
+                onChange={(e) => setActivityFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+                aria-label="Filter activity by status"
+              >
+                <option value="all">All activity</option>
+                <option value="sent">Sent</option>
+                <option value="failed">Failed</option>
+                <option value="queued">Queued</option>
+                <option value="skipped">Skipped</option>
               </select>
             </div>
 
-            <div className='mt-5 space-y-4'>
-              {isLoading ? (
-                <div className='ui-loading-state'>Loading campaigns...</div>
-              ) : visibleCampaigns.length === 0 ? (
-                <div className='rounded-2xl bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-                  No campaigns matched the current filters.
-                </div>
-              ) : (
-                visibleCampaigns.map((campaign) => {
-                  const isEditing = selectedCampaignId === campaign._id;
-                  const nextStatus = campaign.status === 'active' ? 'paused' : 'active';
-
-                  return (
-                    <article
-                      key={campaign._id}
-                      className={`rounded-[28px] border p-5 shadow-sm transition ${
-                        isEditing ? 'border-slate-900 bg-slate-950 text-white' : 'border-slate-200 bg-white'
-                      }`}
-                    >
-                      <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-                        <div>
-                          <div className='flex flex-wrap items-center gap-2'>
-                            <p className={`text-xl font-semibold ${isEditing ? 'text-white' : 'text-slate-900'}`}>
-                              {campaign.name}
-                            </p>
-                            <span
-                              className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${
-                                isEditing ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {campaign.status}
-                            </span>
-                          </div>
-                          <p className={`mt-2 text-sm ${isEditing ? 'text-slate-300' : 'text-slate-500'}`}>
-                            {campaign.subject}
-                          </p>
-                        </div>
-
-                        <div className='flex flex-wrap gap-3'>
-                          <button
-                            type='button'
-                            onClick={() => setEditingCampaign(campaign)}
-                            className={`rounded-2xl px-4 py-3 text-sm font-medium ${
-                              isEditing ? 'bg-white text-slate-950' : 'bg-slate-950 text-white'
-                            }`}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type='button'
-                            onClick={() => updateCampaignStatus(campaign, nextStatus)}
-                            disabled={statusLoadingId === campaign._id || campaign.status === 'sent'}
-                            className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
-                              isEditing ? 'border-white/20 text-white' : 'border-slate-300 text-slate-700'
-                            } disabled:opacity-50`}
-                          >
-                            {statusLoadingId === campaign._id
-                              ? 'Updating...'
-                              : campaign.status === 'active'
-                                ? 'Pause'
-                                : campaign.status === 'sent'
-                                  ? 'Sent'
-                                  : 'Activate'}
-                          </button>
-                          {campaign.campaignType === 'broadcast' ? (
-                            <button
-                              type='button'
-                              onClick={() => dispatchCampaign(campaign._id)}
-                              disabled={dispatchLoadingId === campaign._id}
-                              className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
-                                isEditing ? 'border-white/20 text-white' : 'border-slate-300 text-slate-700'
-                              } disabled:opacity-50`}
-                            >
-                              {dispatchLoadingId === campaign._id ? 'Dispatching...' : 'Dispatch'}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      <div className='mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
-                        <div className={`rounded-2xl px-4 py-3 ${isEditing ? 'bg-white/8' : 'bg-slate-50'}`}>
-                          <p className={`text-xs uppercase tracking-[0.2em] ${isEditing ? 'text-slate-300' : 'text-slate-400'}`}>Type</p>
-                          <p className={`mt-2 font-semibold ${isEditing ? 'text-white' : 'text-slate-900'}`}>
-                            {campaign.campaignType}
-                          </p>
-                        </div>
-                        <div className={`rounded-2xl px-4 py-3 ${isEditing ? 'bg-white/8' : 'bg-slate-50'}`}>
-                          <p className={`text-xs uppercase tracking-[0.2em] ${isEditing ? 'text-slate-300' : 'text-slate-400'}`}>Audience</p>
-                          <p className={`mt-2 font-semibold ${isEditing ? 'text-white' : 'text-slate-900'}`}>
-                            {campaign.audience.replaceAll('_', ' ')}
-                          </p>
-                        </div>
-                        <div className={`rounded-2xl px-4 py-3 ${isEditing ? 'bg-white/8' : 'bg-slate-50'}`}>
-                          <p className={`text-xs uppercase tracking-[0.2em] ${isEditing ? 'text-slate-300' : 'text-slate-400'}`}>Sent</p>
-                          <p className={`mt-2 font-semibold ${isEditing ? 'text-white' : 'text-slate-900'}`}>
-                            {campaign.sentCount || 0}
-                          </p>
-                        </div>
-                        <div className={`rounded-2xl px-4 py-3 ${isEditing ? 'bg-white/8' : 'bg-slate-50'}`}>
-                          <p className={`text-xs uppercase tracking-[0.2em] ${isEditing ? 'text-slate-300' : 'text-slate-400'}`}>Scheduled</p>
-                          <p className={`mt-2 font-semibold ${isEditing ? 'text-white' : 'text-slate-900'}`}>
-                            {formatDate(campaign.sendAt)}
-                          </p>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          <div className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-            <div className='mb-5'>
-              <p className='text-lg font-semibold text-slate-900'>Recent email activity</p>
-              <p className='text-sm text-slate-500'>Latest sends, skips, and automation-triggered messages.</p>
-            </div>
-
-            <div className='space-y-3'>
-              {activity.length === 0 ? (
-                <div className='rounded-2xl bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+            <div className="space-y-3 max-h-[600px] overflow-y-auto">
+              {filteredActivity.length === 0 ? (
+                <div className="rounded-xl bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   Email activity will appear here after the first automation or dispatch.
                 </div>
               ) : (
-                activity.map((item) => {
-                  const campaign = campaigns.find((campaignEntry) => campaignEntry._id === item.campaignId);
-
+                filteredActivity.map((item) => {
+                  const campaign = campaigns.find((c) => c._id === item.campaignId);
                   return (
-                    <div key={item._id} className='rounded-[28px] border border-slate-200 p-4'>
-                      <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-                        <div>
-                          <p className='font-semibold text-slate-900'>{item.subject}</p>
-                          <p className='mt-1 text-sm text-slate-500'>{item.email}</p>
-                          <p className='mt-2 text-sm text-slate-600'>
+                    <div
+                      key={item._id}
+                      className="rounded-xl border border-slate-200 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-900 truncate">{item.subject}</p>
+                          <p className="mt-0.5 text-xs text-slate-500 truncate">{item.email}</p>
+                          <p className="mt-1 text-xs text-slate-600">
                             {campaign?.name || item.automationKey?.replaceAll('_', ' ') || 'Campaign event'}
                           </p>
                         </div>
-                        <span
-                          className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${
-                            item.status === 'sent'
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : item.status === 'failed'
-                                ? 'bg-rose-50 text-rose-700'
-                                : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {item.status}
-                        </span>
+                        <StatusBadge status={item.status} size="sm" />
                       </div>
-                      <p className='mt-3 text-xs uppercase tracking-[0.2em] text-slate-400'>
+                      <p className="mt-2 text-xs text-slate-400">
                         {formatDate(item.sentAt || item.createdAt)}
                       </p>
                     </div>
@@ -615,8 +533,190 @@ const Marketing = ({ token }) => {
               )}
             </div>
           </div>
-        </div>
-      </section>
+        </aside>
+      </div>
+
+      {/* form drawer */}
+      <Drawer
+        open={drawerOpen}
+        onClose={closeDrawer}
+        title={formMode === 'edit' ? 'Edit campaign' : formMode === 'clone' ? 'Clone campaign' : 'Create campaign'}
+        description="Changes are saved to the marketing API."
+        width="lg"
+        footer={
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={closeDrawer}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="campaign-form"
+              disabled={isSaving}
+              className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {isSaving ? 'Saving…' : formMode === 'edit' ? 'Update campaign' : 'Create campaign'}
+            </button>
+          </div>
+        }
+      >
+        <form id="campaign-form" onSubmit={handleSaveCampaign} className="grid gap-5">
+
+          {/* Campaign name */}
+          <div>
+            <label htmlFor="campaign-name" className={labelCls}>Campaign name</label>
+            <input
+              id="campaign-name"
+              value={formData.name}
+              onChange={(e) => setFormData((s) => ({ ...s, name: e.target.value }))}
+              className={inputCls}
+              placeholder="e.g. Spring loyalty booster"
+              required
+            />
+          </div>
+
+          {/* Type + Audience */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="campaign-type" className={labelCls}>Campaign type</label>
+              <select
+                id="campaign-type"
+                value={formData.campaignType}
+                onChange={(e) => setFormData((s) => ({ ...s, campaignType: e.target.value }))}
+                className={selectCls}
+              >
+                <option value="broadcast">Broadcast — send once to all</option>
+                <option value="automation">Automation — triggered by event</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="campaign-audience" className={labelCls}>Audience</label>
+              <select
+                id="campaign-audience"
+                value={formData.audience}
+                onChange={(e) => setFormData((s) => ({ ...s, audience: e.target.value }))}
+                className={selectCls}
+              >
+                <option value="subscribed_users">Subscribed users</option>
+                <option value="all_users">All users</option>
+                <option value="loyalty_members">Loyalty members</option>
+                <option value="recent_customers">Recent customers</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Trigger + Status */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="campaign-trigger" className={labelCls}>Automation trigger</label>
+              <select
+                id="campaign-trigger"
+                value={formData.automationTrigger}
+                onChange={(e) => setFormData((s) => ({ ...s, automationTrigger: e.target.value }))}
+                className={selectCls}
+                disabled={formData.campaignType !== 'automation'}
+              >
+                <option value="manual">Manual</option>
+                <option value="user_registered">User registered</option>
+                <option value="order_delivered">Order delivered</option>
+                <option value="review_published">Review published</option>
+                <option value="points_milestone">Points milestone</option>
+              </select>
+              {formData.campaignType !== 'automation' && (
+                <p className="mt-1 text-[11px] text-slate-400">Only used for automation campaigns</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="campaign-status" className={labelCls}>Status</label>
+              <select
+                id="campaign-status"
+                value={formData.status}
+                onChange={(e) => setFormData((s) => ({ ...s, status: e.target.value }))}
+                className={selectCls}
+              >
+                <option value="draft">Draft — not sent yet</option>
+                <option value="scheduled">Scheduled — queued to send</option>
+                <option value="active">Active — sending now</option>
+                <option value="paused">Paused</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Subject + Preview */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 grid gap-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 -mb-1">Email content</p>
+            <div>
+              <label htmlFor="campaign-subject" className={labelCls}>Subject line</label>
+              <input
+                id="campaign-subject"
+                value={formData.subject}
+                onChange={(e) => setFormData((s) => ({ ...s, subject: e.target.value }))}
+                className={inputCls}
+                placeholder="Your next Lavish Fashion reward is ready"
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="campaign-preview" className={labelCls}>Preview text <span className="normal-case tracking-normal font-normal text-slate-400">— shown in inbox as preheader</span></label>
+              <input
+                id="campaign-preview"
+                value={formData.previewText}
+                onChange={(e) => setFormData((s) => ({ ...s, previewText: e.target.value }))}
+                className={inputCls}
+                placeholder="Short copy that appears after the subject line in the inbox"
+              />
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label htmlFor="campaign-body" className={labelCls}>Message body</label>
+                <span className="text-[11px] text-slate-400">{bodyWordCount} {bodyWordCount === 1 ? 'word' : 'words'}</span>
+              </div>
+              <textarea
+                id="campaign-body"
+                value={formData.body}
+                onChange={(e) => setFormData((s) => ({ ...s, body: e.target.value }))}
+                className={inputCls + ' min-h-36 resize-y'}
+                placeholder="Use placeholders like {{name}}, {{referralCode}}, and {{loyaltyPoints}}."
+                required
+              />
+              <p className="mt-1 text-[11px] text-slate-400">{'Supports {{name}}, {{loyaltyPoints}}, {{referralCode}}, {{orderStatus}}'}</p>
+            </div>
+          </div>
+
+          {/* Scheduled send */}
+          <div>
+            <label htmlFor="campaign-send-at" className={labelCls}>Scheduled send <span className="normal-case tracking-normal font-normal text-slate-400">(IST) — leave empty to send manually</span></label>
+            <input
+              id="campaign-send-at"
+              value={formData.sendAt}
+              onChange={(e) => setFormData((s) => ({ ...s, sendAt: e.target.value }))}
+              className={inputCls}
+              type="datetime-local"
+            />
+          </div>
+        </form>
+      </Drawer>
+
+      {/* dispatch confirm */}
+      <ConfirmDialog
+        open={dispatchConfirmOpen}
+        title="Dispatch campaign?"
+        description={
+          pendingDispatchCampaign
+            ? `You are about to send "${pendingDispatchCampaign.name}" to ${AUDIENCE_LABELS[pendingDispatchCampaign.audience] || pendingDispatchCampaign.audience}${deliveryConfig ? ` via ${deliveryConfig.provider}` : ''}. This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Send now"
+        onConfirm={confirmDispatch}
+        onCancel={() => {
+          setDispatchConfirmOpen(false);
+          setPendingDispatchCampaign(null);
+        }}
+        busy={isDispatching}
+      />
     </div>
   );
 };

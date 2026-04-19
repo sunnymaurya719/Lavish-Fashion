@@ -406,8 +406,14 @@ describe('shiprocketBulkLiveVerificationService', () => {
         expect(updateSystemJobStateMock).toHaveBeenCalledWith(
             expect.objectContaining({
                 updateSet: expect.objectContaining({
-                    'lastRunResult.cancelRequestedBy': 'admin@example.com',
-                    'lastRunResult.cancelReason': 'manual_cancel'
+                    lastRunResult: expect.objectContaining({
+                        cancelRequestedBy: 'admin@example.com',
+                        cancelReason: 'manual_cancel',
+                        progress: expect.objectContaining({
+                            totalCount: 5,
+                            processedCount: 2
+                        })
+                    })
                 })
             })
         );

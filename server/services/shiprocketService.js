@@ -82,11 +82,23 @@ const resolveShiprocketPricingContext = (order = {}) => {
     const subtotalAfterDiscountFromBreakdown = roundCurrency(
         Math.max(0, fallbackSubtotalBeforeDiscount - totalDiscount)
     );
+    // Shiprocket renders invoices using the formula:
+    //   NET TOTAL = sub_total - total_discount + shipping_charges
+    //               + giftwrap_charges + transaction_charges
+    // To make NET TOTAL match what the customer actually paid we must send
+    // `sub_total` as the items sub-total BEFORE the discount is applied. An
+    // earlier version of this code sent `finalAmount - shippingCharges`, which
+    // double-subtracted the discount on the printed tax-invoice (e.g. an order
+    // of items 300 + delivery 10 - discount 20 = 290 was invoiced as 270).
     const subTotal =
-        finalAmount !== null
-            ? roundCurrency(Math.max(0, finalAmount - shippingCharges))
-            : subtotalAfterDiscountFromBreakdown;
-    const expectedFinalAmountFromBreakdown = roundCurrency(subtotalAfterDiscountFromBreakdown + shippingCharges);
+        fallbackSubtotalBeforeDiscount > 0
+            ? fallbackSubtotalBeforeDiscount
+            : finalAmount !== null
+                ? roundCurrency(Math.max(0, finalAmount + totalDiscount - shippingCharges))
+                : 0;
+    const expectedFinalAmountFromBreakdown = roundCurrency(
+        Math.max(0, subTotal - totalDiscount + shippingCharges)
+    );
 
     return {
         subTotal,
@@ -131,7 +143,9 @@ const normalizeShiprocketPricingSnapshot = (snapshot) => {
                 Number.isFinite(normalizedDerivedFinalAmount)
                     ? normalizedDerivedFinalAmount
                     :
-                    Number(snapshot?.subTotal || 0) + Number(snapshot?.shippingCharges || 0)
+                    Number(snapshot?.subTotal || 0) -
+                        Number(snapshot?.totalDiscount || 0) +
+                        Number(snapshot?.shippingCharges || 0)
             )
         )
     };
@@ -152,8 +166,10 @@ const buildShiprocketPricingSnapshot = (order = {}, options = {}) => {
         localAmount:
             pricing.finalAmount !== null
                 ? pricing.finalAmount
-                : roundCurrency(pricing.subTotal + pricing.shippingCharges),
-        derivedFinalAmount: roundCurrency(pricing.subTotal + pricing.shippingCharges)
+                : roundCurrency(Math.max(0, pricing.subTotal - pricing.totalDiscount + pricing.shippingCharges)),
+        derivedFinalAmount: roundCurrency(
+            Math.max(0, pricing.subTotal - pricing.totalDiscount + pricing.shippingCharges)
+        )
     });
 };
 const pickFirstFiniteCurrency = (...values) => {
@@ -260,37 +276,93 @@ const extractShiprocketOrderPricingSnapshot = (payload = {}, options = {}) => {
         orderRoot?.transaction_charges,
         orderRoot?.others?.transaction_charges
     );
-    const totalDiscount = pickFirstFiniteCurrency(
+    const productDiscountValue = pickFirstFiniteCurrency(productDiscount);
+    const explicitTotalDiscount = pickFirstFiniteCurrency(
         orderRoot?.total_discount,
         orderRoot?.other_discounts,
-        orderRoot?.discount,
-        productDiscount
+        orderRoot?.discount
     );
-    const derivedFinalAmount = pickFirstFiniteCurrency(
-        orderRoot?.net_total,
-        orderRoot?.total,
-        orderRoot?.total_inr
-    );
+    const fallbackTotalDiscountValue = pickFirstFiniteCurrency(options?.fallbackTotalDiscount);
+    // Shiprocket's `/orders/show/:id` payload sometimes drops the order-level
+    // discount fields entirely even though the printed tax-invoice still
+    // applies the discount (observed on COD orders — invoice shows Rs.20
+    // discount and NET TOTAL ₹190, but the JSON response has no
+    // `total_discount`, `other_discounts`, or `discount` field). Even worse,
+    // Shiprocket sometimes echoes a literal `discount: 0` (rather than
+    // omitting the field) on orders that were created WITH a positive
+    // discount — the printed invoice and the Shiprocket panel still show the
+    // correct discounted total, but `/orders/show` zeroes out the discount
+    // field. In both cases (missing OR literal 0) we should fall back to the
+    // locally-known discount we originally sent so the verification doesn't
+    // surface a phantom mismatch. Per-line product discounts are only used
+    // as a last resort because Shiprocket usually returns 0 there even for
+    // discounted orders.
+    const shouldUseFallbackDiscount =
+        fallbackTotalDiscountValue !== null &&
+        fallbackTotalDiscountValue > 0 &&
+        (explicitTotalDiscount === null || explicitTotalDiscount === 0);
+    const totalDiscount = shouldUseFallbackDiscount
+        ? fallbackTotalDiscountValue
+        : explicitTotalDiscount !== null
+            ? explicitTotalDiscount
+            : productDiscountValue;
+    const effectiveTotalDiscount = totalDiscount;
+    // Shiprocket's `/orders/show/:id` payload uses ambiguous total fields:
+    // - `sub_total` is the items sub_total we sent at order creation.
+    // - `net_total` / `total_inr` are *intended* to be the grand total
+    //   (sub_total + shipping + giftwrap + transaction - discount), but in
+    //   practice Shiprocket frequently echoes the items sub_total here as well
+    //   (observed on COD orders that are already INVOICED — the printed
+    //   tax-invoice and Shiprocket panel show ₹210 while the API returns
+    //   `net_total: 200, sub_total: 200, others.shipping_charges: 10`).
+    // - `total` is overloaded the same way as `net_total`.
+    //
+    // The component fields (sub_total, others.shipping_charges,
+    // giftwrap_charges, transaction_charges, total_discount) are reliable, so
+    // always derive the grand total from those and use the grand-total fields
+    // only as a fallback when no components are present.
+    const explicitGrandTotal = pickFirstFiniteCurrency(orderRoot?.net_total, orderRoot?.total_inr);
     const explicitSubTotal = pickFirstFiniteCurrency(orderRoot?.sub_total);
+    const ambiguousTotal = pickFirstFiniteCurrency(orderRoot?.total);
     const normalizedShippingCharges = shippingCharges ?? 0;
     const normalizedGiftwrapCharges = giftwrapCharges ?? 0;
     const normalizedTransactionCharges = transactionCharges ?? 0;
-    const normalizedDerivedFinalAmount =
-        derivedFinalAmount ??
-        roundCurrency(
-            Math.max(
-                0,
-                itemsSubtotal - Number(totalDiscount || 0) + normalizedShippingCharges + normalizedGiftwrapCharges + normalizedTransactionCharges
-            )
-        );
-    const normalizedSubTotal =
-        explicitSubTotal ??
-        roundCurrency(
-            Math.max(
-                0,
-                normalizedDerivedFinalAmount - normalizedShippingCharges - normalizedGiftwrapCharges - normalizedTransactionCharges
-            )
-        );
+    const additiveCharges =
+        normalizedShippingCharges + normalizedGiftwrapCharges + normalizedTransactionCharges;
+
+    let normalizedSubTotal;
+    if (explicitSubTotal !== null) {
+        normalizedSubTotal = explicitSubTotal;
+    } else if (itemsSubtotal > 0) {
+        normalizedSubTotal = itemsSubtotal;
+    } else if (ambiguousTotal !== null) {
+        normalizedSubTotal =
+            explicitGrandTotal !== null && Math.abs(ambiguousTotal - explicitGrandTotal) < 0.01
+                ? roundCurrency(Math.max(0, ambiguousTotal - additiveCharges))
+                : ambiguousTotal;
+    } else if (explicitGrandTotal !== null) {
+        normalizedSubTotal = roundCurrency(Math.max(0, explicitGrandTotal - additiveCharges));
+    } else {
+        normalizedSubTotal = 0;
+    }
+
+    const haveAnyComponentSignal =
+        explicitSubTotal !== null ||
+        itemsSubtotal > 0 ||
+        shippingCharges !== null ||
+        giftwrapCharges !== null ||
+        transactionCharges !== null ||
+        effectiveTotalDiscount !== null;
+    const computedFromComponents = roundCurrency(
+        Math.max(0, normalizedSubTotal - Number(effectiveTotalDiscount || 0) + additiveCharges)
+    );
+    const normalizedDerivedFinalAmount = haveAnyComponentSignal
+        ? computedFromComponents
+        : explicitGrandTotal !== null
+            ? explicitGrandTotal
+            : ambiguousTotal !== null
+                ? ambiguousTotal
+                : computedFromComponents;
 
     return normalizeShiprocketPricingSnapshot({
         formulaVersion: SHIPROCKET_PRICING_FORMULA_VERSION,
@@ -298,7 +370,7 @@ const extractShiprocketOrderPricingSnapshot = (payload = {}, options = {}) => {
         capturedAt: options?.capturedAt ?? Date.now(),
         itemsSubtotal,
         localSubtotal: itemsSubtotal,
-        totalDiscount: totalDiscount ?? 0,
+        totalDiscount: effectiveTotalDiscount ?? 0,
         shippingCharges: normalizedShippingCharges,
         subTotal: normalizedSubTotal,
         localAmount: normalizedDerivedFinalAmount,
@@ -311,13 +383,28 @@ const buildShiprocketLivePricingVerification = (order = {}, shiprocketOrder = {}
         source: 'computed_current',
         capturedAt: null
     });
+    const expectedTotalDiscount = Number(expectedShiprocket?.totalDiscount || 0);
+    // IMPORTANT: `shiprocketOrder?.pricingSnapshot` is pre-computed by
+    // `normalizeShiprocketOrderResponse` WITHOUT the `fallbackTotalDiscount`
+    // option, so it will carry `totalDiscount: 0` whenever Shiprocket echoes
+    // a literal `discount: 0` (or omits the field). If we trust that cached
+    // snapshot here via `||`, the discount fallback below never fires and
+    // a phantom mismatch surfaces on every live verify. Always prefer the
+    // raw payload (when available) so the fallback-equipped extractor runs.
+    const rawShiprocketPayload = shiprocketOrder?.raw || shiprocketOrder;
     const liveShiprocketSnapshot =
         normalizeShiprocketPricingSnapshot(options?.liveShiprocketSnapshot) ||
-        normalizeShiprocketPricingSnapshot(shiprocketOrder?.pricingSnapshot) ||
-        extractShiprocketOrderPricingSnapshot(shiprocketOrder?.raw || shiprocketOrder, {
+        extractShiprocketOrderPricingSnapshot(rawShiprocketPayload, {
             source: 'shiprocket_live_order_details',
-            capturedAt: checkedAt
-        });
+            capturedAt: checkedAt,
+            // Shiprocket's `/orders/show` payload sometimes drops the discount
+            // fields entirely, and sometimes echoes a literal `discount: 0`
+            // even though the printed invoice still applies the discount.
+            // Pass the locally-known discount so the extractor can fall back
+            // to it, instead of surfacing a phantom mismatch.
+            fallbackTotalDiscount: expectedTotalDiscount > 0 ? expectedTotalDiscount : null
+        }) ||
+        normalizeShiprocketPricingSnapshot(shiprocketOrder?.pricingSnapshot);
     const snapshotDelta = compareShiprocketPricingSnapshots(expectedShiprocket, liveShiprocketSnapshot);
     const issues = [];
     const addIssue = (code, severity, message) => {
@@ -1045,6 +1132,74 @@ const createOrder = async (orderData, options = {}) => {
     }
 };
 
+const cancelOrder = async (shiprocketOrderIds, options = {}) => {
+    const idList = (Array.isArray(shiprocketOrderIds) ? shiprocketOrderIds : [shiprocketOrderIds])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+    if (idList.length === 0) {
+        const error = new Error('Shiprocket cancelOrder requires at least one numeric Shiprocket order id');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const shiprocketLog = buildShiprocketLogger({
+        log: options.log,
+        action: 'cancel_order',
+        orderId: idList[0]
+    });
+
+    try {
+        const response = await requestWithAuth(
+            {
+                method: 'POST',
+                url: '/orders/cancel',
+                data: { ids: idList }
+            },
+            { log: shiprocketLog }
+        );
+
+        const payload = response?.data || {};
+        const statusCode = Number(payload?.status_code ?? payload?.status ?? 0);
+        const message = normalizeText(payload?.message || payload?.status || '');
+        const lowerMessage = message.toLowerCase();
+        // Shiprocket returns status_code 200 + message like "Order cancellation request received."
+        // when the cancellation is queued. Treat 4xx/5xx codes or explicit failure markers as errors.
+        const isAlreadyCancelled = lowerMessage.includes('already') && lowerMessage.includes('cancel');
+        const isLogicalFailure = statusCode >= 400 || (
+            !isAlreadyCancelled &&
+            lowerMessage &&
+            (lowerMessage.includes('fail') || lowerMessage.includes('error') || lowerMessage.includes('not found'))
+        );
+
+        if (isLogicalFailure) {
+            throw buildShiprocketPayloadError(
+                payload,
+                'Shiprocket cancel order returned an application-level error'
+            );
+        }
+
+        return {
+            success: true,
+            alreadyCancelled: isAlreadyCancelled,
+            message: message || 'Shiprocket cancellation request accepted',
+            ids: idList,
+            raw: payload
+        };
+    } catch (error) {
+        shiprocketLog.error(
+            {
+                errorMessage: error?.message || 'Shiprocket cancel order failed',
+                upstreamStatusCode: error?.upstreamStatusCode || null,
+                ids: idList
+            },
+            'Shiprocket cancel order request failed'
+        );
+
+        throw error;
+    }
+};
+
 const getOrder = async (orderId, options = {}) => {
     const shiprocketLog = buildShiprocketLogger({
         log: options.log,
@@ -1562,6 +1717,7 @@ export {
     buildShiprocketPricingAudit,
     buildShiprocketPricingSnapshot,
     buildShiprocketWebhookEventKey,
+    cancelOrder,
     createOrder,
     decorateOrderWithShiprocketPricingAudit,
     extractShiprocketOrderPricingSnapshot,

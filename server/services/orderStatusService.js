@@ -1,7 +1,10 @@
 import orderModel from '../models/orderModel.js';
 import userModel from '../models/userModel.js';
+import logger from '../config/logger.js';
 import { releaseInventoryForItems } from './productInventoryService.js';
 import { publishAdminOrderUpsert } from './realtimeService.js';
+import { cancelOrder as cancelShiprocketOrder } from './shiprocketService.js';
+import { isShiprocketConfigured } from '../config/shiprocket.js';
 import {
     awardOrderDeliveryRewards,
     finalizeReservedLoyaltyRedemption,
@@ -49,6 +52,94 @@ const releaseInventoryForOrder = async (order) => {
     await orderModel.findByIdAndUpdate(order._id, { inventoryReserved: false });
 };
 
+const cancelShiprocketForOrder = async (order, { source } = {}) => {
+    if (!order) {
+        return null;
+    }
+
+    const shiprocketOrderId = Number(order?.shiprocket?.orderId || 0);
+    const currentCancelStatus = String(order?.shiprocket?.cancelStatus || '').trim();
+
+    if (!shiprocketOrderId) {
+        return null;
+    }
+
+    if (currentCancelStatus === 'cancelled') {
+        return { skipped: true, reason: 'already_cancelled' };
+    }
+
+    if (!isShiprocketConfigured()) {
+        await orderModel.findByIdAndUpdate(order._id, {
+            $set: {
+                'shiprocket.cancelStatus': 'pending',
+                'shiprocket.cancelAttemptedAt': Date.now(),
+                'shiprocket.cancelError': 'Shiprocket integration is not configured'
+            }
+        });
+        return { skipped: true, reason: 'shiprocket_disabled' };
+    }
+
+    const shiprocketLog = logger.child({
+        integration: 'shiprocket',
+        action: 'cancel_order_local_mirror',
+        orderId: String(order._id || ''),
+        shiprocketOrderId,
+        source: source || 'orderStatusService.performOrderCancellation'
+    });
+
+    await orderModel.findByIdAndUpdate(order._id, {
+        $set: {
+            'shiprocket.cancelStatus': 'pending',
+            'shiprocket.cancelAttemptedAt': Date.now(),
+            'shiprocket.cancelError': ''
+        }
+    });
+
+    try {
+        const result = await cancelShiprocketOrder([shiprocketOrderId], { log: shiprocketLog });
+        const cancelledAt = Date.now();
+
+        await orderModel.findByIdAndUpdate(order._id, {
+            $set: {
+                'shiprocket.cancelStatus': 'cancelled',
+                'shiprocket.cancelledAt': cancelledAt,
+                'shiprocket.cancelError': '',
+                'shiprocket.rawCancelResponse': result?.raw || null
+            }
+        });
+
+        shiprocketLog.info(
+            {
+                alreadyCancelled: Boolean(result?.alreadyCancelled),
+                message: result?.message || ''
+            },
+            'Shiprocket cancellation mirrored successfully'
+        );
+
+        return { success: true, alreadyCancelled: Boolean(result?.alreadyCancelled) };
+    } catch (error) {
+        const errorMessage = String(error?.message || 'Shiprocket cancellation failed').slice(0, 500);
+
+        await orderModel.findByIdAndUpdate(order._id, {
+            $set: {
+                'shiprocket.cancelStatus': 'failed',
+                'shiprocket.cancelError': errorMessage,
+                'shiprocket.rawCancelResponse': error?.upstreamPayload || null
+            }
+        });
+
+        shiprocketLog.error(
+            {
+                err: error,
+                upstreamStatusCode: error?.upstreamStatusCode || null
+            },
+            'Shiprocket cancellation mirror failed (local cancellation already applied)'
+        );
+
+        return { success: false, error: errorMessage };
+    }
+};
+
 const performOrderCancellation = async ({ existingOrder, source }) => {
     const orderId = String(existingOrder?._id || '');
     const shouldReleaseLoyalty =
@@ -83,6 +174,11 @@ const performOrderCancellation = async ({ existingOrder, source }) => {
     if (shouldReleaseInventory) {
         await releaseInventoryForOrder(existingOrder);
     }
+
+    // Best-effort: mirror the cancellation to Shiprocket so the shipment is
+    // not dispatched. Failures are logged and stored on the order but never
+    // block the local cancellation path.
+    await cancelShiprocketForOrder(cancelledOrder, { source });
 
     const refreshedOrder = await orderModel.findById(orderId);
 

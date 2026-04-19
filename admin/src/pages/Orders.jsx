@@ -1,9 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { BACKEND_URL } from '../config/api';
 import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
 import { mergeOrderSnapshot, upsertOrderById } from '../utils/orderMerge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { usePersistedState } from '../hooks';
+
+// Free-form, agent-selectable cancellation reasons. Captured locally for the
+// audit toast — the backend payload remains unchanged so the existing API
+// contract is preserved (ADMIN_UI_OPTIMIZATION_PLAN §7).
+const ORDER_CANCEL_REASONS = [
+  'Customer requested cancellation',
+  'Out of stock',
+  'Payment failed / chargeback',
+  'Address unreachable',
+  'Suspected fraud',
+  'Pricing or item error',
+  'Other'
+];
 
 const orderStatusOptions = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered', 'Cancelled'];
 const ORDER_API_BASE = `${BACKEND_URL}/api/order`;
@@ -97,7 +112,9 @@ const normalizeAuditPricingSnapshot = (snapshot) => {
         0,
         Number.isFinite(normalizedDerivedFinalAmount)
           ? normalizedDerivedFinalAmount
-          : Number(snapshot?.subTotal || 0) + Number(snapshot?.shippingCharges || 0)
+          : Number(snapshot?.subTotal || 0) -
+            Number(snapshot?.totalDiscount || 0) +
+            Number(snapshot?.shippingCharges || 0)
       )
     ),
   };
@@ -119,10 +136,16 @@ const buildExpectedShiprocketPricingSnapshot = (order = {}) => {
   const hasFinalAmount = Number.isFinite(finalAmountValue);
   const finalAmount = hasFinalAmount ? roundCurrencyValue(finalAmountValue) : null;
   const fallbackSubtotalBeforeDiscount = storedSubtotalBeforeDiscount > 0 ? storedSubtotalBeforeDiscount : itemsSubtotal;
+  // Mirror the server-side formula in shiprocketService.js: Shiprocket renders
+  // invoices as `sub_total - total_discount + shipping_charges`, so `subTotal`
+  // must be the items sub-total BEFORE the discount is applied.
   const subTotal =
-    finalAmount !== null
-      ? roundCurrencyValue(Math.max(0, finalAmount - shippingCharges))
-      : roundCurrencyValue(Math.max(0, fallbackSubtotalBeforeDiscount - totalDiscount));
+    fallbackSubtotalBeforeDiscount > 0
+      ? fallbackSubtotalBeforeDiscount
+      : finalAmount !== null
+        ? roundCurrencyValue(Math.max(0, finalAmount + totalDiscount - shippingCharges))
+        : 0;
+  const derivedFinalAmount = roundCurrencyValue(Math.max(0, subTotal - totalDiscount + shippingCharges));
 
   return normalizeAuditPricingSnapshot({
     formulaVersion: SHIPROCKET_PRICING_FORMULA_VERSION,
@@ -133,8 +156,8 @@ const buildExpectedShiprocketPricingSnapshot = (order = {}) => {
     totalDiscount,
     shippingCharges,
     subTotal,
-    localAmount: finalAmount !== null ? finalAmount : roundCurrencyValue(subTotal + shippingCharges),
-    derivedFinalAmount: roundCurrencyValue(subTotal + shippingCharges),
+    localAmount: finalAmount !== null ? finalAmount : derivedFinalAmount,
+    derivedFinalAmount,
   });
 };
 
@@ -188,7 +211,7 @@ const extractShiprocketOrderRoot = (payload = {}) => {
   return isPlainObject(payload) ? payload : {};
 };
 
-const extractShiprocketLivePricingSnapshot = (payload = {}, checkedAt = Date.now()) => {
+const extractShiprocketLivePricingSnapshot = (payload = {}, checkedAt = Date.now(), options = {}) => {
   const orderRoot = extractShiprocketOrderRoot(payload);
 
   if (!isPlainObject(orderRoot) || Object.keys(orderRoot).length === 0) {
@@ -208,37 +231,84 @@ const extractShiprocketLivePricingSnapshot = (payload = {}, checkedAt = Date.now
     orderRoot?.transaction_charges,
     orderRoot?.others?.transaction_charges
   );
-  const totalDiscount = pickFirstFiniteCurrencyValue(
+  const explicitTotalDiscount = pickFirstFiniteCurrencyValue(
     orderRoot?.total_discount,
     orderRoot?.other_discounts,
-    orderRoot?.discount,
-    productDiscount
+    orderRoot?.discount
   );
-  const derivedFinalAmount = pickFirstFiniteCurrencyValue(orderRoot?.net_total, orderRoot?.total, orderRoot?.total_inr);
+  const fallbackTotalDiscountValue = pickFirstFiniteCurrencyValue(options?.fallbackTotalDiscount);
+  // Shiprocket's `/orders/show` payload sometimes omits every order-level
+  // discount field even when the printed invoice still applies the discount
+  // (observed on COD orders — invoice shows Rs.20 discount and NET TOTAL
+  // ₹190 while the JSON response has no `total_discount`/`other_discounts`/
+  // `discount`). It also sometimes echoes a literal `discount: 0` on orders
+  // that were created WITH a positive discount — the invoice and Shiprocket
+  // panel still show the correct discounted total but the API zeroes out
+  // the discount field. In both cases fall back to the locally-known
+  // discount we sent at order creation so the verification doesn't surface
+  // a phantom mismatch. Per-line product discounts are only used as a last
+  // resort because Shiprocket usually returns 0 there even for discounted
+  // orders.
+  const productDiscountFallback = pickFirstFiniteCurrencyValue(productDiscount);
+  const shouldUseFallbackDiscount =
+    fallbackTotalDiscountValue !== null &&
+    fallbackTotalDiscountValue > 0 &&
+    (explicitTotalDiscount === null || explicitTotalDiscount === 0);
+  const totalDiscount = shouldUseFallbackDiscount
+    ? fallbackTotalDiscountValue
+    : explicitTotalDiscount !== null
+      ? explicitTotalDiscount
+      : productDiscountFallback;
+  const effectiveTotalDiscount = totalDiscount;
+  // See server/services/shiprocketService.js for the rationale: Shiprocket's
+  // `net_total` / `total_inr` / `total` are unreliable on `/orders/show` â€”
+  // they often echo the items sub_total instead of the customer-facing grand
+  // total. The component fields (sub_total, others.shipping_charges,
+  // giftwrap_charges, transaction_charges, total_discount) are reliable, so
+  // always derive the grand total from those and only use the grand-total
+  // fields as a fallback when no components are present.
+  const explicitGrandTotal = pickFirstFiniteCurrencyValue(orderRoot?.net_total, orderRoot?.total_inr);
   const explicitSubTotal = pickFirstFiniteCurrencyValue(orderRoot?.sub_total);
+  const ambiguousTotal = pickFirstFiniteCurrencyValue(orderRoot?.total);
   const normalizedShippingCharges = shippingCharges ?? 0;
   const normalizedGiftwrapCharges = giftwrapCharges ?? 0;
   const normalizedTransactionCharges = transactionCharges ?? 0;
-  const normalizedDerivedFinalAmount =
-    derivedFinalAmount ??
-    roundCurrencyValue(
-      Math.max(
-        0,
-        itemsSubtotal -
-          Number(totalDiscount || 0) +
-          normalizedShippingCharges +
-          normalizedGiftwrapCharges +
-          normalizedTransactionCharges
-      )
-    );
-  const normalizedSubTotal =
-    explicitSubTotal ??
-    roundCurrencyValue(
-      Math.max(
-        0,
-        normalizedDerivedFinalAmount - normalizedShippingCharges - normalizedGiftwrapCharges - normalizedTransactionCharges
-      )
-    );
+  const additiveCharges =
+    normalizedShippingCharges + normalizedGiftwrapCharges + normalizedTransactionCharges;
+
+  let normalizedSubTotal;
+  if (explicitSubTotal !== null) {
+    normalizedSubTotal = explicitSubTotal;
+  } else if (itemsSubtotal > 0) {
+    normalizedSubTotal = itemsSubtotal;
+  } else if (ambiguousTotal !== null) {
+    normalizedSubTotal =
+      explicitGrandTotal !== null && Math.abs(ambiguousTotal - explicitGrandTotal) < 0.01
+        ? roundCurrencyValue(Math.max(0, ambiguousTotal - additiveCharges))
+        : ambiguousTotal;
+  } else if (explicitGrandTotal !== null) {
+    normalizedSubTotal = roundCurrencyValue(Math.max(0, explicitGrandTotal - additiveCharges));
+  } else {
+    normalizedSubTotal = 0;
+  }
+
+  const haveAnyComponentSignal =
+    explicitSubTotal !== null ||
+    itemsSubtotal > 0 ||
+    shippingCharges !== null ||
+    giftwrapCharges !== null ||
+    transactionCharges !== null ||
+    effectiveTotalDiscount !== null;
+  const computedFromComponents = roundCurrencyValue(
+    Math.max(0, normalizedSubTotal - Number(effectiveTotalDiscount || 0) + additiveCharges)
+  );
+  const normalizedDerivedFinalAmount = haveAnyComponentSignal
+    ? computedFromComponents
+    : explicitGrandTotal !== null
+      ? explicitGrandTotal
+      : ambiguousTotal !== null
+        ? ambiguousTotal
+        : computedFromComponents;
 
   return normalizeAuditPricingSnapshot({
     formulaVersion: SHIPROCKET_PRICING_FORMULA_VERSION,
@@ -246,7 +316,7 @@ const extractShiprocketLivePricingSnapshot = (payload = {}, checkedAt = Date.now
     capturedAt: checkedAt,
     itemsSubtotal,
     localSubtotal: itemsSubtotal,
-    totalDiscount: totalDiscount ?? 0,
+    totalDiscount: effectiveTotalDiscount ?? 0,
     shippingCharges: normalizedShippingCharges,
     subTotal: normalizedSubTotal,
     localAmount: normalizedDerivedFinalAmount,
@@ -278,9 +348,23 @@ const compareAuditPricingSnapshots = (baselineSnapshot, comparisonSnapshot) => {
 const buildClientSideShiprocketLiveVerification = (order = {}, shiprocketOrder = {}) => {
   const checkedAt = Date.now();
   const expectedShiprocket = buildExpectedShiprocketPricingSnapshot(order);
+  const expectedTotalDiscount = Number(expectedShiprocket?.totalDiscount || 0);
+  // Same fix as server/services/shiprocketService.js: `shiprocketOrder.pricingSnapshot`
+  // may have been pre-computed without the `fallbackTotalDiscount` option,
+  // so it can carry `totalDiscount: 0` when Shiprocket echoes a literal
+  // `discount: 0`. Always prefer re-extracting from the raw payload with
+  // the fallback so the discount gets restored before we fall back to the
+  // cached snapshot.
+  const rawShiprocketPayload = shiprocketOrder?.raw || shiprocketOrder;
   const liveShiprocketSnapshot =
-    normalizeAuditPricingSnapshot(shiprocketOrder?.pricingSnapshot) ||
-    extractShiprocketLivePricingSnapshot(shiprocketOrder?.raw || shiprocketOrder, checkedAt);
+    extractShiprocketLivePricingSnapshot(rawShiprocketPayload, checkedAt, {
+      // Mirror the server-side fallback in shiprocketService.js: when the
+      // Shiprocket /orders/show response omits the discount fields or echoes
+      // a literal `discount: 0`, treat the locally-known discount as still
+      // in effect so the live verification doesn't surface a phantom mismatch.
+      fallbackTotalDiscount: expectedTotalDiscount > 0 ? expectedTotalDiscount : null,
+    }) ||
+    normalizeAuditPricingSnapshot(shiprocketOrder?.pricingSnapshot);
   const snapshotDelta = compareAuditPricingSnapshots(expectedShiprocket, liveShiprocketSnapshot);
   const issues = [];
 
@@ -710,8 +794,13 @@ const realtimeEnabled = String(import.meta.env.VITE_REALTIME_ENABLED || 'true').
 const Orders = ({ token }) => {
   const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [shiprocketAuditFilter, setShiprocketAuditFilter] = useState('all');
+  // Persist filter selections across reloads so support agents return to the
+  // exact saved view they had open (ADMIN_UI_OPTIMIZATION_PLAN §3.5 F).
+  const [statusFilter, setStatusFilter] = usePersistedState('admin.orders.statusFilter', 'all');
+  const [shiprocketAuditFilter, setShiprocketAuditFilter] = usePersistedState(
+    'admin.orders.shiprocketAuditFilter',
+    'all'
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isBackfillingSnapshots, setIsBackfillingSnapshots] = useState(false);
   const [isStartingBulkVerify, setIsStartingBulkVerify] = useState(false);
@@ -724,6 +813,9 @@ const Orders = ({ token }) => {
   });
   const [shiprocketBulkVerifyJob, setShiprocketBulkVerifyJob] = useState(null);
   const [updatingOrderId, setUpdatingOrderId] = useState('');
+  const [pendingCancelOrderId, setPendingCancelOrderId] = useState(null);
+  const [cancelReason, setCancelReason] = useState(ORDER_CANCEL_REASONS[0]);
+  const [cancelReasonNote, setCancelReasonNote] = useState('');
   const [liveUpdatesStatus, setLiveUpdatesStatus] = useState({ status: 'idle', message: '' });
   const [highlightedOrderId, setHighlightedOrderId] = useState('');
   const processedEventIdsRef = useRef(new Set());
@@ -762,12 +854,24 @@ const Orders = ({ token }) => {
   }, [token]);
 
   const statusHandler = async (event, orderId) => {
+    const newStatus = event.target.value;
+
+    if (newStatus === 'Cancelled') {
+      setPendingCancelOrderId(orderId);
+      event.target.value = orders.find((o) => o._id === orderId)?.status || 'Order Placed';
+      return;
+    }
+
+    await applyStatusUpdate(orderId, newStatus);
+  };
+
+  const applyStatusUpdate = async (orderId, status) => {
     setUpdatingOrderId(orderId);
 
     try {
       const response = await axios.post(
         `${ORDER_API_BASE}/status`,
-        { orderId, status: event.target.value },
+        { orderId, status },
         { headers: { token } }
       );
 
@@ -782,6 +886,22 @@ const Orders = ({ token }) => {
       toast.error(error?.response?.data?.message || error.message);
     } finally {
       setUpdatingOrderId('');
+    }
+  };
+
+  const confirmCancelOrder = async () => {
+    const orderId = pendingCancelOrderId;
+    const reasonLabel = cancelReason === 'Other' && cancelReasonNote.trim()
+      ? cancelReasonNote.trim()
+      : cancelReason;
+    setPendingCancelOrderId(null);
+    setCancelReason(ORDER_CANCEL_REASONS[0]);
+    setCancelReasonNote('');
+    if (orderId) {
+      await applyStatusUpdate(orderId, 'Cancelled');
+      // Surface the captured reason to the agent so they have an audit trail
+      // until a backend audit endpoint exists (plan §8 open question).
+      toast.info(`Cancellation reason: ${reasonLabel}`);
     }
   };
 
@@ -1242,190 +1362,410 @@ const Orders = ({ token }) => {
     ];
   }, [orders, shiprocketAuditCounts.alertCount]);
 
+  // === Support-friendly UI state (added by refactor) ===
+  const [expandedOrderIds, setExpandedOrderIds] = useState(() => new Set());
+  const [showOperations, setShowOperations] = useState(false);
+  const [sortField, setSortField] = useState('newest');
+  const [orderTabById, setOrderTabById] = useState({});
+
+  const toggleOrderExpanded = useCallback((orderId) => {
+    setExpandedOrderIds((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  }, []);
+
+  const setOrderTab = useCallback((orderId, tabId) => {
+    setOrderTabById((current) => ({ ...current, [orderId]: tabId }));
+  }, []);
+
+  const handleCopyOrderId = useCallback((orderId) => {
+    if (!orderId) {
+      return;
+    }
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(String(orderId)).then(
+        () => toast.success('Order ID copied'),
+        () => toast.error('Could not copy ID')
+      );
+    }
+  }, []);
+
+  const visibleOrdersSorted = useMemo(() => {
+    const list = [...visibleOrders];
+    switch (sortField) {
+      case 'oldest':
+        return list.sort((a, b) => Number(a.date || 0) - Number(b.date || 0));
+      case 'amount-desc':
+        return list.sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
+      case 'amount-asc':
+        return list.sort((a, b) => Number(a.amount || 0) - Number(b.amount || 0));
+      case 'newest':
+      default:
+        return list.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
+    }
+  }, [visibleOrders, sortField]);
+
+  const statusCounts = useMemo(() => {
+    const counts = {};
+    for (const status of orderStatusOptions) {
+      counts[status] = 0;
+    }
+    for (const order of orders) {
+      if (counts[order.status] !== undefined) {
+        counts[order.status] += 1;
+      }
+    }
+    return counts;
+  }, [orders]);
+
+  const inProgressCount = useMemo(
+    () => orders.filter((order) => !['Delivered', 'Cancelled'].includes(order.status)).length,
+    [orders]
+  );
+  const deliveredCount = useMemo(
+    () => orders.filter((order) => order.status === 'Delivered').length,
+    [orders]
+  );
+  const awaitingPaymentCount = useMemo(() => orders.filter((order) => !order.payment).length, [orders]);
+
+  const hasActiveFilters = search.trim() !== '' || statusFilter !== 'all' || shiprocketAuditFilter !== 'all';
+  const clearAllFilters = useCallback(() => {
+    setSearch('');
+    setStatusFilter('all');
+    setShiprocketAuditFilter('all');
+  }, []);
+
+  const STAGE_TIMELINE = ['Order Placed', 'Packing', 'Shipped', 'Out for delivery', 'Delivered'];
+
+  const kpiCards = [
+    {
+      key: 'all',
+      label: 'Total orders',
+      value: orders.length,
+      subtitle: 'All time',
+      accent: 'slate',
+      onClick: () => clearAllFilters(),
+      isActive: statusFilter === 'all' && shiprocketAuditFilter === 'all' && search.trim() === '',
+    },
+    {
+      key: 'inprogress',
+      label: 'In progress',
+      value: inProgressCount,
+      subtitle: 'Awaiting fulfillment',
+      accent: 'amber',
+      onClick: null,
+    },
+    {
+      key: 'delivered',
+      label: 'Delivered',
+      value: deliveredCount,
+      subtitle: 'Completed orders',
+      accent: 'emerald',
+      onClick: () => {
+        setStatusFilter('Delivered');
+        setShiprocketAuditFilter('all');
+        setSearch('');
+      },
+      isActive: statusFilter === 'Delivered',
+    },
+    {
+      key: 'awaiting',
+      label: 'Awaiting payment',
+      value: awaitingPaymentCount,
+      subtitle: 'Unpaid orders',
+      accent: 'sky',
+      onClick: null,
+    },
+    {
+      key: 'alerts',
+      label: 'Shiprocket alerts',
+      value: shiprocketAuditCounts.alertCount,
+      subtitle: `${shiprocketAuditCounts.mismatchCount} mismatch Â· ${shiprocketAuditCounts.warningCount} warning`,
+      accent: shiprocketAuditCounts.alertCount > 0 ? 'rose' : 'emerald',
+      onClick: () => {
+        setShiprocketAuditFilter('alerts');
+        setStatusFilter('all');
+        setSearch('');
+      },
+      isActive: shiprocketAuditFilter === 'alerts',
+    },
+  ];
+
+  const accentClassMap = {
+    slate: { ring: 'ring-slate-300', text: 'text-slate-900', dot: 'bg-slate-400' },
+    amber: { ring: 'ring-amber-300', text: 'text-amber-700', dot: 'bg-amber-500' },
+    emerald: { ring: 'ring-emerald-300', text: 'text-emerald-700', dot: 'bg-emerald-500' },
+    sky: { ring: 'ring-sky-300', text: 'text-sky-700', dot: 'bg-sky-500' },
+    rose: { ring: 'ring-rose-300', text: 'text-rose-700', dot: 'bg-rose-500' },
+  };
+
   return (
-    <div className='flex flex-col gap-6'>
-      <section className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-        <div className='flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between'>
+    <div className='flex flex-col gap-5'>
+      {/* Hero strip: title, live status, primary actions, alerts banner */}
+      <section className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
+        <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
           <div>
-            <p className='text-lg font-semibold text-slate-900'>Order operations</p>
-            <p className='text-sm text-slate-500'>
-              Review the order pipeline, verify payment posture, and push fulfillment updates back to the server.
+            <p className='text-[11px] uppercase tracking-[0.28em] text-slate-400'>Support workspace</p>
+            <h2 className='mt-1 text-xl font-semibold text-slate-900'>Order operations console</h2>
+            <p className='mt-1 max-w-xl text-sm text-slate-500'>
+              Triage every incoming order, update fulfillment, and audit Shiprocket pricing â€” all from one place.
             </p>
           </div>
 
-          <div className='flex flex-col gap-3 sm:flex-row'>
-            <button
-              type='button'
-              onClick={handleShiprocketBackfill}
-              disabled={isBackfillingSnapshots || shiprocketAuditCounts.missingSnapshotCount === 0}
-              className='rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60'
+          <div className='flex flex-wrap items-center gap-2'>
+            <span
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
+                liveUpdatesStatus.status === 'connected'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : liveUpdatesStatus.status === 'connecting'
+                    ? 'border-sky-200 bg-sky-50 text-sky-800'
+                    : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}
+              title={liveUpdatesStatus.message || 'Live updates status'}
             >
-              {isBackfillingSnapshots
-                ? 'Backfilling snapshots...'
-                : shiprocketAuditCounts.missingSnapshotCount > 0
-                  ? `Backfill snapshots (${shiprocketAuditCounts.missingSnapshotCount})`
-                  : 'Backfill snapshots'}
-            </button>
-
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  liveUpdatesStatus.status === 'connected'
+                    ? 'animate-pulse bg-emerald-500'
+                    : liveUpdatesStatus.status === 'connecting'
+                      ? 'animate-pulse bg-sky-500'
+                      : 'bg-slate-400'
+                }`}
+              />
+              {liveUpdatesStatus.status === 'connected'
+                ? 'Live updates on'
+                : liveUpdatesStatus.status === 'connecting'
+                  ? 'Connecting...'
+                  : liveUpdatesStatus.status === 'disabled'
+                    ? 'Live updates off'
+                    : 'Live updates disconnected'}
+            </span>
             <button
               type='button'
               onClick={() => {
                 fetchAllOrders();
                 fetchShiprocketBulkVerifyJob({ silent: true });
               }}
-              className='rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
+              className='rounded-full border border-slate-300 px-4 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50'
             >
-              Refresh orders
+              Refresh
+            </button>
+            <button
+              type='button'
+              onClick={() => setShowOperations((value) => !value)}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${
+                showOperations
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-300 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {showOperations ? 'Hide ops tools' : 'Open ops tools'}
             </button>
           </div>
-
-          <span
-            className={`rounded-2xl border px-4 py-3 text-xs font-medium uppercase tracking-[0.2em] ${
-              liveUpdatesStatus.status === 'connected'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                : liveUpdatesStatus.status === 'connecting'
-                  ? 'border-sky-200 bg-sky-50 text-sky-800'
-                  : 'border-slate-200 bg-slate-50 text-slate-600'
-            }`}
-            title={liveUpdatesStatus.message || 'Live updates status'}
-          >
-            {liveUpdatesStatus.status === 'connected'
-              ? 'Live on'
-              : liveUpdatesStatus.status === 'connecting'
-                ? 'Live syncing'
-                : liveUpdatesStatus.status === 'disabled'
-                  ? 'Live off'
-                  : 'Live disconnected'}
-          </span>
         </div>
+
+        {shiprocketAuditCounts.alertCount > 0 ? (
+          <button
+            type='button'
+            onClick={() => {
+              setShiprocketAuditFilter('alerts');
+              setStatusFilter('all');
+              setSearch('');
+            }}
+            className='mt-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-left text-sm text-rose-800 transition hover:bg-rose-100'
+          >
+            <span className='flex items-center gap-3'>
+              <span className='inline-flex h-7 w-7 items-center justify-center rounded-full bg-rose-100 text-sm font-semibold text-rose-700'>
+                !
+              </span>
+              <span>
+                <span className='font-semibold'>{shiprocketAuditCounts.alertCount}</span> order
+                {shiprocketAuditCounts.alertCount === 1 ? '' : 's'} need Shiprocket review
+                <span className='ml-1 text-rose-600'>
+                  ({shiprocketAuditCounts.mismatchCount} mismatch Â· {shiprocketAuditCounts.warningCount} warning)
+                </span>
+              </span>
+            </span>
+            <span className='shrink-0 text-xs font-semibold uppercase tracking-[0.18em]'>Filter â†’</span>
+          </button>
+        ) : null}
       </section>
 
-      <section className='grid gap-4 xl:grid-cols-[1.1fr_0.9fr]'>
-        <article className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-            <div>
-              <p className='text-lg font-semibold text-slate-900'>Bulk live verification</p>
-              <p className='text-sm text-slate-500'>
-                Verify high-risk Shiprocket orders in the background with a paced requests-per-minute limit.
-              </p>
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${shiprocketBulkVerifyBadge.className}`}
+      {/* KPI strip â€” clickable filters */}
+      <section className='grid gap-3 sm:grid-cols-2 xl:grid-cols-5'>
+        {kpiCards.map((card) => {
+          const accent = accentClassMap[card.accent];
+          const clickable = typeof card.onClick === 'function';
+          return (
+            <button
+              key={card.key}
+              type='button'
+              disabled={!clickable}
+              onClick={card.onClick || undefined}
+              className={`group rounded-2xl border bg-white p-4 text-left shadow-sm transition disabled:cursor-default ${
+                card.isActive
+                  ? `border-transparent ring-2 ${accent.ring}`
+                  : clickable
+                    ? 'border-slate-200 hover:border-slate-300 hover:shadow-md'
+                    : 'border-slate-200'
+              }`}
             >
-              {shiprocketBulkVerifyBadge.label}
-            </span>
-          </div>
+              <div className='flex items-center justify-between gap-2'>
+                <p className='text-[11px] uppercase tracking-[0.22em] text-slate-500'>{card.label}</p>
+                <span className={`h-2 w-2 rounded-full ${accent.dot}`} />
+              </div>
+              <p className={`mt-3 text-3xl font-semibold tracking-tight ${accent.text}`}>{card.value}</p>
+              <p className='mt-1 text-xs text-slate-500'>{card.subtitle}</p>
+            </button>
+          );
+        })}
+      </section>
 
-          <div className='mt-5 grid gap-3 md:grid-cols-3'>
-            <label className='text-sm text-slate-600'>
-              <span className='mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400'>Scope</span>
-              <select
-                value={shiprocketBulkVerifyConfig.scope}
-                onChange={(event) => setShiprocketBulkVerifyConfigField('scope', event.target.value)}
-                disabled={shiprocketBulkVerifyJob?.status === 'running'}
-                className='w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60'
+      {/* Operations drawer */}
+      {showOperations ? (
+        <section className='grid gap-4 xl:grid-cols-[1.05fr_0.95fr]'>
+          {/* Bulk verify control */}
+          <article className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+              <div>
+                <p className='text-base font-semibold text-slate-900'>Bulk live verification</p>
+                <p className='mt-1 text-sm text-slate-500'>
+                  Verify high-risk Shiprocket orders in the background with paced rate limits.
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${shiprocketBulkVerifyBadge.className}`}
               >
-                <option value='high_risk'>High-risk alerts</option>
-                <option value='not_verified'>Not verified yet</option>
-                <option value='all_synced'>All synced orders</option>
-              </select>
-            </label>
-
-            <label className='text-sm text-slate-600'>
-              <span className='mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400'>Batch limit</span>
-              <input
-                value={shiprocketBulkVerifyConfig.limit}
-                onChange={(event) => setShiprocketBulkVerifyConfigField('limit', event.target.value)}
-                disabled={shiprocketBulkVerifyJob?.status === 'running'}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60'
-                type='number'
-                min='1'
-                max='500'
-                inputMode='numeric'
-              />
-            </label>
-
-            <label className='text-sm text-slate-600'>
-              <span className='mb-2 block text-xs uppercase tracking-[0.2em] text-slate-400'>Requests / minute</span>
-              <input
-                value={shiprocketBulkVerifyConfig.requestsPerMinute}
-                onChange={(event) => setShiprocketBulkVerifyConfigField('requestsPerMinute', event.target.value)}
-                disabled={shiprocketBulkVerifyJob?.status === 'running'}
-                className='w-full rounded-2xl border border-slate-300 px-4 py-3 disabled:cursor-not-allowed disabled:opacity-60'
-                type='number'
-                min='1'
-                max='180'
-                inputMode='numeric'
-              />
-            </label>
-          </div>
-
-          <div className='mt-4 flex flex-col gap-3 sm:flex-row'>
-            <button
-              type='button'
-              onClick={handleStartShiprocketBulkVerify}
-              disabled={isStartingBulkVerify || shiprocketBulkVerifyJob?.status === 'running'}
-              className='rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60'
-            >
-              {isStartingBulkVerify
-                ? 'Starting verification...'
-                : shiprocketBulkVerifyJob?.status === 'running'
-                  ? 'Verification running...'
-                  : 'Start bulk verify'}
-            </button>
-
-            <button
-              type='button'
-              onClick={handleCancelShiprocketBulkVerify}
-              disabled={
-                isCancellingBulkVerify ||
-                shiprocketBulkVerifyJob?.status !== 'running' ||
-                shiprocketBulkVerifyJob?.isCancelling
-              }
-              className='rounded-2xl border border-rose-300 px-4 py-3 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-60'
-            >
-              {isCancellingBulkVerify
-                ? 'Requesting cancel...'
-                : shiprocketBulkVerifyJob?.isCancelling
-                  ? 'Cancellation requested'
-                  : 'Cancel run'}
-            </button>
-
-            <button
-              type='button'
-              onClick={() => fetchShiprocketBulkVerifyJob()}
-              className='rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700'
-            >
-              Refresh job status
-            </button>
-          </div>
-        </article>
-
-        <article className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-          <div className='flex items-start justify-between gap-3'>
-            <div>
-              <p className='text-lg font-semibold text-slate-900'>Verification progress</p>
-              <p className='text-sm text-slate-500'>
-                Progress is persisted server-side, so refreshes keep the current run visible.
-              </p>
+                {shiprocketBulkVerifyBadge.label}
+              </span>
             </div>
-            <span
-              className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${shiprocketBulkVerifyBadge.className}`}
-            >
-              {shiprocketBulkVerifyBadge.label}
-            </span>
-          </div>
 
-          <div className='mt-5 space-y-4'>
-            <div className='rounded-3xl bg-slate-50 p-4'>
+            <div className='mt-4 grid gap-3 md:grid-cols-3'>
+              <label className='text-sm text-slate-600'>
+                <span className='mb-1.5 block text-[11px] uppercase tracking-[0.18em] text-slate-400'>Scope</span>
+                <select
+                  value={shiprocketBulkVerifyConfig.scope}
+                  onChange={(event) => setShiprocketBulkVerifyConfigField('scope', event.target.value)}
+                  disabled={shiprocketBulkVerifyJob?.status === 'running'}
+                  className='w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60'
+                >
+                  <option value='high_risk'>High-risk alerts</option>
+                  <option value='not_verified'>Not verified yet</option>
+                  <option value='all_synced'>All synced orders</option>
+                </select>
+              </label>
+
+              <label className='text-sm text-slate-600'>
+                <span className='mb-1.5 block text-[11px] uppercase tracking-[0.18em] text-slate-400'>Batch limit</span>
+                <input
+                  value={shiprocketBulkVerifyConfig.limit}
+                  onChange={(event) => setShiprocketBulkVerifyConfigField('limit', event.target.value)}
+                  disabled={shiprocketBulkVerifyJob?.status === 'running'}
+                  className='w-full rounded-xl border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60'
+                  type='number'
+                  min='1'
+                  max='500'
+                  inputMode='numeric'
+                />
+              </label>
+
+              <label className='text-sm text-slate-600'>
+                <span className='mb-1.5 block text-[11px] uppercase tracking-[0.18em] text-slate-400'>Reqs / minute</span>
+                <input
+                  value={shiprocketBulkVerifyConfig.requestsPerMinute}
+                  onChange={(event) => setShiprocketBulkVerifyConfigField('requestsPerMinute', event.target.value)}
+                  disabled={shiprocketBulkVerifyJob?.status === 'running'}
+                  className='w-full rounded-xl border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60'
+                  type='number'
+                  min='1'
+                  max='180'
+                  inputMode='numeric'
+                />
+              </label>
+            </div>
+
+            <div className='mt-4 flex flex-wrap gap-2'>
+              <button
+                type='button'
+                onClick={handleStartShiprocketBulkVerify}
+                disabled={isStartingBulkVerify || shiprocketBulkVerifyJob?.status === 'running'}
+                className='rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60'
+              >
+                {isStartingBulkVerify
+                  ? 'Starting...'
+                  : shiprocketBulkVerifyJob?.status === 'running'
+                    ? 'Verification running...'
+                    : 'Start bulk verify'}
+              </button>
+              <button
+                type='button'
+                onClick={handleCancelShiprocketBulkVerify}
+                disabled={
+                  isCancellingBulkVerify ||
+                  shiprocketBulkVerifyJob?.status !== 'running' ||
+                  shiprocketBulkVerifyJob?.isCancelling
+                }
+                className='rounded-xl border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 disabled:cursor-not-allowed disabled:opacity-60'
+              >
+                {isCancellingBulkVerify
+                  ? 'Cancelling...'
+                  : shiprocketBulkVerifyJob?.isCancelling
+                    ? 'Cancellation requested'
+                    : 'Cancel run'}
+              </button>
+              <button
+                type='button'
+                onClick={() => fetchShiprocketBulkVerifyJob()}
+                className='rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50'
+              >
+                Refresh status
+              </button>
+              <button
+                type='button'
+                onClick={handleShiprocketBackfill}
+                disabled={isBackfillingSnapshots || shiprocketAuditCounts.missingSnapshotCount === 0}
+                className='rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60'
+              >
+                {isBackfillingSnapshots
+                  ? 'Backfilling...'
+                  : shiprocketAuditCounts.missingSnapshotCount > 0
+                    ? `Backfill snapshots (${shiprocketAuditCounts.missingSnapshotCount})`
+                    : 'Backfill snapshots'}
+              </button>
+            </div>
+          </article>
+
+          {/* Verification progress */}
+          <article className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
+            <div className='flex items-start justify-between gap-3'>
+              <div>
+                <p className='text-base font-semibold text-slate-900'>Verification progress</p>
+                <p className='mt-1 text-sm text-slate-500'>
+                  Persisted server-side; refreshes keep the current run visible.
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${shiprocketBulkVerifyBadge.className}`}
+              >
+                {shiprocketBulkVerifyBadge.label}
+              </span>
+            </div>
+
+            <div className='mt-4 rounded-2xl bg-slate-50 p-4'>
               <div className='flex items-center justify-between gap-3 text-sm'>
                 <span className='text-slate-500'>Processed</span>
-                <span className='font-medium text-slate-900'>
+                <span className='font-semibold text-slate-900'>
                   {Number(shiprocketBulkVerifyJob?.progress?.processedCount || 0)} /{' '}
                   {Number(shiprocketBulkVerifyJob?.progress?.totalCount || 0)}
                 </span>
               </div>
-              <div className='mt-3 h-3 overflow-hidden rounded-full bg-slate-200'>
+              <div className='mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200'>
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
                     shiprocketBulkVerifyJob?.status === 'failed'
@@ -1434,61 +1774,54 @@ const Orders = ({ token }) => {
                         ? 'bg-emerald-500'
                         : 'bg-slate-900'
                   }`}
-                  style={{ width: `${Math.max(0, Math.min(100, Number(shiprocketBulkVerifyJob?.progress?.percentComplete || 0)))}%` }}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, Number(shiprocketBulkVerifyJob?.progress?.percentComplete || 0)))}%`,
+                  }}
                 />
               </div>
-              <p className='mt-2 text-xs uppercase tracking-[0.18em] text-slate-400'>
+              <p className='mt-2 text-[11px] uppercase tracking-[0.18em] text-slate-400'>
                 {Number(shiprocketBulkVerifyJob?.progress?.percentComplete || 0)}% complete
               </p>
             </div>
 
-            <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
-              <div className='rounded-2xl bg-emerald-50 px-4 py-3'>
-                <p className='text-xs uppercase tracking-[0.2em] text-emerald-700'>Clear</p>
-                <p className='mt-2 text-2xl font-semibold text-emerald-900'>
+            <div className='mt-3 grid gap-2 grid-cols-2 sm:grid-cols-4'>
+              <div className='rounded-xl bg-emerald-50 px-3 py-2'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-emerald-700'>Clear</p>
+                <p className='mt-1 text-lg font-semibold text-emerald-900'>
                   {Number(shiprocketBulkVerifyJob?.progress?.clearCount || 0)}
                 </p>
               </div>
-              <div className='rounded-2xl bg-amber-50 px-4 py-3'>
-                <p className='text-xs uppercase tracking-[0.2em] text-amber-700'>Warning</p>
-                <p className='mt-2 text-2xl font-semibold text-amber-900'>
+              <div className='rounded-xl bg-amber-50 px-3 py-2'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-amber-700'>Warning</p>
+                <p className='mt-1 text-lg font-semibold text-amber-900'>
                   {Number(shiprocketBulkVerifyJob?.progress?.warningCount || 0)}
                 </p>
               </div>
-              <div className='rounded-2xl bg-rose-50 px-4 py-3'>
-                <p className='text-xs uppercase tracking-[0.2em] text-rose-700'>Mismatch</p>
-                <p className='mt-2 text-2xl font-semibold text-rose-900'>
+              <div className='rounded-xl bg-rose-50 px-3 py-2'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-rose-700'>Mismatch</p>
+                <p className='mt-1 text-lg font-semibold text-rose-900'>
                   {Number(shiprocketBulkVerifyJob?.progress?.mismatchCount || 0)}
                 </p>
               </div>
-              <div className='rounded-2xl bg-slate-100 px-4 py-3'>
-                <p className='text-xs uppercase tracking-[0.2em] text-slate-600'>Failed</p>
-                <p className='mt-2 text-2xl font-semibold text-slate-900'>
+              <div className='rounded-xl bg-slate-100 px-3 py-2'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-600'>Failed</p>
+                <p className='mt-1 text-lg font-semibold text-slate-900'>
                   {Number(shiprocketBulkVerifyJob?.progress?.failedCount || 0)}
-                </p>
-              </div>
-              <div className='rounded-2xl bg-sky-50 px-4 py-3 sm:col-span-2 xl:col-span-4'>
-                <p className='text-xs uppercase tracking-[0.2em] text-sky-700'>Retry scheduled</p>
-                <p className='mt-2 text-2xl font-semibold text-sky-900'>
-                  {Number(shiprocketBulkVerifyJob?.progress?.retryScheduledCount || 0)}
-                </p>
-                <p className='mt-1 text-sm text-sky-800'>
-                  Last wait {Math.round(Number(shiprocketBulkVerifyJob?.progress?.lastRetryDelayMs || 0) / 1000)}s
                 </p>
               </div>
             </div>
 
-            <div className='grid gap-3 md:grid-cols-2'>
-              <div className='rounded-2xl border border-slate-200 px-4 py-4 text-sm text-slate-600'>
-                <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Run context</p>
-                <p className='mt-2 font-medium text-slate-900'>
+            <div className='mt-3 grid gap-3 md:grid-cols-2'>
+              <div className='rounded-xl border border-slate-200 px-3 py-3 text-xs text-slate-600'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Run context</p>
+                <p className='mt-1 font-semibold text-slate-900'>
                   {formatEnumLabel(shiprocketBulkVerifyJob?.config?.scope, 'High risk')}
                 </p>
                 <p className='mt-1'>Started {formatDateTime(shiprocketBulkVerifyJob?.startedAt)}</p>
-                <p className='mt-1'>Finished {formatDateTime(shiprocketBulkVerifyJob?.finishedAt)}</p>
-                <p className='mt-1'>
-                  Pacing {Number(shiprocketBulkVerifyJob?.config?.requestsPerMinute || 0)} request
-                  {Number(shiprocketBulkVerifyJob?.config?.requestsPerMinute || 0) === 1 ? '' : 's'} / minute
+                <p>Finished {formatDateTime(shiprocketBulkVerifyJob?.finishedAt)}</p>
+                <p>
+                  Pacing {Number(shiprocketBulkVerifyJob?.config?.requestsPerMinute || 0)} req
+                  {Number(shiprocketBulkVerifyJob?.config?.requestsPerMinute || 0) === 1 ? '' : 's'}/min
                 </p>
                 {shiprocketBulkVerifyJob?.cancelRequestedAt ? (
                   <p className='mt-1 text-amber-700'>
@@ -1496,109 +1829,177 @@ const Orders = ({ token }) => {
                   </p>
                 ) : null}
               </div>
-
-              <div className='rounded-2xl border border-slate-200 px-4 py-4 text-sm text-slate-600'>
-                <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Current order</p>
-                <p className='mt-2 font-medium text-slate-900'>
+              <div className='rounded-xl border border-slate-200 px-3 py-3 text-xs text-slate-600'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Current order</p>
+                <p className='mt-1 font-semibold text-slate-900'>
                   {shiprocketBulkVerifyJob?.progress?.currentReferenceOrderId ||
                     shiprocketBulkVerifyJob?.progress?.currentOrderId ||
                     'No active order'}
                 </p>
                 <p className='mt-1'>
-                  Last processed {shiprocketBulkVerifyJob?.progress?.lastProcessedOrderId || 'Not processed yet'}
+                  Last {shiprocketBulkVerifyJob?.progress?.lastProcessedOrderId || 'none'}
                 </p>
-                <p className='mt-1'>Requested by {shiprocketBulkVerifyJob?.requestedBy || 'Admin'}</p>
-                {shiprocketBulkVerifyJob?.cancelRequestedBy ? (
-                  <p className='mt-1 text-amber-700'>Cancelling by {shiprocketBulkVerifyJob.cancelRequestedBy}</p>
-                ) : null}
+                <p>By {shiprocketBulkVerifyJob?.requestedBy || 'Admin'}</p>
                 {shiprocketBulkVerifyJob?.error ? (
-                  <p className='mt-2 text-rose-600'>{shiprocketBulkVerifyJob.error}</p>
+                  <p className='mt-1 text-rose-600'>{shiprocketBulkVerifyJob.error}</p>
                 ) : null}
                 {shiprocketBulkVerifyJob?.isStale ? (
-                  <p className='mt-2 text-amber-600'>The active run looks stale. Refresh status or start a fresh run.</p>
+                  <p className='mt-1 text-amber-600'>Run looks stale. Refresh status or start fresh.</p>
                 ) : null}
                 {shiprocketBulkVerifyJob?.progress?.statusNote ? (
-                  <p className='mt-2 text-sky-700'>{shiprocketBulkVerifyJob.progress.statusNote}</p>
+                  <p className='mt-1 text-sky-700'>{shiprocketBulkVerifyJob.progress.statusNote}</p>
                 ) : null}
               </div>
             </div>
 
             {Array.isArray(shiprocketBulkVerifyJob?.progress?.recentFailures) &&
             shiprocketBulkVerifyJob.progress.recentFailures.length > 0 ? (
-              <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-800'>
-                <p className='text-xs uppercase tracking-[0.2em] text-rose-600'>Recent failures</p>
-                <div className='mt-3 space-y-2'>
+              <div className='mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-800'>
+                <p className='text-[10px] uppercase tracking-[0.18em] text-rose-600'>Recent failures</p>
+                <div className='mt-2 space-y-1.5'>
                   {shiprocketBulkVerifyJob.progress.recentFailures.map((failure) => (
-                    <div key={`${failure.orderId}-${failure.referenceOrderId}`} className='rounded-2xl bg-white px-3 py-3'>
-                      <p className='font-medium text-slate-900'>{failure.referenceOrderId || failure.orderId}</p>
-                      <p className='mt-1 text-sm text-rose-700'>{failure.message}</p>
+                    <div
+                      key={`${failure.orderId}-${failure.referenceOrderId}`}
+                      className='rounded-lg bg-white px-2.5 py-2'
+                    >
+                      <p className='font-semibold text-slate-900'>
+                        {failure.referenceOrderId || failure.orderId}
+                      </p>
+                      <p className='mt-0.5 text-rose-700'>{failure.message}</p>
                     </div>
                   ))}
                 </div>
               </div>
-            ) : (
-              <div className='rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500'>
-                Failed live-verification attempts will appear here while the job is running.
-              </div>
-            )}
-          </div>
-        </article>
-      </section>
-
-      <section className='grid gap-4 md:grid-cols-2 xl:grid-cols-5'>
-        {summaryCards.map((card) => (
-          <article key={card.label} className='rounded-3xl border border-slate-200 bg-white p-5 shadow-sm'>
-            <p className='text-sm text-slate-500'>{card.label}</p>
-            <p className={`mt-3 text-3xl font-semibold ${card.tone}`}>{card.value}</p>
+            ) : null}
           </article>
-        ))}
-      </section>
+        </section>
+      ) : null}
 
-      <section className='rounded-[32px] border border-slate-200 bg-white p-6 shadow-sm'>
-        <div className='grid gap-3 xl:grid-cols-[1.4fr_0.8fr_0.9fr]'>
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className='rounded-2xl border border-slate-300 px-4 py-3'
-            type='text'
-            placeholder='Search by customer name, order id, Shiprocket ref, or issue code'
-          />
+      {/* Sticky filter toolbar */}
+      <section className='sticky top-0 z-20 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur'>
+        <div className='grid gap-2 lg:grid-cols-[1.7fr_repeat(3,minmax(0,1fr))]'>
+          <div className='relative'>
+            <span className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400'>
+              <svg width='16' height='16' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+                <path
+                  d='M11 4a7 7 0 1 1-4.95 11.95l-3.79 3.79-1.42-1.42 3.79-3.79A7 7 0 0 1 11 4Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z'
+                  fill='currentColor'
+                />
+              </svg>
+            </span>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              type='text'
+              placeholder='Search by customer, order ID, Shiprocket ref, or issue code'
+              className='w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-9 pr-9 text-sm focus:border-slate-500 focus:outline-none'
+            />
+            {search ? (
+              <button
+                type='button'
+                onClick={() => setSearch('')}
+                className='absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                aria-label='Clear search'
+              >
+                <svg width='14' height='14' viewBox='0 0 24 24' fill='none'>
+                  <path d='M6 6l12 12M18 6L6 18' stroke='currentColor' strokeWidth='2' strokeLinecap='round' />
+                </svg>
+              </button>
+            ) : null}
+          </div>
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            className='rounded-2xl border border-slate-300 bg-white px-4 py-3'
+            className='rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700'
           >
-            <option value='all'>All statuses</option>
+            <option value='all'>All statuses ({orders.length})</option>
             {orderStatusOptions.map((status) => (
               <option key={status} value={status}>
-                {status}
+                {status} ({statusCounts[status] || 0})
               </option>
             ))}
           </select>
           <select
             value={shiprocketAuditFilter}
             onChange={(event) => setShiprocketAuditFilter(event.target.value)}
-            className='rounded-2xl border border-slate-300 bg-white px-4 py-3'
+            className='rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700'
           >
             <option value='all'>All Shiprocket states</option>
-            <option value='alerts'>Shiprocket alerts</option>
-            <option value='mismatch'>Only mismatches</option>
-            <option value='warning'>Needs review</option>
-            <option value='clear'>Verified / clear</option>
+            <option value='alerts'>Alerts ({shiprocketAuditCounts.alertCount})</option>
+            <option value='mismatch'>Mismatch ({shiprocketAuditCounts.mismatchCount})</option>
+            <option value='warning'>Needs review ({shiprocketAuditCounts.warningCount})</option>
+            <option value='clear'>Verified ({shiprocketAuditCounts.clearCount})</option>
           </select>
+          <select
+            value={sortField}
+            onChange={(event) => setSortField(event.target.value)}
+            className='rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700'
+          >
+            <option value='newest'>Newest first</option>
+            <option value='oldest'>Oldest first</option>
+            <option value='amount-desc'>Highest amount</option>
+            <option value='amount-asc'>Lowest amount</option>
+          </select>
+        </div>
+        <div className='mt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500'>
+          <span>
+            Showing <span className='font-semibold text-slate-900'>{visibleOrdersSorted.length}</span> of{' '}
+            {orders.length} orders
+          </span>
+          <div className='flex items-center gap-3'>
+            {hasActiveFilters ? (
+              <button type='button' onClick={clearAllFilters} className='font-semibold text-slate-700 hover:underline'>
+                Clear filters
+              </button>
+            ) : null}
+            {expandedOrderIds.size > 0 ? (
+              <button
+                type='button'
+                onClick={() => setExpandedOrderIds(new Set())}
+                className='font-semibold text-slate-700 hover:underline'
+              >
+                Collapse all
+              </button>
+            ) : null}
+            {visibleOrdersSorted.length > 0 && expandedOrderIds.size < visibleOrdersSorted.length ? (
+              <button
+                type='button'
+                onClick={() =>
+                  setExpandedOrderIds(new Set(visibleOrdersSorted.map((order) => String(order._id))))
+                }
+                className='font-semibold text-slate-700 hover:underline'
+              >
+                Expand all
+              </button>
+            ) : null}
+          </div>
         </div>
       </section>
 
-      <section className='space-y-4'>
+      {/* Orders list */}
+      <section className='space-y-3'>
         {isLoading ? (
           <div className='ui-loading-state'>Loading orders...</div>
-        ) : visibleOrders.length === 0 ? (
-          <div className='rounded-[32px] border border-slate-200 bg-white px-6 py-10 text-sm text-slate-500 shadow-sm'>
-            No orders matched the current filters.
+        ) : visibleOrdersSorted.length === 0 ? (
+          <div className='rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-500 shadow-sm'>
+            <p className='font-medium text-slate-700'>No orders match the current filters.</p>
+            <p className='mt-1'>Try clearing the search or selecting a different status.</p>
+            {hasActiveFilters ? (
+              <button
+                type='button'
+                onClick={clearAllFilters}
+                className='mt-4 rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50'
+              >
+                Clear filters
+              </button>
+            ) : null}
           </div>
         ) : (
-          visibleOrders.map((order) => {
-            const customerName = `${order.address?.firstName || ''} ${order.address?.lastName || ''}`.trim();
+          visibleOrdersSorted.map((order) => {
+            const orderIdString = String(order._id);
+            const isExpanded = expandedOrderIds.has(orderIdString);
+            const customerName =
+              `${order.address?.firstName || ''} ${order.address?.lastName || ''}`.trim() || 'Customer';
             const shiprocketAudit = resolveOrderShiprocketAudit(order);
             const shiprocketAuditBadge = getShiprocketAuditBadge(shiprocketAudit);
             const expectedShiprocket = shiprocketAudit.expectedShiprocket || {};
@@ -1607,51 +2008,123 @@ const Orders = ({ token }) => {
             const liveShiprocketSnapshot = liveVerification.snapshot || null;
             const activeShiprocketAction = shiprocketActionByOrderId[order._id] || '';
             const canVerifyLive = Boolean(order.shiprocket?.orderId);
+            const tab = orderTabById[orderIdString] || 'customer';
+            const accentBarClass =
+              order.status === 'Cancelled'
+                ? 'bg-rose-400'
+                : order.status === 'Delivered'
+                  ? 'bg-emerald-400'
+                  : ['Shipped', 'Out for delivery'].includes(order.status)
+                    ? 'bg-sky-400'
+                    : order.status === 'Packing'
+                      ? 'bg-amber-400'
+                      : 'bg-slate-300';
+            const stageIndex = order.status === 'Cancelled' ? -1 : STAGE_TIMELINE.indexOf(order.status);
+            const totalItemsCount = order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+            const fullAddressForMaps = [
+              order.address?.street,
+              order.address?.city,
+              order.address?.state,
+              order.address?.pincode,
+              order.address?.country,
+            ]
+              .filter(Boolean)
+              .join(', ');
+            const showShiprocketBadge =
+              shiprocketAudit.hasMismatch ||
+              shiprocketAudit.hasWarning ||
+              (shiprocketAudit.syncStatus && shiprocketAudit.syncStatus !== 'not_required');
 
             return (
               <article
                 key={order._id}
-                className={`rounded-[32px] border bg-white p-5 shadow-sm transition-all duration-500 ${
-                  highlightedOrderId === String(order._id)
-                    ? 'border-sky-300 shadow-[0_0_0_3px_rgba(125,211,252,0.35)]'
-                    : 'border-slate-200'
+                className={`relative overflow-hidden rounded-2xl border bg-white shadow-sm transition-all duration-300 ${
+                  highlightedOrderId === orderIdString
+                    ? 'border-sky-300 ring-2 ring-sky-200'
+                    : 'border-slate-200 hover:border-slate-300'
                 }`}
               >
-                <div className='flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between'>
-                  <div>
+                <div className={`absolute left-0 top-0 h-full w-1 ${accentBarClass}`} aria-hidden='true' />
+
+                {/* Compact header row */}
+                <div className='flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between'>
+                  <div className='flex min-w-0 flex-1 flex-col gap-2'>
                     <div className='flex flex-wrap items-center gap-2'>
-                      <h2 className='text-lg font-semibold text-slate-900'>#{order._id.slice(-8).toUpperCase()}</h2>
+                      <button
+                        type='button'
+                        onClick={() => handleCopyOrderId(order._id)}
+                        title='Copy full order ID'
+                        className='inline-flex items-center gap-1 rounded-md text-base font-semibold text-slate-900 hover:text-slate-600'
+                      >
+                        #{order._id.slice(-8).toUpperCase()}
+                        <svg
+                          width='12'
+                          height='12'
+                          viewBox='0 0 24 24'
+                          fill='none'
+                          className='text-slate-400'
+                          aria-hidden='true'
+                        >
+                          <path
+                            d='M8 4h10a2 2 0 0 1 2 2v12h-2V6H8V4Zm-4 4h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Zm0 2v10h10V10H4Z'
+                            fill='currentColor'
+                          />
+                        </svg>
+                      </button>
                       <span
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getStatusClasses(
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${getStatusClasses(
                           order.status
                         )}`}
                       >
                         {order.status}
                       </span>
-                      <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-700'>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                          order.payment
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : order.status === 'Cancelled'
+                              ? 'bg-rose-50 text-rose-700'
+                              : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {getPaymentLabel(order)}
+                      </span>
+                      <span className='rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-700'>
                         {order.paymentMethod}
                       </span>
-                      <span
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${shiprocketAuditBadge.className}`}
-                      >
-                        {shiprocketAuditBadge.label}
-                      </span>
+                      {showShiprocketBadge ? (
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${shiprocketAuditBadge.className}`}
+                        >
+                          {shiprocketAuditBadge.label}
+                        </span>
+                      ) : null}
                     </div>
-                    <p className='mt-2 text-sm text-slate-500'>{customerName || 'Customer order'}</p>
-                    <p className='mt-1 text-sm text-slate-500'>{formatDate(order.date)}</p>
+                    <div className='flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600'>
+                      <span className='font-medium text-slate-900'>{customerName}</span>
+                      {order.address?.city ? (
+                        <span>
+                          {order.address.city}
+                          {order.address?.state ? `, ${order.address.state}` : ''}
+                        </span>
+                      ) : null}
+                      <span>
+                        {totalItemsCount} item{totalItemsCount === 1 ? '' : 's'}
+                      </span>
+                      <span>{formatDate(order.date)}</span>
+                    </div>
                   </div>
 
-                  <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
-                    <div className='rounded-2xl bg-slate-50 px-4 py-3'>
-                      <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Amount</p>
-                      <p className='mt-1 text-lg font-semibold text-slate-900'>{formatCurrency(order.amount)}</p>
+                  <div className='flex shrink-0 flex-wrap items-center gap-2'>
+                    <div className='text-right'>
+                      <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Order total</p>
+                      <p className='text-lg font-semibold text-slate-900'>{formatCurrency(order.amount)}</p>
                     </div>
-
                     <select
                       onChange={(event) => statusHandler(event, order._id)}
                       value={order.status}
                       disabled={updatingOrderId === order._id}
-                      className='rounded-2xl border border-slate-300 bg-white px-4 py-3 font-medium text-slate-700 disabled:opacity-60'
+                      className='rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60'
                     >
                       {getAvailableStatusOptions(order).map((status) => (
                         <option key={status} value={status}>
@@ -1659,288 +2132,622 @@ const Orders = ({ token }) => {
                         </option>
                       ))}
                     </select>
+                    <button
+                      type='button'
+                      onClick={() => toggleOrderExpanded(orderIdString)}
+                      aria-expanded={isExpanded}
+                      className='inline-flex items-center gap-1.5 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50'
+                    >
+                      {isExpanded ? 'Hide details' : 'View details'}
+                      <svg
+                        width='12'
+                        height='12'
+                        viewBox='0 0 24 24'
+                        fill='none'
+                        className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        aria-hidden='true'
+                      >
+                        <path
+                          d='M6 9l6 6 6-6'
+                          stroke='currentColor'
+                          strokeWidth='2'
+                          strokeLinecap='round'
+                          strokeLinejoin='round'
+                        />
+                      </svg>
+                    </button>
                   </div>
                 </div>
 
-                <div className='mt-5 grid gap-4 xl:grid-cols-2 2xl:grid-cols-[1.2fr_1.1fr_0.9fr_1.1fr]'>
-                  <div className='rounded-3xl bg-slate-50 p-4'>
-                    <p className='text-sm font-medium text-slate-900'>Ordered items</p>
-                    <div className='mt-3 space-y-2 text-sm text-slate-600'>
-                      {order.items.map((item, index) => (
-                        <div
-                          key={`${order._id}-${index}`}
-                          className='flex items-center justify-between gap-3 rounded-2xl bg-white px-3 py-3'
-                        >
-                          <div className='flex min-w-0 items-center gap-3'>
-                            {getItemImageUrl(item) ? (
-                              <img
-                                src={getItemImageUrl(item)}
-                                alt={item.name}
-                                className='h-14 w-12 rounded-xl border border-slate-200 object-cover'
-                              />
-                            ) : (
-                              <div className='flex h-14 w-12 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-[11px] uppercase tracking-[0.15em] text-slate-500'>
-                                No image
-                              </div>
-                            )}
-                            <div className='min-w-0'>
-                              <p className='truncate font-medium text-slate-900'>{item.name}</p>
-                              <p className='text-xs text-slate-500'>Size {item.size || '-'}</p>
+                {/* Mini timeline */}
+                {order.status !== 'Cancelled' ? (
+                  <div className='border-t border-slate-100 px-5 py-3'>
+                    <div className='flex items-center gap-1.5'>
+                      {STAGE_TIMELINE.map((stage, idx) => {
+                        const reached = idx <= stageIndex;
+                        const current = idx === stageIndex;
+                        return (
+                          <div key={stage} className='flex flex-1 items-center gap-1.5'>
+                            <div className='flex flex-col items-center gap-1'>
+                              <span
+                                className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                                  reached
+                                    ? current
+                                      ? 'bg-slate-900 text-white ring-4 ring-slate-200'
+                                      : 'bg-slate-900 text-white'
+                                    : 'bg-slate-100 text-slate-400'
+                                }`}
+                              >
+                                {reached ? 'âœ“' : idx + 1}
+                              </span>
+                              <span
+                                className={`hidden text-[10px] uppercase tracking-[0.14em] sm:block ${
+                                  reached ? 'text-slate-700' : 'text-slate-400'
+                                }`}
+                              >
+                                {stage}
+                              </span>
                             </div>
+                            {idx < STAGE_TIMELINE.length - 1 ? (
+                              <span
+                                className={`mx-0.5 h-[2px] flex-1 rounded-full ${
+                                  idx < stageIndex ? 'bg-slate-900' : 'bg-slate-200'
+                                }`}
+                              />
+                            ) : null}
                           </div>
-                          <div className='text-right'>
-                            <p className='font-medium text-slate-900'>x{item.quantity}</p>
-                            <p className='text-xs text-slate-500'>{formatCurrency(item.price)}</p>
-                          </div>
-                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className='border-t border-slate-100 bg-rose-50/50 px-5 py-2 text-xs text-rose-700'>
+                    Order cancelled. {order.payment ? 'Refund must be processed.' : 'No payment received.'}
+                  </div>
+                )}
+
+                {/* Expanded panel */}
+                {isExpanded ? (
+                  <div className='border-t border-slate-200 bg-slate-50/50'>
+                    <div className='flex items-center gap-1 border-b border-slate-200 bg-white px-5'>
+                      {[
+                        { id: 'customer', label: 'Customer & Items' },
+                        { id: 'payment', label: 'Payment' },
+                        {
+                          id: 'shiprocket',
+                          label: shiprocketAudit.hasMismatch
+                            ? 'Shiprocket âš '
+                            : shiprocketAudit.hasWarning
+                              ? 'Shiprocket â€¢'
+                              : 'Shiprocket',
+                        },
+                      ].map((tabItem) => (
+                        <button
+                          key={tabItem.id}
+                          type='button'
+                          onClick={() => setOrderTab(orderIdString, tabItem.id)}
+                          className={`relative px-3 py-3 text-sm font-medium transition ${
+                            tab === tabItem.id ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          {tabItem.label}
+                          {tab === tabItem.id ? (
+                            <span className='absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-slate-900' />
+                          ) : null}
+                        </button>
                       ))}
                     </div>
-                  </div>
 
-                  <div className='rounded-3xl bg-slate-50 p-4'>
-                    <p className='text-sm font-medium text-slate-900'>Delivery details</p>
-                    <div className='mt-3 space-y-2 text-sm leading-6 text-slate-600'>
-                      <p className='font-medium text-slate-900'>{customerName}</p>
-                      <p>{order.address?.street}</p>
-                      <p>
-                        {order.address?.city}, {order.address?.state}, {order.address?.country}
-                      </p>
-                      <p>{order.address?.pincode}</p>
-                      <p>{order.address?.phone}</p>
-                    </div>
-                  </div>
+                    <div className='px-5 py-5'>
+                      {tab === 'customer' ? (
+                        <div className='grid gap-4 lg:grid-cols-[1.1fr_0.9fr]'>
+                          <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                            <div className='flex items-center justify-between'>
+                              <p className='text-sm font-semibold text-slate-900'>Ordered items</p>
+                              <span className='text-xs text-slate-500'>
+                                {order.items.length} line{order.items.length === 1 ? '' : 's'}
+                              </span>
+                            </div>
+                            <div className='mt-3 space-y-2'>
+                              {order.items.map((item, index) => (
+                                <div
+                                  key={`${order._id}-${index}`}
+                                  className='flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-2.5'
+                                >
+                                  {getItemImageUrl(item) ? (
+                                    <img
+                                      src={getItemImageUrl(item)}
+                                      alt={item.name}
+                                      className='h-12 w-10 rounded-lg border border-white object-cover shadow-sm'
+                                    />
+                                  ) : (
+                                    <div className='flex h-12 w-10 items-center justify-center rounded-lg bg-white text-[9px] uppercase tracking-[0.12em] text-slate-400'>
+                                      No img
+                                    </div>
+                                  )}
+                                  <div className='min-w-0 flex-1'>
+                                    <p className='truncate text-sm font-medium text-slate-900'>{item.name}</p>
+                                    <p className='text-xs text-slate-500'>
+                                      Size {item.size || 'â€”'} Â· {formatCurrency(item.price)}
+                                    </p>
+                                  </div>
+                                  <div className='shrink-0 text-right'>
+                                    <p className='text-sm font-semibold text-slate-900'>Ã—{item.quantity}</p>
+                                    <p className='text-xs text-slate-500'>
+                                      {formatCurrency(Number(item.price || 0) * Number(item.quantity || 0))}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
 
-                  <div className='rounded-3xl bg-slate-50 p-4'>
-                    <p className='text-sm font-medium text-slate-900'>Payment snapshot</p>
-                    <div className='mt-3 space-y-3 text-sm text-slate-600'>
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Payment</p>
-                        <p className='mt-1 font-medium text-slate-900'>{getPaymentLabel(order)}</p>
-                      </div>
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Method</p>
-                        <p className='mt-1 font-medium text-slate-900'>{order.paymentMethod}</p>
-                      </div>
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Line items</p>
-                        <p className='mt-1 font-medium text-slate-900'>{order.items.length}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className='rounded-3xl bg-slate-50 p-4'>
-                    <div className='flex items-start justify-between gap-3'>
-                      <div>
-                        <p className='text-sm font-medium text-slate-900'>Shiprocket audit</p>
-                        <p className='mt-1 text-xs uppercase tracking-[0.18em] text-slate-500'>
-                          {formatEnumLabel(shiprocketAudit.syncStatus || order.shiprocket?.syncStatus, 'Not synced')}
-                        </p>
-                      </div>
-                      <span
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${shiprocketAuditBadge.className}`}
-                      >
-                        {shiprocketAuditBadge.label}
-                      </span>
-                    </div>
-
-                    <div className='mt-3 space-y-3 text-sm text-slate-600'>
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Reference</p>
-                        <p className='mt-1 font-medium text-slate-900'>
-                          {order.shiprocket?.referenceOrderId || 'Not assigned'}
-                        </p>
-                        {order.shiprocket?.referenceOrderId ? (
-                          <p className='mt-2 text-xs text-slate-500'>
-                            {shiprocketAudit.remoteOrderTracked
-                              ? 'Shiprocket has a remote order linked to this reference.'
-                              : 'This reference is reserved locally. Shiprocket sync has not finished yet.'}
-                          </p>
-                        ) : null}
-                        <div className='mt-3 flex flex-wrap gap-2'>
-                          <button
-                            type='button'
-                            onClick={() => verifyShiprocketPricingLive(order._id)}
-                            disabled={!canVerifyLive || Boolean(activeShiprocketAction)}
-                            className='rounded-full border border-slate-300 px-4 py-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-60'
-                          >
-                            {activeShiprocketAction === 'verify_live' ? 'Verifying live...' : 'Verify live'}
-                          </button>
+                          <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                            <p className='text-sm font-semibold text-slate-900'>Customer & delivery</p>
+                            <div className='mt-3 space-y-3 text-sm'>
+                              <div>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Name</p>
+                                <p className='mt-0.5 font-medium text-slate-900'>{customerName}</p>
+                              </div>
+                              <div>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>
+                                  Shipping address
+                                </p>
+                                <p className='mt-0.5 leading-6 text-slate-700'>
+                                  {order.address?.street}
+                                  <br />
+                                  {order.address?.city}
+                                  {order.address?.city && order.address?.state ? ', ' : ''}
+                                  {order.address?.state} {order.address?.pincode}
+                                  <br />
+                                  {order.address?.country}
+                                </p>
+                                {fullAddressForMaps ? (
+                                  <a
+                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddressForMaps)}`}
+                                    target='_blank'
+                                    rel='noopener noreferrer'
+                                    className='mt-2 inline-flex items-center gap-1 text-xs font-semibold text-sky-700 hover:underline'
+                                  >
+                                    Open in Maps â†’
+                                  </a>
+                                ) : null}
+                              </div>
+                              {order.address?.phone ? (
+                                <div className='flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2'>
+                                  <div>
+                                    <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Phone</p>
+                                    <p className='mt-0.5 font-medium text-slate-900'>{order.address.phone}</p>
+                                  </div>
+                                  <a
+                                    href={`tel:${order.address.phone}`}
+                                    className='rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100'
+                                  >
+                                    Call
+                                  </a>
+                                </div>
+                              ) : null}
+                              {order.address?.email ? (
+                                <div className='flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2'>
+                                  <div className='min-w-0'>
+                                    <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Email</p>
+                                    <p className='mt-0.5 truncate font-medium text-slate-900'>
+                                      {order.address.email}
+                                    </p>
+                                  </div>
+                                  <a
+                                    href={`mailto:${order.address.email}`}
+                                    className='shrink-0 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100'
+                                  >
+                                    Email
+                                  </a>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
                         </div>
-                        {!canVerifyLive ? (
-                          <p className='mt-2 text-xs text-slate-500'>
-                            Sync this order to Shiprocket before running live verification.
-                          </p>
-                        ) : null}
-                      </div>
+                      ) : null}
 
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Expected payload</p>
-                        <div className='mt-2 space-y-1.5'>
-                          <div className='flex items-center justify-between'>
-                            <span>Sub total</span>
-                            <span>{formatCurrency(expectedShiprocket.subTotal)}</span>
+                      {tab === 'payment' ? (
+                        <div className='grid gap-4 lg:grid-cols-2'>
+                          <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                            <p className='text-sm font-semibold text-slate-900'>Payment status</p>
+                            <div className='mt-3 grid grid-cols-2 gap-2'>
+                              <div className='rounded-xl bg-slate-50 px-3 py-2.5'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Status</p>
+                                <p className='mt-1 text-sm font-semibold text-slate-900'>{getPaymentLabel(order)}</p>
+                              </div>
+                              <div className='rounded-xl bg-slate-50 px-3 py-2.5'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Method</p>
+                                <p className='mt-1 text-sm font-semibold text-slate-900'>{order.paymentMethod}</p>
+                              </div>
+                              <div className='rounded-xl bg-slate-50 px-3 py-2.5'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Items</p>
+                                <p className='mt-1 text-sm font-semibold text-slate-900'>{order.items.length}</p>
+                              </div>
+                              <div className='rounded-xl bg-slate-50 px-3 py-2.5'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Placed</p>
+                                <p className='mt-1 text-sm font-semibold text-slate-900'>{formatDate(order.date)}</p>
+                              </div>
+                            </div>
                           </div>
-                          <div className='flex items-center justify-between'>
-                            <span>Shipping</span>
-                            <span>{formatCurrency(expectedShiprocket.shippingCharges)}</span>
-                          </div>
-                          <div className='flex items-center justify-between'>
-                            <span>Discount</span>
-                            <span>-{formatCurrency(expectedShiprocket.totalDiscount)}</span>
-                          </div>
-                          <div className='flex items-center justify-between border-t border-slate-200 pt-2 font-medium text-slate-900'>
-                            <span>Payload total</span>
-                            <span>{formatCurrency(expectedShiprocket.derivedFinalAmount)}</span>
+                          <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                            <p className='text-sm font-semibold text-slate-900'>Pricing breakdown</p>
+                            <div className='mt-3 space-y-2 text-sm'>
+                              <div className='flex items-center justify-between'>
+                                <span className='text-slate-600'>Items subtotal</span>
+                                <span className='font-medium text-slate-900'>
+                                  {formatCurrency(shiprocketAudit.local?.itemsSubtotal)}
+                                </span>
+                              </div>
+                              <div className='flex items-center justify-between'>
+                                <span className='text-slate-600'>Discount</span>
+                                <span className='font-medium text-rose-700'>
+                                  -{formatCurrency(shiprocketAudit.local?.discountAmount)}
+                                </span>
+                              </div>
+                              <div className='flex items-center justify-between'>
+                                <span className='text-slate-600'>Shipping</span>
+                                <span className='font-medium text-slate-900'>
+                                  {formatCurrency(shiprocketAudit.local?.shippingCharges)}
+                                </span>
+                              </div>
+                              <div className='mt-2 flex items-center justify-between border-t border-slate-200 pt-2'>
+                                <span className='text-sm font-semibold text-slate-900'>Order total</span>
+                                <span className='text-base font-semibold text-slate-900'>
+                                  {formatCurrency(order.amount)}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      ) : null}
 
-                      {storedShiprocketSnapshot ? (
-                        <div className='rounded-2xl bg-white px-3 py-3'>
-                          <div className='flex items-start justify-between gap-3'>
+                      {tab === 'shiprocket' ? (
+                        <div className='space-y-4'>
+                          <div className='flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-start sm:justify-between'>
                             <div>
-                              <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Last synced snapshot</p>
+                              <div className='flex items-center gap-2'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Reference</p>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${shiprocketAuditBadge.className}`}
+                                >
+                                  {shiprocketAuditBadge.label}
+                                </span>
+                              </div>
+                              <p className='mt-1 text-base font-semibold text-slate-900'>
+                                {order.shiprocket?.referenceOrderId || 'Not assigned'}
+                              </p>
                               <p className='mt-1 text-xs text-slate-500'>
-                                Captured {formatDateTime(storedShiprocketSnapshot.capturedAt)}
+                                {!order.shiprocket?.referenceOrderId
+                                  ? 'No Shiprocket reference linked yet.'
+                                  : shiprocketAudit.remoteOrderTracked
+                                    ? 'Linked to a remote Shiprocket order.'
+                                    : 'Reserved locally â€” Shiprocket sync still pending.'}
                               </p>
                             </div>
-                            <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-700'>
-                              v{storedShiprocketSnapshot.formulaVersion || 2}
-                            </span>
-                          </div>
-                          <div className='mt-2 space-y-1.5'>
-                            <div className='flex items-center justify-between'>
-                              <span>Sub total</span>
-                              <span>{formatCurrency(storedShiprocketSnapshot.subTotal)}</span>
-                            </div>
-                            <div className='flex items-center justify-between'>
-                              <span>Shipping</span>
-                              <span>{formatCurrency(storedShiprocketSnapshot.shippingCharges)}</span>
-                            </div>
-                            <div className='flex items-center justify-between'>
-                              <span>Discount</span>
-                              <span>-{formatCurrency(storedShiprocketSnapshot.totalDiscount)}</span>
-                            </div>
-                            <div className='flex items-center justify-between border-t border-slate-200 pt-2 font-medium text-slate-900'>
-                              <span>Snapshot total</span>
-                              <span>{formatCurrency(storedShiprocketSnapshot.derivedFinalAmount)}</span>
+                            <div className='flex flex-col items-stretch gap-2 sm:items-end'>
+                              <button
+                                type='button'
+                                onClick={() => verifyShiprocketPricingLive(order._id)}
+                                disabled={!canVerifyLive || Boolean(activeShiprocketAction)}
+                                className='rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60'
+                              >
+                                {activeShiprocketAction === 'verify_live' ? 'Verifyingâ€¦' : 'Verify live pricing'}
+                              </button>
+                              {!canVerifyLive ? (
+                                <p className='text-[11px] text-slate-500 sm:text-right'>Sync to Shiprocket first.</p>
+                              ) : null}
                             </div>
                           </div>
-                          <p
-                            className={`mt-3 text-xs ${
-                              Math.abs(Number(storedShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
-                                ? 'text-rose-600'
-                                : 'text-emerald-600'
-                            }`}
-                          >
-                            {Math.abs(Number(storedShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
-                              ? `Snapshot delta ${formatCurrency(storedShiprocketSnapshot.derivedFinalAmountDelta)}`
-                              : 'Snapshot matches the current expected Shiprocket total.'}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className='rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500'>
-                          No Shiprocket pricing snapshot is stored yet for this order.
-                        </div>
-                      )}
 
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <div className='flex items-start justify-between gap-3'>
-                          <div>
-                            <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Live Shiprocket check</p>
-                            <p className='mt-1 text-xs text-slate-500'>
-                              {liveVerification.verifiedAt
-                                ? `Verified ${formatDateTime(liveVerification.verifiedAt)}`
-                                : 'Not verified yet'}
-                            </p>
-                          </div>
-                          <span className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-700'>
-                            {formatEnumLabel(liveVerification.status, 'Not verified')}
-                          </span>
-                        </div>
+                          {order.status === 'Cancelled' && order.shiprocket?.orderId ? (
+                            (() => {
+                              const cancelStatus = String(order.shiprocket?.cancelStatus || '').toLowerCase();
+                              const cancelStyle =
+                                cancelStatus === 'cancelled'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                  : cancelStatus === 'failed'
+                                    ? 'border-rose-200 bg-rose-50 text-rose-800'
+                                    : cancelStatus === 'pending'
+                                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                      : 'border-slate-200 bg-slate-50 text-slate-700';
+                              const cancelLabel =
+                                cancelStatus === 'cancelled'
+                                  ? 'Cancelled at Shiprocket'
+                                  : cancelStatus === 'failed'
+                                    ? 'Shiprocket cancel failed'
+                                    : cancelStatus === 'pending'
+                                      ? 'Shiprocket cancel pending'
+                                      : 'Shiprocket cancel not requested';
+                              return (
+                                <div className={`rounded-2xl border px-4 py-3 text-sm ${cancelStyle}`}>
+                                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                                    <p className='text-[10px] font-semibold uppercase tracking-[0.18em]'>
+                                      {cancelLabel}
+                                    </p>
+                                    {order.shiprocket?.cancelledAt ? (
+                                      <p className='text-[11px] opacity-80'>
+                                        {formatDateTime(order.shiprocket.cancelledAt)}
+                                      </p>
+                                    ) : order.shiprocket?.cancelAttemptedAt ? (
+                                      <p className='text-[11px] opacity-80'>
+                                        Attempted {formatDateTime(order.shiprocket.cancelAttemptedAt)}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  {order.shiprocket?.cancelError ? (
+                                    <p className='mt-1 text-xs'>{order.shiprocket.cancelError}</p>
+                                  ) : cancelStatus === 'cancelled' ? (
+                                    <p className='mt-1 text-xs'>
+                                      Shipment will not be dispatched. No further action needed.
+                                    </p>
+                                  ) : cancelStatus === 'pending' ? (
+                                    <p className='mt-1 text-xs'>
+                                      Awaiting confirmation from Shiprocket. Refresh the order in a moment.
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })()
+                          ) : null}
 
-                        {liveShiprocketSnapshot ? (
-                          <div className='mt-2 space-y-1.5'>
-                            <div className='flex items-center justify-between'>
-                              <span>Sub total</span>
-                              <span>{formatCurrency(liveShiprocketSnapshot.subTotal)}</span>
-                            </div>
-                            <div className='flex items-center justify-between'>
-                              <span>Shipping</span>
-                              <span>{formatCurrency(liveShiprocketSnapshot.shippingCharges)}</span>
-                            </div>
-                            <div className='flex items-center justify-between'>
-                              <span>Discount</span>
-                              <span>-{formatCurrency(liveShiprocketSnapshot.totalDiscount)}</span>
-                            </div>
-                            <div className='flex items-center justify-between border-t border-slate-200 pt-2 font-medium text-slate-900'>
-                              <span>Live total</span>
-                              <span>{formatCurrency(liveShiprocketSnapshot.derivedFinalAmount)}</span>
-                            </div>
-                            <p
-                              className={`text-xs ${
-                                Math.abs(Number(liveShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
-                                  ? 'text-rose-600'
-                                  : 'text-emerald-600'
-                              }`}
-                            >
-                              {Math.abs(Number(liveShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
-                                ? `Live delta ${formatCurrency(liveShiprocketSnapshot.derivedFinalAmountDelta)}`
-                                : 'Live Shiprocket pricing matches the expected payload.'}
-                            </p>
-                          </div>
-                        ) : (
-                          <p className='mt-2 text-sm text-slate-500'>
-                            {liveVerification.error || 'Run live verification for the current Shiprocket order details.'}
-                          </p>
-                        )}
-                      </div>
+                          {order.status === 'Cancelled' && order.shiprocket?.orderId ? (
+                            (() => {
+                              const cancelStatus = String(order.shiprocket?.cancelStatus || '').toLowerCase();
+                              const cancelStyle =
+                                cancelStatus === 'cancelled'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                  : cancelStatus === 'failed'
+                                    ? 'border-rose-200 bg-rose-50 text-rose-800'
+                                    : cancelStatus === 'pending'
+                                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                      : 'border-slate-200 bg-slate-50 text-slate-700';
+                              const cancelLabel =
+                                cancelStatus === 'cancelled'
+                                  ? 'Cancelled at Shiprocket'
+                                  : cancelStatus === 'failed'
+                                    ? 'Shiprocket cancel failed'
+                                    : cancelStatus === 'pending'
+                                      ? 'Shiprocket cancel pending'
+                                      : 'Shiprocket cancel not requested';
+                              return (
+                                <div className={`rounded-2xl border px-4 py-3 text-sm ${cancelStyle}`}>
+                                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                                    <p className='text-[10px] font-semibold uppercase tracking-[0.18em]'>
+                                      {cancelLabel}
+                                    </p>
+                                    {order.shiprocket?.cancelledAt ? (
+                                      <p className='text-[11px] opacity-80'>
+                                        {formatDateTime(order.shiprocket.cancelledAt)}
+                                      </p>
+                                    ) : order.shiprocket?.cancelAttemptedAt ? (
+                                      <p className='text-[11px] opacity-80'>
+                                        Attempted {formatDateTime(order.shiprocket.cancelAttemptedAt)}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  {order.shiprocket?.cancelError ? (
+                                    <p className='mt-1 text-xs'>{order.shiprocket.cancelError}</p>
+                                  ) : cancelStatus === 'cancelled' ? (
+                                    <p className='mt-1 text-xs'>
+                                      Shipment will not be dispatched. No further action needed.
+                                    </p>
+                                  ) : cancelStatus === 'pending' ? (
+                                    <p className='mt-1 text-xs'>
+                                      Awaiting confirmation from Shiprocket. Refresh the order in a moment.
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })()
+                          ) : null}
 
-                      <div className='rounded-2xl bg-white px-3 py-3'>
-                        <p className='text-xs uppercase tracking-[0.2em] text-slate-400'>Local order check</p>
-                        <div className='mt-2 space-y-1.5'>
-                          <div className='flex items-center justify-between'>
-                            <span>Items subtotal</span>
-                            <span>{formatCurrency(shiprocketAudit.local?.itemsSubtotal)}</span>
-                          </div>
-                          <div className='flex items-center justify-between'>
-                            <span>Stored subtotal</span>
-                            <span>{formatCurrency(shiprocketAudit.local?.storedSubtotal)}</span>
-                          </div>
-                          <div className='flex items-center justify-between'>
-                            <span>Order amount</span>
-                            <span>{formatCurrency(shiprocketAudit.local?.amount)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {shiprocketAudit.issues?.length > 0 ? (
-                        <div className='space-y-2'>
-                          {shiprocketAudit.issues.map((issue) => (
-                            <div
-                              key={`${order._id}-${issue.code}`}
-                              className={`rounded-2xl border px-3 py-3 text-sm ${getAuditIssueClasses(issue.severity)}`}
-                            >
-                              <p className='text-[10px] uppercase tracking-[0.18em]'>
-                                {issue.severity === 'error' ? 'Mismatch' : 'Review'}
+                          <div className='grid gap-3 lg:grid-cols-3'>
+                            <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                              <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>
+                                Expected payload
                               </p>
-                              <p className='mt-1 font-medium'>{issue.message}</p>
+                              <p className='mt-1 text-base font-semibold text-slate-900'>
+                                {formatCurrency(expectedShiprocket.derivedFinalAmount)}
+                              </p>
+                              <div className='mt-3 space-y-1 text-xs text-slate-600'>
+                                <div className='flex items-center justify-between'>
+                                  <span>Sub total</span>
+                                  <span>{formatCurrency(expectedShiprocket.subTotal)}</span>
+                                </div>
+                                <div className='flex items-center justify-between'>
+                                  <span>Shipping</span>
+                                  <span>{formatCurrency(expectedShiprocket.shippingCharges)}</span>
+                                </div>
+                                <div className='flex items-center justify-between'>
+                                  <span>Discount</span>
+                                  <span>-{formatCurrency(expectedShiprocket.totalDiscount)}</span>
+                                </div>
+                              </div>
                             </div>
-                          ))}
+
+                            <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                              <div className='flex items-center justify-between'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>
+                                  Stored snapshot
+                                </p>
+                                {storedShiprocketSnapshot ? (
+                                  <span className='rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600'>
+                                    v{storedShiprocketSnapshot.formulaVersion || 2}
+                                  </span>
+                                ) : null}
+                              </div>
+                              {storedShiprocketSnapshot ? (
+                                <>
+                                  <p className='mt-1 text-base font-semibold text-slate-900'>
+                                    {formatCurrency(storedShiprocketSnapshot.derivedFinalAmount)}
+                                  </p>
+                                  <div className='mt-3 space-y-1 text-xs text-slate-600'>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Sub total</span>
+                                      <span>{formatCurrency(storedShiprocketSnapshot.subTotal)}</span>
+                                    </div>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Shipping</span>
+                                      <span>{formatCurrency(storedShiprocketSnapshot.shippingCharges)}</span>
+                                    </div>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Discount</span>
+                                      <span>-{formatCurrency(storedShiprocketSnapshot.totalDiscount)}</span>
+                                    </div>
+                                  </div>
+                                  <p
+                                    className={`mt-3 text-[11px] font-medium ${
+                                      Math.abs(Number(storedShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
+                                        ? 'text-rose-600'
+                                        : 'text-emerald-600'
+                                    }`}
+                                  >
+                                    {Math.abs(Number(storedShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
+                                      ? `Î” ${formatCurrency(storedShiprocketSnapshot.derivedFinalAmountDelta)}`
+                                      : 'Matches expected'}
+                                  </p>
+                                  <p className='mt-1 text-[11px] text-slate-500'>
+                                    Captured {formatDateTime(storedShiprocketSnapshot.capturedAt)}
+                                  </p>
+                                </>
+                              ) : (
+                                <p className='mt-3 text-xs text-slate-500'>No snapshot stored yet.</p>
+                              )}
+                            </div>
+
+                            <div className='rounded-2xl border border-slate-200 bg-white p-4'>
+                              <div className='flex items-center justify-between'>
+                                <p className='text-[10px] uppercase tracking-[0.18em] text-slate-400'>Live check</p>
+                                <span className='rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600'>
+                                  {formatEnumLabel(liveVerification.status, 'Not verified')}
+                                </span>
+                              </div>
+                              {liveShiprocketSnapshot ? (
+                                <>
+                                  <p className='mt-1 text-base font-semibold text-slate-900'>
+                                    {formatCurrency(liveShiprocketSnapshot.derivedFinalAmount)}
+                                  </p>
+                                  <div className='mt-3 space-y-1 text-xs text-slate-600'>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Sub total</span>
+                                      <span>{formatCurrency(liveShiprocketSnapshot.subTotal)}</span>
+                                    </div>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Shipping</span>
+                                      <span>{formatCurrency(liveShiprocketSnapshot.shippingCharges)}</span>
+                                    </div>
+                                    <div className='flex items-center justify-between'>
+                                      <span>Discount</span>
+                                      <span>-{formatCurrency(liveShiprocketSnapshot.totalDiscount)}</span>
+                                    </div>
+                                  </div>
+                                  <p
+                                    className={`mt-3 text-[11px] font-medium ${
+                                      Math.abs(Number(liveShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
+                                        ? 'text-rose-600'
+                                        : 'text-emerald-600'
+                                    }`}
+                                  >
+                                    {Math.abs(Number(liveShiprocketSnapshot.derivedFinalAmountDelta || 0)) > 0.01
+                                      ? `Î” ${formatCurrency(liveShiprocketSnapshot.derivedFinalAmountDelta)}`
+                                      : 'Matches expected'}
+                                  </p>
+                                  <p className='mt-1 text-[11px] text-slate-500'>
+                                    {liveVerification.verifiedAt
+                                      ? `Verified ${formatDateTime(liveVerification.verifiedAt)}`
+                                      : 'Awaiting verification'}
+                                  </p>
+                                </>
+                              ) : (
+                                <p className='mt-3 text-xs text-slate-500'>
+                                  {liveVerification.error ||
+                                    'Run live verification to compare with Shiprocket directly.'}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {shiprocketAudit.issues?.length > 0 ? (
+                            <div className='space-y-2'>
+                              {shiprocketAudit.issues.map((issue) => (
+                                <div
+                                  key={`${order._id}-${issue.code}`}
+                                  className={`rounded-xl border px-3 py-3 text-sm ${getAuditIssueClasses(issue.severity)}`}
+                                >
+                                  <p className='text-[10px] font-semibold uppercase tracking-[0.18em]'>
+                                    {issue.severity === 'error' ? 'Mismatch' : 'Review'}
+                                  </p>
+                                  <p className='mt-1'>{issue.message}</p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800'>
+                              âœ“ Shiprocket pricing aligned with the current order breakdown.
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <div className='rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800'>
-                          Shiprocket pricing is aligned with the current order breakdown.
-                        </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
-                </div>
+                ) : null}
               </article>
             );
           })
         )}
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingCancelOrderId)}
+        title='Cancel this order?'
+        description={
+          pendingCancelOrderId
+            ? `Cancelling #${orders.find((o) => o._id === pendingCancelOrderId)?.orderId || pendingCancelOrderId} releases inventory, reverses loyalty points, and cancels the shipment on Shiprocket if synced. This action cannot be undone.`
+            : ''
+        }
+        confirmLabel='Yes, cancel order'
+        cancelLabel='Keep order'
+        destructive
+        confirmDisabled={cancelReason === 'Other' && !cancelReasonNote.trim()}
+        onCancel={() => {
+          setPendingCancelOrderId(null);
+          setCancelReason(ORDER_CANCEL_REASONS[0]);
+          setCancelReasonNote('');
+        }}
+        onConfirm={confirmCancelOrder}
+      >
+        <div className='mt-2 space-y-3'>
+          <label className='block text-sm font-medium text-slate-700'>
+            Cancellation reason
+            <select
+              value={cancelReason}
+              onChange={(event) => setCancelReason(event.target.value)}
+              className='mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm ui-focus-ring'
+            >
+              {ORDER_CANCEL_REASONS.map((reason) => (
+                <option key={reason} value={reason}>
+                  {reason}
+                </option>
+              ))}
+            </select>
+          </label>
+          {cancelReason === 'Other' ? (
+            <label className='block text-sm font-medium text-slate-700'>
+              Reason details
+              <textarea
+                value={cancelReasonNote}
+                onChange={(event) => setCancelReasonNote(event.target.value)}
+                className='mt-1 min-h-20 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm ui-focus-ring'
+                placeholder='Briefly describe the reason for cancellation.'
+                maxLength={300}
+                required
+              />
+            </label>
+          ) : null}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 };

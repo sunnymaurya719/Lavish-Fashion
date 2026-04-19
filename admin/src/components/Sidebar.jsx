@@ -123,14 +123,38 @@ const SidebarIcon = ({ icon, active }) => {
 const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
   const location = useLocation();
   const previousPathnameRef = useRef(location.pathname);
-  const integrationSummary =
-    serverStatus === 'online'
-      ? `Server connected • Stripe ${serverBootstrap?.payments?.stripeEnabled ? 'on' : 'off'} • Razorpay ${
-          serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'
-        }`
-      : serverStatus === 'offline'
-        ? 'Server currently unavailable'
-        : 'Checking server capabilities';
+
+  // Connection chips (replaces the old run-on summary line — see
+  // ADMIN_UI_OPTIMIZATION_PLAN §2.1 step 4).
+  const connectionDots = [
+    {
+      label: 'API',
+      tone: serverStatus === 'online' ? 'on' : serverStatus === 'offline' ? 'off' : 'pending',
+      tooltip:
+        serverStatus === 'online'
+          ? 'Admin API reachable'
+          : serverStatus === 'offline'
+            ? 'Admin API unreachable'
+            : 'Verifying admin API',
+    },
+    {
+      label: 'Payments',
+      tone:
+        serverStatus !== 'online'
+          ? 'pending'
+          : serverBootstrap?.payments?.stripeEnabled || serverBootstrap?.payments?.razorpayEnabled
+            ? 'on'
+            : 'off',
+      tooltip: `Stripe ${serverBootstrap?.payments?.stripeEnabled ? 'on' : 'off'} · Razorpay ${
+        serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'
+      }`,
+    },
+    {
+      label: 'Email',
+      tone: serverStatus !== 'online' ? 'pending' : 'on',
+      tooltip: `Mode: ${serverBootstrap?.integrations?.marketingEmailMode || 'simulation'}`,
+    },
+  ];
 
   useEffect(() => {
     if (isOpen && previousPathnameRef.current !== location.pathname) {
@@ -181,7 +205,27 @@ const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
         <div className='flex-1 overflow-y-auto px-3 py-4'>
           <div className='mb-5 rounded-2xl border border-white/10 bg-white/5 px-3 py-3'>
             <p className='text-[11px] uppercase tracking-[0.22em] text-slate-400'>Connection</p>
-            <p className='mt-1 text-xs text-slate-300'>{integrationSummary}</p>
+            <div className='mt-2 flex items-center gap-3'>
+              {connectionDots.map((dot) => (
+                <div
+                  key={dot.label}
+                  className='flex items-center gap-1.5 text-xs text-slate-300'
+                  title={dot.tooltip}
+                >
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      dot.tone === 'on'
+                        ? 'bg-emerald-400 shadow-[0_0_0_3px_rgba(52,211,153,0.18)]'
+                        : dot.tone === 'off'
+                          ? 'bg-rose-400 shadow-[0_0_0_3px_rgba(251,113,133,0.18)]'
+                          : 'bg-amber-300 shadow-[0_0_0_3px_rgba(252,211,77,0.18)]'
+                    }`}
+                    aria-hidden='true'
+                  />
+                  <span>{dot.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           <nav className='space-y-6'>
@@ -196,22 +240,32 @@ const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
                       <NavLink
                         key={item.to}
                         to={item.to}
-                        className={`group flex items-center gap-3 rounded-2xl px-3 py-2.5 transition ${
+                        className={`group flex items-start gap-3 rounded-2xl px-3 py-2.5 transition ${
                           active
                             ? 'bg-white text-slate-950 shadow-lg'
                             : 'text-slate-200 hover:bg-white/7 hover:text-white'
                         }`}
                       >
                         <div
-                          className={`flex h-9 w-9 items-center justify-center rounded-2xl ${
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${
                             active ? 'bg-slate-900 text-white' : 'bg-white/6'
                           }`}
                         >
                           <SidebarIcon icon={item.icon} active={active} />
                         </div>
-                        <div className='min-w-0'>
-                          <p className='text-sm font-medium'>{item.label}</p>
-                          {active ? <p className='text-xs text-slate-500'>{item.description}</p> : null}
+                        <div className='min-w-0 flex-1'>
+                          <p className='text-sm font-medium leading-tight'>{item.label}</p>
+                          {/*
+                            Always-visible description — previously only shown
+                            when active (ADMIN_UI_OPTIMIZATION_PLAN §2.1 step 3).
+                          */}
+                          <p
+                            className={`mt-0.5 line-clamp-1 text-[11px] leading-snug ${
+                              active ? 'text-slate-500' : 'text-slate-400/90'
+                            }`}
+                          >
+                            {item.description}
+                          </p>
                         </div>
                       </NavLink>
                     );
