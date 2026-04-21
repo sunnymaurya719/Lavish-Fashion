@@ -1,4 +1,4 @@
-name: Deploy Server
+name: Deploy ML Service
 
 on:
   push:
@@ -9,15 +9,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to Droplet
+      - name: Deploy ML to Droplet
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          host: ${{ secrets.ML_HOST }}
+          username: ${{ secrets.ML_USER }}
+          key: ${{ secrets.ML_SSH_KEY }}
           script: |
             cd /root/Lavish-Fashion
             git pull origin main
             cd ml-service
             pip install -r requirements.txt
-            pm2 restart ml-service
+            pm2 restart ml-service || pm2 start app.py --name ml-service
