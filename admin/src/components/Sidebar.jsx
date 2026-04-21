@@ -1,7 +1,8 @@
-import React, { memo, useEffect, useRef } from 'react';
+import React, { memo, useEffect, useMemo, useRef } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { assets } from '../assets/assets';
 import { adminNavigationSections, isNavItemActive } from '../config/navigation';
+import { useAuth } from '../store/authStore';
 
 const SidebarIcon = ({ icon, active }) => {
   const iconClassName = active ? 'text-white' : 'text-slate-400';
@@ -110,6 +111,17 @@ const SidebarIcon = ({ icon, active }) => {
     );
   }
 
+  if (icon === 'users') {
+    return (
+      <svg className={iconClassName} width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+        <path
+          d='M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm0 2c-3.33 0-10 1.67-10 5v3h20v-3c0-3.33-6.67-5-10-5Zm6.5-2a3 3 0 1 0-2.99-3 3 3 0 0 0 2.99 3Zm0 2c-.4 0-.83.04-1.27.1A6.07 6.07 0 0 1 19 19v3h5v-3c0-2.66-4.33-4-5.5-4ZM5.5 12a3 3 0 1 0-3-3 3 3 0 0 0 3 3Zm.77 2.1A8.5 8.5 0 0 0 5 14c-1.17 0-5.5 1.34-5.5 4v3h5v-3a6.07 6.07 0 0 1 1.77-3.9Z'
+          fill='currentColor'
+        />
+      </svg>
+    );
+  }
+
   return (
     <svg className={iconClassName} width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
       <path
@@ -123,6 +135,26 @@ const SidebarIcon = ({ icon, active }) => {
 const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
   const location = useLocation();
   const previousPathnameRef = useRef(location.pathname);
+  const { hasPermission, hasAnyPermission, user } = useAuth();
+
+  // Filter the static config down to what the current admin can access.
+  // Sections with no remaining items are hidden entirely. We deliberately
+  // keep this in a memo so the navigation tree only re-derives when the
+  // user (and therefore their permission set) changes.
+  const visibleSections = useMemo(() => {
+    return adminNavigationSections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => {
+          if (Array.isArray(item.anyPermissions) && item.anyPermissions.length > 0) {
+            return hasAnyPermission(item.anyPermissions);
+          }
+          if (item.permission) return hasPermission(item.permission);
+          return true;
+        })
+      }))
+      .filter((section) => section.items.length > 0);
+  }, [hasPermission, hasAnyPermission, user?.permissions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Connection chips (replaces the old run-on summary line — see
   // ADMIN_UI_OPTIMIZATION_PLAN §2.1 step 4).
@@ -227,7 +259,7 @@ const Sidebar = ({ isOpen, onClose, serverStatus, serverBootstrap }) => {
           </div>
 
           <nav className='space-y-6'>
-            {adminNavigationSections.map((section) => (
+            {visibleSections.map((section) => (
               <div key={section.label}>
                 <p className='px-3 text-[11px] uppercase tracking-[0.24em] text-slate-500'>{section.label}</p>
                 <div className='mt-2 space-y-1.5'>

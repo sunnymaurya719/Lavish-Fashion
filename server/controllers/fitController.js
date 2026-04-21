@@ -167,7 +167,8 @@ const submitFitFeedback = async (req, res) => {
             feedback,
             source = 'manual',
             confidence = null,
-            modelVersion = 'rule-engine-v1'
+            modelVersion = 'rule-engine-v1',
+            predictionSource = null
         } = req.body;
         const [product, deliveredOrder] = await Promise.all([
             productModel.findById(productId).select('_id status').lean(),
@@ -199,7 +200,8 @@ const submitFitFeedback = async (req, res) => {
             feedback,
             source,
             confidence: confidence === null ? null : Number(confidence),
-            modelVersion
+            modelVersion,
+            predictionSource: predictionSource ? String(predictionSource).trim().toLowerCase() : null
         });
 
         return res.status(201).json({

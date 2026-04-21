@@ -25,6 +25,7 @@ class RecommendationMeta(BaseModel):
     fitTemplate: str
     predictionSource: str
     modelLoaded: bool
+    calibrated: bool = False
 
 
 class RecommendationResponse(BaseModel):

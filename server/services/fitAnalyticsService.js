@@ -1,6 +1,7 @@
 import fitFeedbackModel from '../models/fitFeedbackModel.js';
 import orderModel from '../models/orderModel.js';
 import productModel from '../models/productModel.js';
+import { getFitAnalyticsAggregated } from './fitAnalyticsAggregationService.js';
 import { isMlServiceConfigured } from './mlGatewayService.js';
 import { normalizeProductFitData } from './productFitProfileService.js';
 import {
@@ -9,6 +10,14 @@ import {
     isFitAssistantGloballyEnabled,
     isFitCameraGloballyEnabled
 } from './fitRuntimeService.js';
+
+/**
+ * Routes the analytics overview to either the new aggregation pipeline backend
+ * or the legacy in-memory implementation. Defaults to aggregation; set
+ * `FIT_ANALYTICS_USE_AGGREGATION=false` to fall back at runtime.
+ */
+const isAggregationBackendEnabled = () =>
+    String(process.env.FIT_ANALYTICS_USE_AGGREGATION ?? '').trim().toLowerCase() !== 'false';
 
 const RECENT_TREND_DAYS = 7;
 const TOP_PRODUCTS_LIMIT = 6;
@@ -22,6 +31,7 @@ const RECOMMENDATION_SOURCE_OPTIONS = [
 ];
 const ENGINE_OPTIONS = [
     { key: 'model_backed', label: 'Model-backed' },
+    { key: 'ml_heuristic_fallback', label: 'ML heuristic fallback' },
     { key: 'rule_engine', label: 'Rule engine' },
     { key: 'unknown', label: 'Unknown' }
 ];
@@ -126,6 +136,10 @@ const resolveEngineKey = (modelVersion) => {
         return 'rule_engine';
     }
 
+    if (normalizedModelVersion.startsWith('ml-fallback')) {
+        return 'ml_heuristic_fallback';
+    }
+
     return 'model_backed';
 };
 
@@ -161,7 +175,14 @@ const buildRecentTrend = ({ assistedItems, feedbackEntries, now = new Date(), da
     return Array.from(trendMap.values());
 };
 
-const getFitAnalyticsOverview = async ({ now = new Date() } = {}) => {
+const getFitAnalyticsOverview = async (options = {}) => {
+    if (isAggregationBackendEnabled()) {
+        return getFitAnalyticsAggregated(options);
+    }
+    return _getFitAnalyticsOverviewLegacy(options);
+};
+
+const _getFitAnalyticsOverviewLegacy = async ({ now = new Date() } = {}) => {
     const [products, orders, feedbackEntries] = await Promise.all([
         productModel.find({}).select('_id name category status sizes fitEnabled sizeScale fitProfile updatedAt').lean(),
         orderModel.find({
@@ -342,6 +363,7 @@ const getFitAnalyticsOverview = async ({ now = new Date() } = {}) => {
             fitRolloutPercent: getFitRolloutPercent(),
             fitConfidenceMin: confidenceThresholds.confidenceMin,
             mlServiceConfigured: isMlServiceConfigured(),
+            calibrationActive: Boolean(normalizeString(process.env.ML_CALIBRATION_PATH)),
             redisConfigured: Boolean(normalizeString(process.env.REDIS_URL))
         },
         summary: {
@@ -384,4 +406,4 @@ const getFitAnalyticsOverview = async ({ now = new Date() } = {}) => {
     };
 };
 
-export { getFitAnalyticsOverview };
+export { getFitAnalyticsOverview, _getFitAnalyticsOverviewLegacy };

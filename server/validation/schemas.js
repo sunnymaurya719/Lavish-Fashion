@@ -22,7 +22,20 @@ const fitLandmarkSchema = z.object({
     x: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)),
     y: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)),
     visibility: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional()
-});
+}).strict();
+
+const FIT_BODY_RATIO_MAX = 10;
+const FIT_BODY_SCAN_BASE64_HARD_CAP = 2_500_000;
+
+const getFitBodyScanBase64Cap = () => {
+    const configured = Number(process.env.BODY_SCAN_MAX_IMAGE_BYTES);
+    if (Number.isFinite(configured) && configured > 0) {
+        // Base64 encodes ~4/3 the raw bytes; clamp to a hard upper bound so a misconfigured
+        // env value cannot bypass JSON-body protections elsewhere.
+        return Math.min(FIT_BODY_SCAN_BASE64_HARD_CAP, Math.ceil(configured * 1.4));
+    }
+    return 1_680_000;
+};
 const couponDiscountTypeSchema = z.enum(['percentage', 'flat', 'free_shipping']);
 const reviewStatusValueSchema = z.enum(['pending', 'published', 'rejected']);
 const marketingCampaignTypeSchema = z.enum(['broadcast', 'automation']);
@@ -194,6 +207,44 @@ const wishlistToggleSchema = z.object({
 const adminLoginSchema = z.object({
     email: z.string().trim().email(),
     password: z.string().min(8).max(128)
+});
+
+// ── RBAC: admin user management ────────────────────────────────────────────
+const adminUserRoleSchema = z.enum(['admin', 'manager', 'staff']);
+
+// '*' or '<module>.<action>' — exact catalog membership is enforced inside
+// the controller via sanitizePermissions().
+const permissionStringSchema = z.string().trim().min(1).max(80);
+
+const adminUserCreateSchema = z.object({
+    name: z.string().trim().min(2).max(60),
+    email: z.string().trim().toLowerCase().email().max(255),
+    password: z.string().min(8).max(128),
+    role: adminUserRoleSchema,
+    permissions: z.array(permissionStringSchema).max(200).optional(),
+    isActive: z.boolean().optional()
+});
+
+const adminUserUpdateSchema = z
+    .object({
+        name: z.string().trim().min(2).max(60).optional(),
+        password: z.string().min(8).max(128).optional(),
+        role: adminUserRoleSchema.optional(),
+        permissions: z.array(permissionStringSchema).max(200).optional(),
+        isActive: z.boolean().optional()
+    })
+    .refine((value) => Object.keys(value).length > 0, 'At least one field must be provided');
+
+const adminUserPermissionsSchema = z.object({
+    permissions: z.array(permissionStringSchema).max(200)
+});
+
+const adminUserStatusSchema = z.object({
+    isActive: z.boolean()
+});
+
+const adminUserIdParamSchema = z.object({
+    id: objectIdSchema
 });
 
 const cartAddSchema = z.object({
@@ -378,11 +429,11 @@ const fitRecommendSchema = z.object({
         preferredFit: fitPreferredFitSchema.optional()
     }),
     bodyFeatures: z.object({
-        shoulderRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
-        hipRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
-        torsoRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0)).optional(),
+        shoulderRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(FIT_BODY_RATIO_MAX)).optional(),
+        hipRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(FIT_BODY_RATIO_MAX)).optional(),
+        torsoRatio: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(FIT_BODY_RATIO_MAX)).optional(),
         scanQuality: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional()
-    }).optional()
+    }).strict().optional()
 });
 
 const fitInsightsParamsSchema = z.object({
@@ -393,7 +444,7 @@ const fitBodyScanSchema = z
     .object({
         heightCm: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(50).max(260)),
         weightKg: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(20).max(350)).optional(),
-        imageBase64: z.string().trim().max(2_500_000).startsWith('data:image/', 'A valid image payload is required').optional(),
+        imageBase64: z.string().trim().max(getFitBodyScanBase64Cap(), 'Image payload exceeds configured body-scan size limit').startsWith('data:image/', 'A valid image payload is required').optional(),
         landmarks: z.array(fitLandmarkSchema).min(4).max(50).optional()
     })
     .refine((value) => Boolean(value.imageBase64) || Boolean(value.landmarks?.length), {
@@ -409,7 +460,8 @@ const fitFeedbackSchema = z.object({
     feedback: fitFeedbackValueSchema,
     source: fitSourceSchema.optional(),
     confidence: z.union([z.string(), z.number()]).pipe(z.coerce.number().min(0).max(1)).optional(),
-    modelVersion: z.string().trim().max(60).optional()
+    modelVersion: z.string().trim().max(60).optional(),
+    predictionSource: z.string().trim().max(40).optional()
 });
 
 const marketingCampaignBaseSchema = z.object({
@@ -519,6 +571,62 @@ const orderRefundSchema = z
     })
     .strict();
 
+// New refund subsystem schemas (Phase 4 of REFUND_SYSTEM_IMPLEMENTATION_PLAN).
+// All amounts are integer paise.
+
+const REFUND_REASON_VALUES = [
+    'customer_request',
+    'duplicate_payment',
+    'fraud',
+    'order_cancelled',
+    'item_unavailable',
+    'damaged_in_transit',
+    'wrong_item',
+    'quality_issue',
+    'admin_adjustment',
+    'other'
+];
+
+const refundInitiateSchema = z
+    .object({
+        orderId: objectIdSchema,
+        amountInPaise: z
+            .number({ invalid_type_error: 'amountInPaise must be a number' })
+            .int('amountInPaise must be an integer (paise)')
+            .positive('amountInPaise must be > 0'),
+        reason: z.enum(REFUND_REASON_VALUES).optional().default('customer_request'),
+        notes: z.string().trim().max(500).optional().default(''),
+        idempotencyKey: z
+            .string()
+            .trim()
+            .min(8, 'idempotencyKey must be at least 8 characters')
+            .max(120, 'idempotencyKey must be ≤ 120 characters')
+            .optional(),
+        approvedByAdminId: objectIdSchema.optional(),
+        approvedByAdminEmail: z.string().email().optional(),
+        metadata: z.record(z.any()).optional()
+    })
+    .strict();
+
+const refundIdParamSchema = z.object({
+    id: objectIdSchema
+});
+
+const refundOrderIdParamSchema = z.object({
+    orderId: objectIdSchema
+});
+
+const refundMarkProcessedSchema = z
+    .object({
+        utrReference: z
+            .string()
+            .trim()
+            .min(4, 'utrReference must be at least 4 characters')
+            .max(64, 'utrReference must be ≤ 64 characters'),
+        notes: z.string().trim().max(500).optional().default('')
+    })
+    .strict();
+
 const shiprocketWebhookSchema = z
     .object({
         event: z.string().trim().optional(),
@@ -533,6 +641,11 @@ const shiprocketWebhookSchema = z
 
 export {
     adminLoginSchema,
+    adminUserCreateSchema,
+    adminUserUpdateSchema,
+    adminUserPermissionsSchema,
+    adminUserStatusSchema,
+    adminUserIdParamSchema,
     adminCustomerDetailSchema,
     adminCustomerNotesSchema,
     cartAddSchema,
@@ -573,6 +686,10 @@ export {
     razorpayWebhookEventSchema,
     razorpayPaymentAttemptCancelSchema,
     orderRefundSchema,
+    refundInitiateSchema,
+    refundIdParamSchema,
+    refundOrderIdParamSchema,
+    refundMarkProcessedSchema,
     userGoogleAuthSchema,
     userLoginSchema,
     userProfileUpdateSchema,

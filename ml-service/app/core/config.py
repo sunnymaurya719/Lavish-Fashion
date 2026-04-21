@@ -61,6 +61,15 @@ class Settings:
     max_image_dimension: int = _parse_int(os.getenv("ML_MAX_IMAGE_DIMENSION"), 4_096, minimum=1)
     max_landmarks: int = _parse_int(os.getenv("ML_MAX_LANDMARKS"), 64, minimum=1)
     max_size_measurements: int = _parse_int(os.getenv("ML_MAX_SIZE_MEASUREMENTS"), 30, minimum=1)
+    # Allowed image MIME types for body-scan payloads. Comma-separated env override.
+    allowed_image_mime_types: tuple[str, ...] = _parse_csv(
+        os.getenv("ML_ALLOWED_IMAGE_MIME_TYPES", "image/jpeg,image/png,image/webp")
+    )
+    # Hard cap on raw HTTP request body bytes (defence-in-depth before Pydantic).
+    # Default sized to comfortably hold a 3MB base64 image plus envelope overhead.
+    max_request_body_bytes: int = _parse_int(
+        os.getenv("ML_MAX_REQUEST_BODY_BYTES"), 5_000_000, minimum=1_024
+    )
 
     # Rate limits per minute. ``0`` disables the limit for that route.
     rate_limit_recommend_per_minute: int = _parse_int(os.getenv("ML_RATE_LIMIT_RECOMMEND_PER_MINUTE"), 120, minimum=0)

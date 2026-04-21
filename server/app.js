@@ -18,6 +18,8 @@ import systemRouter from './routes/systemRoute.js';
 import fitRouter from './routes/fitRoute.js';
 import testRouter from './routes/testRoute.js';
 import webhookRouter from './routes/webhookRoute.js';
+import adminUserRouter from './routes/adminUserRoute.js';
+import refundRouter from './routes/refundRoute.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import requestLogger from './middleware/requestLogger.js';
 
@@ -114,6 +116,7 @@ const createApp = () => {
     app.use('/api/realtime', realtimeRouter);
     app.use('/api/user',userRouter);
     app.use('/api/admin/dashboard', dashboardRouter);
+    app.use('/api/admin/users', adminUserRouter);
     app.use('/api/customers', customerRouter);
     app.use('/api/coupon', couponRouter);
     app.use('/api/loyalty', loyaltyRouter);
@@ -123,6 +126,7 @@ const createApp = () => {
     app.use('/api/cart',cartRouter);
     app.use('/api/order',orderRouter);
     app.use('/api/orders', orderRouter);
+    app.use('/api/refund', refundRouter);
 
     app.get('/health', (req, res) => {
         res.status(200).json({

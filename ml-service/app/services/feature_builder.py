@@ -3,6 +3,31 @@ from __future__ import annotations
 from typing import Iterable
 
 
+# Sentinel values for "missing measurement" features fed to XGBoost.
+# Two modes are supported and selected at runtime via ``settings.feature_nan_missing``:
+#   * NATIVE_MISSING_SENTINEL — ``float('nan')``. XGBoost learns a missing-direction
+#     split per node; preferred for models trained with NaN-aware data.
+#   * LEGACY_MISSING_SENTINEL — ``-6.0``. Out-of-distribution magic value the
+#     currently shipped artifact was trained against. Kept as default until
+#     a NaN-trained model is promoted.
+# Centralising the constants avoids drift between training and inference,
+# and gives a single place to audit any future value change.
+NATIVE_MISSING_SENTINEL: float = float("nan")
+LEGACY_MISSING_SENTINEL: float = -6.0
+
+
+def get_missing_measurement_sentinel() -> float:
+    """Return the active missing-measurement sentinel based on runtime settings.
+
+    Imported lazily inside the function so the module remains importable
+    before the global ``settings`` instance is constructed (e.g. during
+    test collection that monkeypatches the env).
+    """
+    from app.core.config import settings as _settings
+
+    return NATIVE_MISSING_SENTINEL if _settings.feature_nan_missing else LEGACY_MISSING_SENTINEL
+
+
 MEASUREMENT_FIELDS = ("chest", "waist", "hip", "shoulder", "sleeveLength", "inseam", "garmentLength")
 LENGTH_FIELDS = {"sleeveLength", "inseam", "garmentLength"}
 FIELD_WEIGHTS = {
@@ -195,14 +220,9 @@ def build_candidate_feature_map(
     for field in MEASUREMENT_FIELDS:
         measurement = getattr(size_entry, field, None)
         if measurement is None:
-            # Sentinel for "missing measurement". When ``ML_FEATURE_NAN_MISSING``
-            # is enabled, emit ``float('nan')`` so XGBoost's native missing
-            # handling can learn the missing-direction split per node. Otherwise
-            # keep the legacy ``-6.0`` magic value the shipped artifact was
-            # trained against.
-            from app.core.config import settings as _settings  # local to keep import cheap
-
-            feature_map[f"{field}Delta"] = float("nan") if _settings.feature_nan_missing else -6.0
+            # Sentinel for "missing measurement". Resolved centrally so the
+            # NaN vs ``-6.0`` choice cannot drift between feature builders.
+            feature_map[f"{field}Delta"] = get_missing_measurement_sentinel()
             continue
 
         adjusted_measurement = measurement if field in LENGTH_FIELDS else measurement + bias_offset

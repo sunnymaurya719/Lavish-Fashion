@@ -28,6 +28,7 @@ const TONE_BY_KEY = {
   camera: 'from-sky-700 to-sky-400',
   hybrid: 'from-amber-700 to-amber-400',
   model_backed: 'from-cyan-700 to-cyan-400',
+  ml_heuristic_fallback: 'from-indigo-700 to-indigo-400',
   rule_engine: 'from-stone-700 to-stone-400',
   unknown: 'from-slate-400 to-slate-200',
   high: 'from-emerald-600 to-emerald-400',
@@ -349,6 +350,13 @@ const FitAnalytics = ({ token, serverStatus, onRefreshServerStatus }) => {
               withDot={false}
             >
               ML {metrics.runtime.mlServiceConfigured ? 'on' : 'off'}
+            </StatusBadge>
+            <StatusBadge
+              tone={metrics.runtime.calibrationActive ? 'success' : 'muted'}
+              size="sm"
+              withDot={false}
+            >
+              Calibrated {metrics.runtime.calibrationActive ? 'on' : 'off'}
             </StatusBadge>
             <StatusBadge
               tone={metrics.runtime.redisConfigured ? 'success' : 'muted'}

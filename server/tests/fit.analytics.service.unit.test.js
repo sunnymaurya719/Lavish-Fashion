@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const productFindMock = vi.fn();
 const orderFindMock = vi.fn();
 const fitFeedbackFindMock = vi.fn();
+
+// Force the legacy in-memory backend so this suite continues to test the
+// `.find().select().lean()` chain. The aggregation backend has its own
+// dedicated suite in fitAnalytics.aggregation.unit.test.js.
+beforeAll(() => {
+    process.env.FIT_ANALYTICS_USE_AGGREGATION = 'false';
+});
 
 vi.mock('../models/productModel.js', () => ({
     default: {
@@ -204,6 +211,7 @@ describe('fitAnalyticsService', () => {
             fitRolloutPercent: 55,
             fitConfidenceMin: 0.6,
             mlServiceConfigured: true,
+            calibrationActive: false,
             redisConfigured: true
         });
         expect(metrics.summary).toEqual({
@@ -229,6 +237,7 @@ describe('fitAnalyticsService', () => {
         ]);
         expect(metrics.breakdowns.engine).toEqual([
             { key: 'model_backed', label: 'Model-backed', count: 1 },
+            { key: 'ml_heuristic_fallback', label: 'ML heuristic fallback', count: 0 },
             { key: 'rule_engine', label: 'Rule engine', count: 1 },
             { key: 'unknown', label: 'Unknown', count: 1 }
         ]);

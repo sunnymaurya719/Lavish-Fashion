@@ -4,6 +4,7 @@ import connectCloudinary from './config/cloudinary.js';
 import validateEnvironment from './config/env.js';
 import logger from './config/logger.js';
 import createApp from './app.js';
+import { registerRefundCronJobs } from './jobs/refundCronRegistry.js';
 
 const port = process.env.PORT || 4000;
 
@@ -18,6 +19,9 @@ await connectCloudinary();
 const app = createApp();
 
 const server = app.listen(port, () => logger.info({ port }, `Listening on localhost:${port}`));
+
+// Register refund subsystem cron jobs (no-op in tests / when disabled).
+registerRefundCronJobs();
 
 const shutdown = (signal) => {
     logger.info(`${signal} received. Shutting down gracefully...`);

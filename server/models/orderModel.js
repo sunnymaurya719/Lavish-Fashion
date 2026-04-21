@@ -25,6 +25,25 @@ const orderItemSchema = new mongoose.Schema(
             confidence: { type: Number, min: 0, max: 1, default: null },
             source: { type: String, enum: ['manual', 'camera', 'hybrid'], default: 'manual' },
             modelVersion: { type: String, trim: true, maxlength: 60, default: '' }
+        },
+        // Paise-denominated fields (Number.isInteger, defaults backfilled
+        // lazily on capture / by the backfillRefundPaiseFields script).
+        pricePaise: {
+            type: Number,
+            default: 0,
+            min: 0,
+            validate: { validator: Number.isInteger, message: 'pricePaise must be an integer' }
+        },
+        refundedAmountPaise: {
+            type: Number,
+            default: 0,
+            min: 0,
+            validate: { validator: Number.isInteger, message: 'refundedAmountPaise must be an integer' }
+        },
+        refundStatus: {
+            type: String,
+            enum: ['none', 'partial', 'full'],
+            default: 'none'
         }
     },
     { _id: false, strict: true }
@@ -226,6 +245,30 @@ const orderSchema = new mongoose.Schema({
         default: 'none'
     },
     refundLastUpdatedAt: { type: Number, default: null },
+    // Paise-denominated source-of-truth fields (used by refundService).
+    // `amount` (rupees) is preserved for legacy code; new code reads
+    // `amountInPaise`. Backfilled by scripts/backfillRefundPaiseFields.js.
+    amountInPaise: {
+        type: Number,
+        default: 0,
+        min: 0,
+        validate: { validator: Number.isInteger, message: 'amountInPaise must be an integer' }
+    },
+    refundedAmountInPaise: {
+        type: Number,
+        default: 0,
+        min: 0,
+        validate: { validator: Number.isInteger, message: 'refundedAmountInPaise must be an integer' }
+    },
+    // Atomic refundability lock — every initiateRefund call decrements
+    // this with `findOneAndUpdate({ _id, refundableAmountInPaise: { $gte: amt }})`.
+    // Set to amountInPaise on capture; rolled back on gateway failure.
+    refundableAmountInPaise: {
+        type: Number,
+        default: 0,
+        min: 0,
+        validate: { validator: Number.isInteger, message: 'refundableAmountInPaise must be an integer' }
+    },
     createdAt: { type: Date, default: Date.now },
     deliveredAt: { type: Number, default: null },
     cancelledAt: { type: Number, default: null },
@@ -252,6 +295,7 @@ orderSchema.index({ paymentMethod: 1 });
 orderSchema.index({ razorpayPaymentId: 1 }, { sparse: true });
 orderSchema.index({ refundStatus: 1 });
 orderSchema.index({ 'refunds.refundId': 1 }, { sparse: true });
+orderSchema.index({ amountInPaise: 1 });
 orderSchema.index({ 'shiprocket.referenceOrderId': 1 }, { sparse: true });
 orderSchema.index({ 'shiprocket.orderId': 1 }, { sparse: true });
 orderSchema.index({ 'shiprocket.shipmentId': 1 }, { sparse: true });

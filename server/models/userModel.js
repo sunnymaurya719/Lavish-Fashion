@@ -120,13 +120,44 @@ const userSchema = new mongoose.Schema({
             validator: isValidCartData,
             message: 'Invalid cart data structure'
         }
-    }
+    },
+    // ── RBAC ──────────────────────────────────────────────────────────────
+    // 'customer' is the default and applies to every storefront user. The
+    // remaining values gate access to the admin dashboard. Role is the
+    // coarse-grained label; `permissions` carries the granular grants.
+    role: {
+        type: String,
+        enum: ['customer', 'admin', 'manager', 'staff'],
+        default: 'customer',
+        index: true
+    },
+    // Each entry is a '<module>.<action>' string, or '*' for full access.
+    // Validation against the catalog happens in the controller layer so the
+    // schema does not need to know the catalog.
+    permissions: {
+        type: [String],
+        default: [],
+        validate: {
+            validator: (value) =>
+                Array.isArray(value) &&
+                value.every((perm) => typeof perm === 'string' && perm.length > 0 && perm.length <= 80),
+            message: 'Invalid permissions list'
+        }
+    },
+    // Disabled admin users can no longer log in or call admin APIs even if
+    // they still hold a valid token (token is rejected on next request).
+    isActive: { type: Boolean, default: true },
+    // The admin user who created this account (null for self-registered
+    // customers and the bootstrap super admin).
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', default: null },
+    lastLoginAt: { type: Date, default: null }
 },{minimize: false, strict: true, timestamps: true})
 
 userSchema.index({ loyaltyPoints: -1 });
 userSchema.index({ successfulReferralCount: -1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ lifetimeLoyaltyPoints: -1 });
+userSchema.index({ role: 1, isActive: 1 });
 
 const userModel = mongoose.models.user || mongoose.model("user",userSchema);
 

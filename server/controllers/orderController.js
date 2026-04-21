@@ -45,7 +45,6 @@ import {
 import { getShiprocketConfig, getValidToken, isShiprocketConfigured, isShiprocketEnabled } from '../config/shiprocket.js';
 import {
     createCheckoutOrder as createRazorpayCheckoutOrder,
-    createRefund as createRazorpayRefund,
     fetchPayment as fetchRazorpayPayment,
     isRazorpayConfigured,
     isRazorpayWebhookConfigured,
@@ -1051,19 +1050,21 @@ const handleRazorpayPaymentFailed = async ({ event, paymentEntity, log }) => {
 
 const handleRazorpayRefundEvent = async ({ event, refundEntity, log }) => {
     if (!refundEntity?.id) return;
-    const order = await orderModel.findOne({
-        $or: [
-            { razorpayPaymentId: refundEntity.payment_id },
-            { 'refunds.refundId': refundEntity.id }
-        ]
-    });
-
-    if (!order) {
-        log?.warn({ refundId: refundEntity.id, paymentId: refundEntity.payment_id }, 'Refund webhook received for unknown order');
-        return;
+    try {
+        // Delegate to the new refund subsystem (Phase 4 cutover).
+        // The new service is the single writer for refund state and ledger;
+        // it also runs the projector that updates `order.refunds[]`,
+        // `order.refundedAmount`, and `order.refundStatus` for the admin UI.
+        const { processWebhookUpdate } = await import('../services/refundService.js');
+        await processWebhookUpdate({ event, refundEntity, log });
+    } catch (error) {
+        log?.error(
+            { err: error, refundId: refundEntity.id, eventName: event },
+            'Refund webhook processing failed'
+        );
+        // Swallow — webhook handler relies on this being non-throwing so
+        // the outer ack flow can still respond 200 to Razorpay.
     }
-
-    await upsertOrderRefundRecord({ order, refundEntity, initiatedBy: 'webhook' });
 };
 
 const handleRazorpayWebhook = async (req, res) => {
@@ -1195,163 +1196,114 @@ const cancelRazorpayPaymentAttempt = async (req, res) => {
 };
 
 const refundOrder = async (req, res) => {
-    let idempotencyRecordId;
-
+    // SHIM: legacy `POST /api/order/:orderId/refund` route. Translates the
+    // legacy DTO (`{ amount, reason, speed, notes }` in rupees) into the
+    // new refund service contract (paise + idempotency + RBAC) so existing
+    // admin UI keeps working without a frontend change.
+    //
+    // Source of truth from Phase 4 onwards is `services/refundService.js`.
     try {
-        if (!isRazorpayConfigured()) {
-            return res.status(503).json({ success: false, message: 'Razorpay is not configured on server' });
-        }
-
-        const idempotencyKey = getIdempotencyKey(req);
-        if (!idempotencyKey) {
-            return res.status(400).json({ success: false, message: 'Missing idempotency key header' });
-        }
-
-        const adminEmail = String(req.admin?.email || '').trim().toLowerCase();
-        const idempotencyResult = await beginIdempotentRequest({
-            userId: adminEmail || 'admin',
-            scope: 'order:refund',
-            key: idempotencyKey,
-            payload: { orderId: req.params.orderId, ...req.body }
-        });
-
-        if (idempotencyResult.action === 'replay' || idempotencyResult.action === 'conflict' || idempotencyResult.action === 'in_progress') {
-            return res.status(idempotencyResult.statusCode).json(idempotencyResult.body);
-        }
-
-        idempotencyRecordId = idempotencyResult.recordId;
+        const { initiateRefund } = await import('../services/refundService.js');
+        const { paiseFromOrderRupees } = await import('../utils/paise.util.js');
+        const { buildLegacyIdempotencyKey } = await import('./refundController.js');
 
         const { orderId } = req.params;
-        const { amount, reason = '', speed = 'normal', notes = {} } = req.body || {};
+        const { amount, reason = '', notes = {} } = req.body || {};
 
-        const order = await orderModel.findById(orderId);
+        const order = await orderModel.findById(orderId).lean();
         if (!order) {
-            const responseBody = { success: false, message: 'Order not found' };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 404, body: responseBody });
-            return res.status(404).json(responseBody);
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        if (order.paymentMethod !== 'Razorpay') {
-            const responseBody = { success: false, message: 'Refunds via gateway are only supported for Razorpay orders' };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
-            return res.status(400).json(responseBody);
-        }
+        // Default to refunding the full remaining refundable amount when the
+        // legacy caller does not specify one.
+        const remainingRupees =
+            Number(order.amount || 0) - Number(order.refundedAmount || 0);
+        const refundRupees =
+            amount === undefined || amount === null || amount === ''
+                ? Math.max(0, Math.round(remainingRupees * 100) / 100)
+                : Number(amount);
 
-        if (!order.payment || !order.razorpayPaymentId) {
-            const responseBody = { success: false, message: 'Order has no captured Razorpay payment to refund' };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
-            return res.status(400).json(responseBody);
-        }
-
-        const orderTotal = Number(order.amount || 0);
-        const alreadyRefunded = Number(order.refundedAmount || 0);
-        const remainingRefundable = Math.max(0, Math.round((orderTotal - alreadyRefunded) * 100) / 100);
-
-        if (remainingRefundable <= 0) {
-            const responseBody = { success: false, message: 'Order has already been fully refunded' };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
-            return res.status(400).json(responseBody);
-        }
-
-        const refundAmount = amount === undefined || amount === null ? remainingRefundable : Number(amount);
-
-        if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
-            const responseBody = { success: false, message: 'Refund amount must be a positive number' };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
-            return res.status(400).json(responseBody);
-        }
-
-        if (refundAmount > remainingRefundable + 0.01) {
-            const responseBody = {
+        if (!Number.isFinite(refundRupees) || refundRupees <= 0) {
+            return res.status(400).json({
                 success: false,
-                message: `Refund amount exceeds the remaining refundable amount of ${remainingRefundable}`
-            };
-            await completeIdempotentRequest({ recordId: idempotencyRecordId, statusCode: 400, body: responseBody });
-            return res.status(400).json(responseBody);
-        }
-
-        const refundNotes = {
-            ...notes,
-            orderId: String(order._id),
-            initiatedBy: adminEmail || 'admin',
-            reason: reason || 'admin_refund'
-        };
-
-        const refundResponse = await createRazorpayRefund({
-            paymentId: order.razorpayPaymentId,
-            amountInRupees: refundAmount,
-            notes: refundNotes,
-            speed,
-            idempotencyKey
-        });
-
-        // razorpay-node returns the refund entity directly (id, payment_id,
-        // amount, status, …). It does not wrap it in `{ entity: … }`.
-        const refundEntity = refundResponse || {};
-
-        const updatedOrder = await upsertOrderRefundRecord({
-            order,
-            refundEntity: {
-                id: refundEntity.id,
-                payment_id: refundEntity.payment_id || order.razorpayPaymentId,
-                amount: refundEntity.amount,
-                currency: refundEntity.currency || 'INR',
-                status: refundEntity.status || 'pending',
-                speed_requested: refundEntity.speed_requested || speed,
-                speed_processed: refundEntity.speed_processed || '',
-                notes: refundEntity.notes || refundNotes
-            },
-            initiatedBy: adminEmail || 'admin'
-        });
-
-        // Persist reason on the matching refund entry
-        const matchingRefund = (updatedOrder.refunds || []).find(
-            (entry) => String(entry.refundId) === String(refundEntity.id)
-        );
-        if (matchingRefund) {
-            matchingRefund.reason = reason || matchingRefund.reason;
-            matchingRefund.idempotencyKey = idempotencyKey;
-            await updatedOrder.save();
-        }
-
-        const responseBody = {
-            success: true,
-            message: 'Refund initiated successfully',
-            refund: {
-                id: refundEntity.id,
-                amount: refundAmount,
-                status: refundEntity.status || 'pending',
-                speed: refundEntity.speed_requested || speed
-            },
-            order: updatedOrder
-        };
-
-        await completeIdempotentRequest({
-            recordId: idempotencyRecordId,
-            statusCode: 200,
-            body: responseBody
-        });
-
-        return res.status(200).json(responseBody);
-    } catch (error) {
-        req.log?.error({ err: error }, 'Razorpay refund failed');
-
-        const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
-        const message =
-            error?.error?.description ||
-            error?.message ||
-            'Failed to issue Razorpay refund';
-        const responseBody = { success: false, message };
-
-        if (idempotencyRecordId) {
-            await completeIdempotentRequest({
-                recordId: idempotencyRecordId,
-                statusCode,
-                body: responseBody
+                message: 'Refund amount must be a positive number'
             });
         }
 
-        return res.status(statusCode).json(responseBody);
+        let amountInPaise;
+        try {
+            amountInPaise = paiseFromOrderRupees(refundRupees);
+        } catch (conversionError) {
+            return res.status(400).json({
+                success: false,
+                message: conversionError.message || 'Refund amount has invalid precision'
+            });
+        }
+
+        const idempotencyKey =
+            getIdempotencyKey(req) ||
+            buildLegacyIdempotencyKey({
+                orderId,
+                amountInPaise,
+                adminId: req.admin?.id
+            });
+
+        const reasonValue =
+            typeof reason === 'string' && reason.trim() ? reason.trim() : 'customer_request';
+        const allowedReasons = new Set([
+            'customer_request',
+            'duplicate_payment',
+            'fraud',
+            'order_cancelled',
+            'item_unavailable',
+            'damaged_in_transit',
+            'wrong_item',
+            'quality_issue',
+            'admin_adjustment',
+            'other'
+        ]);
+        const safeReason = allowedReasons.has(reasonValue) ? reasonValue : 'other';
+
+        const { refund, order: orderAfter, replayed } = await initiateRefund({
+            orderId,
+            amountInPaise,
+            reason: safeReason,
+            notes:
+                typeof notes === 'string'
+                    ? notes
+                    : (notes && typeof notes === 'object' ? JSON.stringify(notes).slice(0, 500) : ''),
+            idempotencyKey,
+            admin: {
+                id: req.admin?.id,
+                email: req.admin?.email,
+                role: req.admin?.role
+            },
+            log: req.log
+        });
+
+        return res.status(replayed ? 200 : 200).json({
+            success: true,
+            message: replayed
+                ? 'Refund already processed (idempotent replay)'
+                : 'Refund initiated successfully',
+            refund: {
+                id: refund.gatewayRefundId || String(refund._id),
+                amount: refund.amountInPaise / 100,
+                status: refund.state,
+                speed: 'normal'
+            },
+            order: orderAfter
+        });
+    } catch (error) {
+        req.log?.error({ err: error }, 'Refund (legacy shim) failed');
+        const status =
+            error?.statusCode && Number.isFinite(error.statusCode) ? error.statusCode : 500;
+        return res.status(status).json({
+            success: false,
+            message: error?.message || 'Failed to issue refund',
+            code: error?.code || undefined
+        });
     }
 };
 

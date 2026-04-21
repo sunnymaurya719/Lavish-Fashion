@@ -212,8 +212,10 @@ class RecommendationService:
         # whenever a fitted artifact is available. Falls through silently when
         # ``ML_CALIBRATION_PATH`` is unset or the artifact failed to load.
         calibrated_confidence = calibration_service.calibrate(abs(best_sort_score))
+        calibration_applied = False
         if calibrated_confidence is not None:
             confidence = round_value(clamp(calibrated_confidence, 0.05, 0.99), 2)
+            calibration_applied = True
             metrics.calibration_applied_total.inc(result="applied")
         else:
             metrics.calibration_applied_total.inc(result="skip")
@@ -252,7 +254,8 @@ class RecommendationService:
                 modelVersion=self._model_service.model_version,
                 fitTemplate=payload.product.fitProfile.measurementTemplate,
                 predictionSource=prediction_source.value,
-                modelLoaded=self._model_service.model_loaded
+                modelLoaded=self._model_service.model_loaded,
+                calibrated=calibration_applied,
             )
         )
 

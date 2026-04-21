@@ -1,7 +1,11 @@
 // Section order is intentionally support-first (ADMIN_UI_OPTIMIZATION_PLAN §2.1):
-//   Daily Operations → Catalog → Promotions → Insights.
+//   Daily Operations → Catalog → Promotions → Insights → System.
 // "New Product" is intentionally NOT listed here — it now lives as a primary
 // action inside the Products page toolbar to avoid crowding the menu.
+//
+// Each item carries a `permission` (or `anyPermissions` array). The Sidebar
+// hides items whose permission the current admin does not hold. RBAC source
+// of truth lives in `server/config/permissions.js`.
 const adminNavigationSections = [
   {
     label: 'Daily Operations',
@@ -10,18 +14,21 @@ const adminNavigationSections = [
         label: 'Orders',
         to: '/orders',
         icon: 'orders',
+        permission: 'orders.view',
         description: 'Track and update fulfillment'
       },
       {
         label: 'Customers',
         to: '/customers',
         icon: 'customers',
+        permission: 'customers.view',
         description: 'Profiles, notes, and lifecycle value'
       },
       {
         label: 'Reviews',
         to: '/reviews',
         icon: 'reviews',
+        permission: 'reviews.view',
         description: 'Moderation queue and trust signals'
       }
     ]
@@ -33,12 +40,14 @@ const adminNavigationSections = [
         label: 'Products',
         to: '/products',
         icon: 'products',
+        permission: 'products.view',
         description: 'Catalog, pricing, and publishing'
       },
       {
         label: 'Inventory',
         to: '/inventory',
         icon: 'inventory',
+        permission: 'inventory.view',
         description: 'Live stock, thresholds, and status'
       }
     ]
@@ -50,12 +59,14 @@ const adminNavigationSections = [
         label: 'Coupons',
         to: '/coupons',
         icon: 'coupons',
+        permission: 'coupons.view',
         description: 'Launch and control promotions'
       },
       {
         label: 'Marketing',
         to: '/marketing',
         icon: 'marketing',
+        permission: 'marketing.view',
         description: 'Campaigns, automations, and email activity'
       }
     ]
@@ -67,19 +78,34 @@ const adminNavigationSections = [
         label: 'Dashboard',
         to: '/dashboard',
         icon: 'dashboard',
+        permission: 'dashboard.view',
         description: 'Revenue, customers, and fulfillment'
       },
       {
         label: 'Loyalty',
         to: '/loyalty',
         icon: 'loyalty',
+        permission: 'loyalty.view',
         description: 'Rewards, tiers, and referral performance'
       },
       {
         label: 'Fit Analytics',
         to: '/fit-analytics',
         icon: 'fit',
+        permission: 'analytics.view',
         description: 'Rollout health, confidence, and shopper fit outcomes'
+      }
+    ]
+  },
+  {
+    label: 'System',
+    items: [
+      {
+        label: 'Users',
+        to: '/users',
+        icon: 'users',
+        permission: 'users.view',
+        description: 'Roles, permissions, and team access'
       }
     ]
   }
@@ -177,6 +203,20 @@ const resolveAdminPageMeta = (pathname = '') => {
     };
   }
 
+  if (pathname.startsWith('/users')) {
+    return {
+      title: 'Admin Users',
+      description: 'Manage admin team roles, granular permissions, and account access.'
+    };
+  }
+
+  if (pathname.startsWith('/forbidden')) {
+    return {
+      title: 'Access Denied',
+      description: 'You do not have permission to view this section.'
+    };
+  }
+
   return defaultPageMeta;
 };
 
@@ -223,6 +263,10 @@ const isNavItemActive = (pathname = '', to = '') => {
 
   if (to === '/marketing') {
     return pathname.startsWith('/marketing');
+  }
+
+  if (to === '/users') {
+    return pathname.startsWith('/users');
   }
 
   return pathname === to;

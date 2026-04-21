@@ -18,6 +18,13 @@ def decode_data_url_image(image_base64: str) -> tuple[str, bytes]:
     header, encoded_data = raw_value.split(",", 1)
     mime_type = header.split(";")[0].replace("data:", "").strip().lower()
 
+    allowed_mime_types = settings.allowed_image_mime_types
+    if allowed_mime_types and mime_type not in allowed_mime_types:
+        raise ValueError(
+            "The image payload uses an unsupported format. "
+            f"Allowed types: {', '.join(allowed_mime_types)}."
+        )
+
     try:
         decoded_bytes = base64.b64decode(encoded_data, validate=True)
     except (ValueError, binascii.Error) as exc:

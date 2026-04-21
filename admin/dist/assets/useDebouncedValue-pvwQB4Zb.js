@@ -1,0 +1,1 @@
+import{r as t}from"./vendor-router-bXb-mbxM.js";const e=(e,r=200)=>{const[o,s]=t.useState(e);return t.useEffect(()=>{const t=setTimeout(()=>s(e),r);return()=>clearTimeout(t)},[e,r]),o};export{e as u};

@@ -7,6 +7,8 @@ import { BACKEND_URL } from './config/api';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import Login from './components/Login';
+import RequirePermission from './components/RequirePermission';
+import { useAuth } from './store/authStore';
 import 'react-toastify/dist/ReactToastify.css';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -21,6 +23,8 @@ const Loyalty = lazy(() => import('./pages/Loyalty'));
 const FitAnalytics = lazy(() => import('./pages/FitAnalytics'));
 const Reviews = lazy(() => import('./pages/Reviews'));
 const Marketing = lazy(() => import('./pages/Marketing'));
+const Users = lazy(() => import('./pages/Users'));
+const Forbidden = lazy(() => import('./pages/Forbidden'));
 
 const AdminRouteFallback = () => (
   <div className='flex h-64 items-center justify-center'>
@@ -34,7 +38,7 @@ const LegacyEditRedirect = () => {
 };
 
 const App = () => {
-  const [token, setToken] = useState(localStorage.getItem('adminToken') || '');
+  const { token, setToken } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [serverBootstrap, setServerBootstrap] = useState(null);
   const [serverStatus, setServerStatus] = useState('checking');
@@ -45,13 +49,12 @@ const App = () => {
   const clearAdminSession = useCallback(
     ({ message = '' } = {}) => {
       setToken('');
-      localStorage.removeItem('adminToken');
 
       if (message) {
         toast.info(message);
       }
     },
-    []
+    [setToken]
   );
 
   const fetchServerBootstrap = useCallback(
@@ -84,15 +87,6 @@ const App = () => {
     },
     []
   );
-
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem('adminToken', token);
-      return;
-    }
-
-    localStorage.removeItem('adminToken');
-  }, [token]);
 
   useEffect(() => {
     fetchServerBootstrap({ silent: true });
@@ -146,7 +140,6 @@ const App = () => {
       />
       {token === '' ? (
         <Login
-          setToken={setToken}
           serverStatus={serverStatus}
           serverBootstrap={serverBootstrap}
           onRetryConnection={() => fetchServerBootstrap()}
@@ -172,44 +165,121 @@ const App = () => {
               <Suspense fallback={<AdminRouteFallback />}>
               <Routes>
                 <Route path='/' element={<Navigate to='/dashboard' replace />} />
+                <Route path='/forbidden' element={<Forbidden />} />
                 <Route
                   path='/dashboard'
                   element={
-                    <Dashboard
-                      token={token}
-                      serverStatus={serverStatus}
-                      serverBootstrap={serverBootstrap}
-                      onRefreshServerStatus={() => fetchServerBootstrap()}
-                    />
+                    <RequirePermission permission='dashboard.view'>
+                      <Dashboard
+                        token={token}
+                        serverStatus={serverStatus}
+                        serverBootstrap={serverBootstrap}
+                        onRefreshServerStatus={() => fetchServerBootstrap()}
+                      />
+                    </RequirePermission>
                   }
                 />
-                <Route path='/products' element={<List token={token} />} />
+                <Route
+                  path='/products'
+                  element={
+                    <RequirePermission permission='products.view'>
+                      <List token={token} />
+                    </RequirePermission>
+                  }
+                />
                 <Route
                   path='/products/new'
-                  element={<Add token={token} serverBootstrap={serverBootstrap} serverStatus={serverStatus} />}
+                  element={
+                    <RequirePermission permission='products.create'>
+                      <Add token={token} serverBootstrap={serverBootstrap} serverStatus={serverStatus} />
+                    </RequirePermission>
+                  }
                 />
                 <Route
                   path='/products/:productId/edit'
-                  element={<Edit token={token} serverBootstrap={serverBootstrap} serverStatus={serverStatus} />}
+                  element={
+                    <RequirePermission permission='products.update'>
+                      <Edit token={token} serverBootstrap={serverBootstrap} serverStatus={serverStatus} />
+                    </RequirePermission>
+                  }
                 />
-                <Route path='/inventory' element={<Inventory token={token} />} />
-                <Route path='/orders' element={<Orders token={token} />} />
-                <Route path='/customers' element={<Customers token={token} />} />
-                <Route path='/coupons' element={<Coupons token={token} />} />
-                <Route path='/loyalty' element={<Loyalty token={token} />} />
+                <Route
+                  path='/inventory'
+                  element={
+                    <RequirePermission permission='inventory.view'>
+                      <Inventory token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/orders'
+                  element={
+                    <RequirePermission permission='orders.view'>
+                      <Orders token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/customers'
+                  element={
+                    <RequirePermission permission='customers.view'>
+                      <Customers token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/coupons'
+                  element={
+                    <RequirePermission permission='coupons.view'>
+                      <Coupons token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/loyalty'
+                  element={
+                    <RequirePermission permission='loyalty.view'>
+                      <Loyalty token={token} />
+                    </RequirePermission>
+                  }
+                />
                 <Route
                   path='/fit-analytics'
                   element={
-                    <FitAnalytics
-                      token={token}
-                      serverStatus={serverStatus}
-                      serverBootstrap={serverBootstrap}
-                      onRefreshServerStatus={() => fetchServerBootstrap()}
-                    />
+                    <RequirePermission permission='analytics.view'>
+                      <FitAnalytics
+                        token={token}
+                        serverStatus={serverStatus}
+                        serverBootstrap={serverBootstrap}
+                        onRefreshServerStatus={() => fetchServerBootstrap()}
+                      />
+                    </RequirePermission>
                   }
                 />
-                <Route path='/reviews' element={<Reviews token={token} />} />
-                <Route path='/marketing' element={<Marketing token={token} />} />
+                <Route
+                  path='/reviews'
+                  element={
+                    <RequirePermission permission='reviews.view'>
+                      <Reviews token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/marketing'
+                  element={
+                    <RequirePermission permission='marketing.view'>
+                      <Marketing token={token} />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path='/users'
+                  element={
+                    <RequirePermission permission='users.view'>
+                      <Users token={token} />
+                    </RequirePermission>
+                  }
+                />
                 <Route path='/add' element={<Navigate to='/products/new' replace />} />
                 <Route path='/edit/:productId' element={<LegacyEditRedirect />} />
                 <Route path='/list' element={<Navigate to='/products' replace />} />

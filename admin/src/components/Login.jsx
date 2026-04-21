@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
 import { toast } from 'react-toastify';
-import { BACKEND_URL } from '../config/api';
+import { useAuth } from '../store/authStore';
 
 const ADMIN_EMAIL_STORAGE_KEY = 'adminLastEmail';
 
@@ -43,7 +42,8 @@ const ServerStatusPanel = ({ serverStatus, serverBootstrap, onRetryConnection })
   );
 };
 
-const Login = ({ setToken, serverStatus, serverBootstrap, onRetryConnection }) => {
+const Login = ({ serverStatus, serverBootstrap, onRetryConnection }) => {
+  const { login } = useAuth();
   const [email, setEmail] = useState(() => {
     if (typeof window === 'undefined') return '';
     try {
@@ -87,14 +87,11 @@ const Login = ({ setToken, serverStatus, serverBootstrap, onRetryConnection }) =
 
     setIsSubmitting(true);
     try {
-      const response = await axios.post(BACKEND_URL + '/api/user/admin', { email, password });
-      if (response.data.success) {
-        setToken(response.data.token);
-        return;
-      }
-      toast.error(response.data.message || 'Login failed');
+      // login() handles token persistence + immediately loads /me, so any
+      // permission gates downstream see fresh user data on first render.
+      await login({ email, password });
     } catch (error) {
-      toast.error(error?.response?.data?.message || error.message);
+      toast.error(error?.response?.data?.message || error.message || 'Login failed');
     } finally {
       setIsSubmitting(false);
     }

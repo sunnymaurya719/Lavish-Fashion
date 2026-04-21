@@ -16,6 +16,7 @@ import {
     isGoogleEmailAuthoritative,
     verifyGoogleIdToken
 } from '../services/googleAuthService.js';
+import { adminLogin as _adminLoginImpl } from './adminUserController.js';
 
 const referralCodeRegex = /^[A-Z0-9]{6,12}$/;
 const hasLocalPassword = (value) => String(value || '').length >= 8;
@@ -37,14 +38,6 @@ const resolveAuthProvider = ({ password = '', googleId = '' } = {}) => {
 
 const createToken = (id) =>{
     return jwt.sign({id},process.env.JWT_SECRET, { expiresIn: '7d' })
-}
-
-const createAdminToken = (email) => {
-    return jwt.sign(
-        { role: 'admin', email },
-        process.env.JWT_SECRET,
-        { expiresIn: '8h' }
-    );
 }
 
 const buildUserProfile = (user) => ({
@@ -388,27 +381,12 @@ const googleAuthUser = async (req, res) => {
 }
 
 //Route for admin login
-const adminLogin = async (req,res) =>{
-    try{
-        const email = String(req.body.email || '').trim().toLowerCase();
-        const password = String(req.body.password || '');
-
-        if (!email || !password) {
-            return res.status(400).json({ success: false, message: 'Email and password are required' });
-        }
-
-        if(email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD){
-            const token  = createAdminToken(email);
-            return res.status(200).json({success:true,token});
-        }
-
-        return res.status(401).json({success:false,message:"Invalid admin credentials"});
-    }
-    catch(error){
-        req.log?.error({ err: error }, 'Error in admin login');
-        res.status(500).json({success:false,message:"Error in admin login"})
-    }
-}
+//
+// Implementation lives in adminUserController.js so that env-based and
+// DB-backed admins share the same code path. We re-export it here so
+// existing routes that import { adminLogin } from this controller continue
+// to work without changes.
+const adminLogin = _adminLoginImpl;
 
 const getUserProfile = async (req, res) => {
     try {

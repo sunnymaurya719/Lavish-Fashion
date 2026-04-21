@@ -201,9 +201,50 @@ const fetchRefund = async ({ paymentId, refundId }) => {
     return client.refunds.fetch(String(refundId));
 };
 
+/**
+ * Fetch the merchant's current Razorpay balance. Used by the balance
+ * monitor job. Returns { balanceInPaise, currency, raw } or null when
+ * Razorpay is unconfigured. Throws when the SDK call fails.
+ *
+ * Note: razorpay-node does not currently expose a typed `balance` API
+ * surface in v2.9.x. We hit the REST endpoint via the underlying API
+ * client which IS exposed via `client.api`. If that path disappears
+ * in a future SDK we will need to switch to a direct axios call.
+ */
+const fetchBalance = async () => {
+    const client = getRazorpayClient();
+    if (!client) return null;
+
+    // The SDK's internal `api` client supports arbitrary GETs and signs
+    // them with the configured key pair. The endpoint is documented at
+    // https://razorpay.com/docs/api/balance/
+    if (typeof client?.api?.get !== 'function') {
+        const error = new Error('Razorpay SDK does not expose balance API');
+        error.statusCode = 501;
+        throw error;
+    }
+
+    const raw = await client.api.get({ url: '/balance' });
+    const balanceInPaise = Number(raw?.balance ?? 0);
+
+    if (!Number.isFinite(balanceInPaise) || !Number.isInteger(balanceInPaise)) {
+        const error = new Error('Razorpay balance response was not an integer');
+        error.statusCode = 502;
+        error.raw = raw;
+        throw error;
+    }
+
+    return {
+        balanceInPaise,
+        currency: String(raw?.currency || 'INR'),
+        raw
+    };
+};
+
 export {
     createCheckoutOrder,
     createRefund,
+    fetchBalance,
     fetchPayment,
     fetchRefund,
     getRazorpayClient,

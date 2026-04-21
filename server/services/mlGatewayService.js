@@ -5,9 +5,13 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 2500;
 const DEFAULT_HEALTH_CACHE_TTL_MS = 30_000;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_OPEN_WINDOW_MS = 30_000;
+const DEFAULT_BODY_SCAN_MAX_BASE64_CHARS = 2_000_000;
 
 let consecutiveFailureCount = 0;
 let circuitOpenUntil = 0;
+let circuitOpenedAt = 0;
+let circuitOpenCount = 0;
+let circuitCloseCount = 0;
 let cachedMlHealth = {
     configured: false,
     healthy: false,
@@ -174,17 +178,71 @@ const buildBodyScanPayload = ({ heightCm, weightKg = null, imageBase64 = '', lan
     ...(landmarks ? { landmarks } : {})
 });
 
-const openCircuitIfNeeded = () => {
+const getBodyScanMaxBase64Chars = () => {
+    const parsedLimit = Number(process.env.ML_BODY_SCAN_MAX_BASE64_CHARS || DEFAULT_BODY_SCAN_MAX_BASE64_CHARS);
+    return Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_BODY_SCAN_MAX_BASE64_CHARS;
+};
+
+const openCircuitIfNeeded = ({ requestId = '', log = null, reason = 'unknown' } = {}) => {
     consecutiveFailureCount += 1;
 
-    if (consecutiveFailureCount >= CIRCUIT_FAILURE_THRESHOLD) {
+    if (consecutiveFailureCount >= CIRCUIT_FAILURE_THRESHOLD && Date.now() >= circuitOpenUntil) {
         circuitOpenUntil = Date.now() + CIRCUIT_OPEN_WINDOW_MS;
+        circuitOpenedAt = Date.now();
+        circuitOpenCount += 1;
+        log?.warn?.(
+            {
+                event: 'fit.ml.circuit.open',
+                requestId,
+                reason,
+                consecutiveFailureCount,
+                openWindowMs: CIRCUIT_OPEN_WINDOW_MS,
+                openCount: circuitOpenCount
+            },
+            'ML gateway circuit breaker opened'
+        );
     }
 };
 
-const markMlGatewaySuccess = () => {
+const markMlGatewaySuccess = ({ requestId = '', log = null } = {}) => {
+    const wasOpen = circuitOpenUntil > 0 || consecutiveFailureCount > 0;
+    if (circuitOpenUntil > 0) {
+        circuitCloseCount += 1;
+        log?.info?.(
+            {
+                event: 'fit.ml.circuit.close',
+                requestId,
+                openedForMs: circuitOpenedAt ? Date.now() - circuitOpenedAt : null,
+                closeCount: circuitCloseCount
+            },
+            'ML gateway circuit breaker closed after successful response'
+        );
+    } else if (wasOpen) {
+        log?.info?.(
+            {
+                event: 'fit.ml.circuit.recovery',
+                requestId,
+                clearedFailureCount: consecutiveFailureCount
+            },
+            'ML gateway recovered after transient failures'
+        );
+    }
     consecutiveFailureCount = 0;
     circuitOpenUntil = 0;
+    circuitOpenedAt = 0;
+};
+
+const getMlCircuitSnapshot = () => {
+    const now = Date.now();
+    return {
+        consecutiveFailureCount,
+        failureThreshold: CIRCUIT_FAILURE_THRESHOLD,
+        openUntil: circuitOpenUntil,
+        msUntilHalfOpen: circuitOpenUntil > now ? circuitOpenUntil - now : 0,
+        isOpen: now < circuitOpenUntil,
+        openCount: circuitOpenCount,
+        closeCount: circuitCloseCount
+    };
 };
 
 const ensureMlGatewayAvailable = () => {
@@ -287,6 +345,27 @@ const probeMlServiceHealth = async ({ force = false, requestId = '', log = null 
     }
 };
 
+const ML_FALLBACK_PREDICTION_SOURCES = new Set([
+    'heuristic_fallback',
+    'model_length_mismatch',
+    'model_error'
+]);
+
+const ML_MODEL_VERSION_MAX_LENGTH = 60;
+
+const annotateModelVersionForFallback = (rawModelVersion, predictionSource) => {
+    const normalizedVersion = String(rawModelVersion || '').trim();
+    const normalizedSource = String(predictionSource || '').trim().toLowerCase();
+    if (!ML_FALLBACK_PREDICTION_SOURCES.has(normalizedSource)) {
+        return normalizedVersion;
+    }
+    if (normalizedVersion.toLowerCase().startsWith('ml-fallback')) {
+        return normalizedVersion.slice(0, ML_MODEL_VERSION_MAX_LENGTH);
+    }
+    const annotated = normalizedVersion ? `ml-fallback:${normalizedVersion}` : 'ml-fallback';
+    return annotated.slice(0, ML_MODEL_VERSION_MAX_LENGTH);
+};
+
 const normalizeMlRecommendationResponse = (payload) => {
     const recommendationSize = String(payload?.recommendation?.size || '').trim();
 
@@ -318,7 +397,10 @@ const normalizeMlRecommendationResponse = (payload) => {
             crowdSignal: String(payload?.insights?.crowdSignal || '').trim()
         },
         meta: {
-            modelVersion: String(payload?.meta?.modelVersion || 'ml-service'),
+            modelVersion: annotateModelVersionForFallback(
+                payload?.meta?.modelVersion || 'ml-service',
+                payload?.meta?.predictionSource
+            ),
             fitTemplate: String(payload?.meta?.fitTemplate || '').trim(),
             predictionSource: String(payload?.meta?.predictionSource || 'remote_service').trim(),
             modelLoaded: Boolean(payload?.meta?.modelLoaded)
@@ -377,7 +459,11 @@ const requestMlSizeRecommendation = async ({ product, userMetrics, bodyFeatures 
         const responsePayload = await response.json().catch(() => null);
 
         if (!response.ok) {
-            openCircuitIfNeeded();
+            openCircuitIfNeeded({
+                requestId,
+                log,
+                reason: response.status >= 500 ? 'ml_http_5xx' : 'ml_http_4xx'
+            });
             log?.warn(
                 {
                     event: 'fit.ml.http_error',
@@ -395,7 +481,7 @@ const requestMlSizeRecommendation = async ({ product, userMetrics, bodyFeatures 
         }
 
         const normalizedResponse = normalizeMlRecommendationResponse(responsePayload);
-        markMlGatewaySuccess();
+        markMlGatewaySuccess({ requestId, log });
         log?.info(
             {
                 event: 'fit.ml.success',
@@ -413,7 +499,11 @@ const requestMlSizeRecommendation = async ({ product, userMetrics, bodyFeatures 
         }
 
         const latencyMs = Date.now() - startedAt;
-        openCircuitIfNeeded();
+        openCircuitIfNeeded({
+            requestId,
+            log,
+            reason: error?.name === 'AbortError' ? 'ml_timeout' : 'ml_request_failed'
+        });
         log?.warn(
             {
                 event: 'fit.ml.failure',
@@ -436,6 +526,25 @@ const requestMlSizeRecommendation = async ({ product, userMetrics, bodyFeatures 
 const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase64 = '', landmarks = [], requestId = '', log = null }) => {
     ensureMlGatewayAvailable();
 
+    const normalizedImageBase64 = String(imageBase64 || '').trim();
+    const bodyScanMaxBase64Chars = getBodyScanMaxBase64Chars();
+    if (normalizedImageBase64.length > bodyScanMaxBase64Chars) {
+        log?.warn?.(
+            {
+                event: 'fit.ml.body_scan.payload_too_large',
+                requestId,
+                imageBase64Length: normalizedImageBase64.length,
+                maxBase64Chars: bodyScanMaxBase64Chars
+            },
+            'Rejecting ML body scan request: imageBase64 exceeds configured limit'
+        );
+        throw createMlGatewayError(
+            'ML body scan image payload exceeds the configured size limit',
+            'ml_body_scan_payload_too_large',
+            { statusCode: 413 }
+        );
+    }
+
     const serviceUrl = `${normalizeUrl(process.env.ML_SERVICE_URL)}/analyze-body`;
     const timeoutMs = getMlTimeoutMs();
     const abortController = new AbortController();
@@ -450,7 +559,7 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
                 buildBodyScanPayload({
                     heightCm,
                     weightKg,
-                    imageBase64,
+                    imageBase64: normalizedImageBase64,
                     landmarks: sanitizeLandmarks(landmarks)
                 })
             ),
@@ -460,7 +569,11 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
         const responsePayload = await response.json().catch(() => null);
 
         if (!response.ok) {
-            openCircuitIfNeeded();
+            openCircuitIfNeeded({
+                requestId,
+                log,
+                reason: response.status >= 500 ? 'ml_body_scan_5xx' : 'ml_body_scan_4xx'
+            });
             log?.warn(
                 {
                     event: 'fit.ml.body_scan.http_error',
@@ -478,7 +591,7 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
         }
 
         const normalizedResponse = normalizeMlBodyScanResponse(responsePayload);
-        markMlGatewaySuccess();
+        markMlGatewaySuccess({ requestId, log });
         log?.info(
             {
                 event: 'fit.ml.body_scan.success',
@@ -496,7 +609,11 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
         }
 
         const latencyMs = Date.now() - startedAt;
-        openCircuitIfNeeded();
+        openCircuitIfNeeded({
+            requestId,
+            log,
+            reason: error?.name === 'AbortError' ? 'ml_body_scan_timeout' : 'ml_body_scan_failed'
+        });
         log?.warn(
             {
                 event: 'fit.ml.body_scan.failure',
@@ -519,4 +636,4 @@ const requestMlBodyScanAnalysis = async ({ heightCm, weightKg = null, imageBase6
     }
 };
 
-export { isMlServiceConfigured, probeMlServiceHealth, requestMlBodyScanAnalysis, requestMlSizeRecommendation };
+export { annotateModelVersionForFallback, getMlCircuitSnapshot, isMlServiceConfigured, probeMlServiceHealth, requestMlBodyScanAnalysis, requestMlSizeRecommendation };

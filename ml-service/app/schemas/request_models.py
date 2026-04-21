@@ -14,19 +14,19 @@ SizeScale = Literal["alpha", "numeric", "waist", "custom"]
 
 class SizeMeasurement(BaseModel):
     size: str = Field(min_length=1, max_length=10)
-    chest: float | None = Field(default=None, ge=0)
-    waist: float | None = Field(default=None, ge=0)
-    hip: float | None = Field(default=None, ge=0)
-    shoulder: float | None = Field(default=None, ge=0)
-    sleeveLength: float | None = Field(default=None, ge=0)
-    inseam: float | None = Field(default=None, ge=0)
-    garmentLength: float | None = Field(default=None, ge=0)
+    chest: float | None = Field(default=None, ge=0, le=400, allow_inf_nan=False)
+    waist: float | None = Field(default=None, ge=0, le=400, allow_inf_nan=False)
+    hip: float | None = Field(default=None, ge=0, le=400, allow_inf_nan=False)
+    shoulder: float | None = Field(default=None, ge=0, le=200, allow_inf_nan=False)
+    sleeveLength: float | None = Field(default=None, ge=0, le=200, allow_inf_nan=False)
+    inseam: float | None = Field(default=None, ge=0, le=200, allow_inf_nan=False)
+    garmentLength: float | None = Field(default=None, ge=0, le=300, allow_inf_nan=False)
 
 
 class ProductFitProfile(BaseModel):
     measurementTemplate: MeasurementTemplate = "topwear"
     fitBias: FitBias = "true_to_size"
-    stretchScore: float = Field(default=0.25, ge=0, le=1)
+    stretchScore: float = Field(default=0.25, ge=0, le=1, allow_inf_nan=False)
     measurementUnit: Literal["cm"] = "cm"
     sizeMeasurements: list[SizeMeasurement] = Field(
         default_factory=list,
@@ -50,16 +50,16 @@ class ProductInput(BaseModel):
 
 
 class UserMetricsInput(BaseModel):
-    heightCm: float = Field(ge=50, le=260)
-    weightKg: float = Field(ge=20, le=350)
+    heightCm: float = Field(ge=50, le=260, allow_inf_nan=False)
+    weightKg: float = Field(ge=20, le=350, allow_inf_nan=False)
     preferredFit: PreferredFit = "regular"
 
 
 class BodyFeaturesInput(BaseModel):
-    shoulderRatio: float | None = Field(default=None, ge=0)
-    hipRatio: float | None = Field(default=None, ge=0)
-    torsoRatio: float | None = Field(default=None, ge=0)
-    scanQuality: float | None = Field(default=None, ge=0, le=1)
+    shoulderRatio: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
+    hipRatio: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
+    torsoRatio: float | None = Field(default=None, ge=0, le=10, allow_inf_nan=False)
+    scanQuality: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
 class RecommendationRequest(BaseModel):
@@ -71,14 +71,14 @@ class RecommendationRequest(BaseModel):
 
 
 class LandmarkInput(BaseModel):
-    x: float = Field(ge=0, le=1)
-    y: float = Field(ge=0, le=1)
-    visibility: float | None = Field(default=None, ge=0, le=1)
+    x: float = Field(ge=0, le=1, allow_inf_nan=False)
+    y: float = Field(ge=0, le=1, allow_inf_nan=False)
+    visibility: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
 
 
 class AnalyzeBodyRequest(BaseModel):
-    heightCm: float = Field(ge=50, le=260)
-    weightKg: float | None = Field(default=None, ge=20, le=350)
+    heightCm: float = Field(ge=50, le=260, allow_inf_nan=False)
+    weightKg: float | None = Field(default=None, ge=20, le=350, allow_inf_nan=False)
     landmarks: list[LandmarkInput] | None = Field(default=None, max_length=settings.max_landmarks)
     imageBase64: str | None = None
     frames: list[str] | None = Field(
@@ -127,8 +127,12 @@ class FitFeedbackRequest(BaseModel):
     recommendedSize: str = Field(min_length=1, max_length=10)
     feedback: FitFeedbackVerdict
     source: RecommendationMode = "manual"
-    confidence: float | None = Field(default=None, ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     modelVersion: str | None = Field(default=None, max_length=60)
+    # M-loop: capture which engine actually produced the recommendation so
+    # downstream consumers (calibration trainer, analytics quality metrics)
+    # can filter heuristic-driven feedback out of model-quality calculations.
+    predictionSource: str | None = Field(default=None, max_length=40)
     requestId: str | None = Field(default=None, max_length=64)
 
 

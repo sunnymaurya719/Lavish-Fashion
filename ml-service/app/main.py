@@ -53,6 +53,41 @@ if settings.cors_allow_origins:
 
 
 @app.middleware("http")
+async def request_body_size_guard(request: Request, call_next):
+    """Reject oversized request bodies before any downstream parsing.
+
+    Trusts ``Content-Length`` when present (the common case for ml clients).
+    For chunked bodies without ``Content-Length`` the per-route Pydantic
+    schemas still enforce the per-field caps (e.g. ``imageBase64`` length).
+    """
+    if request.method in {"POST", "PUT", "PATCH"}:
+        max_bytes = settings.max_request_body_bytes
+        content_length_header = request.headers.get("content-length")
+        if content_length_header:
+            try:
+                content_length = int(content_length_header)
+            except (TypeError, ValueError):
+                content_length = None
+            if content_length is not None and content_length > max_bytes:
+                logger.warning(
+                    "request_body_too_large",
+                    extra={
+                        "route": request.url.path,
+                        "contentLength": content_length,
+                        "maxRequestBodyBytes": max_bytes,
+                    },
+                )
+                return JSONResponse(
+                    _build_error_payload(
+                        message="Request body exceeds the maximum allowed size.",
+                        status_code=413,
+                    ),
+                    status_code=413,
+                )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
     incoming_request_id = (
         request.headers.get("x-request-id")
