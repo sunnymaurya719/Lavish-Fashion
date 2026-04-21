@@ -90,10 +90,51 @@ const writeAudit = async ({ action, refund, order, admin, before, after, metadat
 };
 
 /**
+ * Lazily seed paise-denominated refund fields for legacy orders that were
+ * captured before the refund subsystem was deployed. Such orders have
+ * `refundableAmountInPaise = 0` (schema default) even though they're fully
+ * paid, which would cause every refund attempt to fail. Safe to call repeatedly:
+ * only patches when the bucket is unset AND nothing has been refunded yet.
+ */
+const lazySeedRefundablePaise = async (orderId) => {
+    const order = await orderModel.findById(orderId).lean();
+    if (!order) return null;
+
+    const needsSeed =
+        order.payment === true &&
+        Number(order.refundedAmountInPaise || 0) === 0 &&
+        Number(order.refundableAmountInPaise || 0) === 0 &&
+        Number(order.amount || 0) > 0;
+
+    if (!needsSeed) return order;
+
+    const amountInPaise = Math.round(Number(order.amount) * 100);
+    await orderModel.updateOne(
+        {
+            _id: orderId,
+            payment: true,
+            refundedAmountInPaise: 0,
+            refundableAmountInPaise: 0
+        },
+        {
+            $set: {
+                amountInPaise,
+                refundableAmountInPaise: amountInPaise
+            }
+        }
+    );
+    return order;
+};
+
+/**
  * Atomically reserve `amountInPaise` from the order's refundable bucket.
  * Returns the updated order or throws InsufficientRefundableAmountError.
  */
 const reserveRefundableAmount = async ({ orderId, amountInPaise }) => {
+    // Backfill legacy orders on demand so a refund can succeed without an
+    // ops-level migration step.
+    await lazySeedRefundablePaise(orderId);
+
     const updated = await orderModel.findOneAndUpdate(
         {
             _id: orderId,
