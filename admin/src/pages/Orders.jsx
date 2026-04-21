@@ -2554,7 +2554,11 @@ const Orders = ({ token }) => {
                                     </span>
                                   ) : null}
                                 </div>
-                                {Number(order.refundedAmount || 0) < Number(order.amount || 0) - 0.01 ? (
+                                {Number(order.refundedAmount || 0) >= Number(order.amount || 0) - 0.01 ? (
+                                  <span className='rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800'>
+                                    Fully refunded
+                                  </span>
+                                ) : order.status === 'Cancelled' ? (
                                   <button
                                     type='button'
                                     onClick={() => openRefundDialog(order)}
@@ -2563,8 +2567,11 @@ const Orders = ({ token }) => {
                                     Issue refund
                                   </button>
                                 ) : (
-                                  <span className='rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800'>
-                                    Fully refunded
+                                  <span
+                                    title='Refunds can only be issued after the order is cancelled.'
+                                    className='rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500'
+                                  >
+                                    Cancel order to refund
                                   </span>
                                 )}
                               </div>

@@ -137,6 +137,12 @@ const markOrderAsPaid = async ({ order, gatewayEventId, paymentFields, log }) =>
         return order;
     }
 
+    // Seed paise-denominated fields used by the refund subsystem. The new
+    // refundService relies on `refundableAmountInPaise` being set on capture
+    // (default 0). Without this, every refund call fails with
+    // "Requested refund exceeds remaining refundable amount".
+    const amountInPaise = Math.round(Number(order.amount || 0) * 100);
+
     const updatedOrder = await orderModel.findByIdAndUpdate(
         order._id,
         {
@@ -145,6 +151,9 @@ const markOrderAsPaid = async ({ order, gatewayEventId, paymentFields, log }) =>
             paymentVerifiedAt: Date.now(),
             inventoryReserved: true,
             gatewayEventId: gatewayEventId || order.gatewayEventId,
+            amountInPaise,
+            refundedAmountInPaise: 0,
+            refundableAmountInPaise: amountInPaise,
             ...paymentFields
         },
         { new: true }
@@ -399,6 +408,11 @@ const createOrderFromPaymentAttempt = async ({ paymentAttempt, gatewayEventId, p
         throw new Error('Payment attempt resources are no longer reserved');
     }
 
+    // Seed paise-denominated fields used by the refund subsystem. Without
+    // these, refundableAmountInPaise stays at the schema default (0) and
+    // every refund attempt fails with "exceeds remaining refundable amount".
+    const orderAmountInPaise = Math.round(Number(latestAttempt.amount || 0) * 100);
+
     const order = await orderModel.create({
         userId: latestAttempt.userId,
         items: latestAttempt.items,
@@ -410,6 +424,9 @@ const createOrderFromPaymentAttempt = async ({ paymentAttempt, gatewayEventId, p
         couponCode: latestAttempt.couponCode || '',
         couponId: latestAttempt.couponId || '',
         amount: latestAttempt.amount,
+        amountInPaise: orderAmountInPaise,
+        refundedAmountInPaise: 0,
+        refundableAmountInPaise: orderAmountInPaise,
         address: latestAttempt.address,
         customerEmail: latestAttempt.customerEmail || '',
         checkoutSource: latestAttempt.checkoutSource,
