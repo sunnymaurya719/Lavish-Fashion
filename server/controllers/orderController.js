@@ -53,6 +53,7 @@ import {
     verifyWebhookSignature as verifyRazorpayWebhookSignature
 } from '../services/razorpayService.js';
 import razorpayWebhookEventModel from '../models/razorpayWebhookEventModel.js';
+import { isCodEnabled } from '../services/paymentSettingsService.js';
 import crypto from 'crypto';
 
 //global variables
@@ -536,6 +537,21 @@ const placeOrderCOD = async (req, res) => {
         }
 
         idempotencyRecordId = idempotencyResult.recordId;
+
+        if (!(await isCodEnabled())) {
+            const responseBody = {
+                success: false,
+                message: 'Cash on Delivery is currently unavailable. Please choose Razorpay instead.'
+            };
+
+            await completeIdempotentRequest({
+                recordId: idempotencyRecordId,
+                statusCode: 503,
+                body: responseBody
+            });
+
+            return res.status(503).json(responseBody);
+        }
 
         const pricing = await calculateOrderDetails({ userId, items, couponCode, pointsToRedeem });
         const customerEmail = await resolveCustomerEmail(userId);

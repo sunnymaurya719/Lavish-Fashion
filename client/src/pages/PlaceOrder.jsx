@@ -228,6 +228,7 @@ const PlaceOrder = () => {
     serverStatus === 'online'
       ? Boolean(paymentCapabilities.razorpayEnabled && razorpayKeyId)
       : Boolean(razorpayKeyId);
+  const codEnabled = serverStatus === 'online' ? paymentCapabilities.codEnabled !== false : true;
 
   const pointValue = Number(loyaltyRules?.pointValue || 1);
   const minRedeemPoints = Number(loyaltyRules?.minRedeemPoints || 0);
@@ -262,6 +263,8 @@ const PlaceOrder = () => {
 
   const itemCount = checkoutItems.reduce((total, item) => total + Number(item.quantity || 0), 0);
   const onlinePaymentDisabled = Number(pricingSummary.total || 0) <= 0;
+  const razorpayAvailableForThisOrder = razorpayEnabled && !onlinePaymentDisabled;
+  const noPaymentMethodsAvailable = !codEnabled && !razorpayAvailableForThisOrder;
   const isRefreshingPricing = pricingAction === 'refresh';
   const isApplyingCoupon = pricingAction === 'coupon';
   const isApplyingPoints = pricingAction === 'points';
@@ -381,10 +384,30 @@ const PlaceOrder = () => {
   }, [checkoutItemsKey, requestPricingPreview, token, checkoutItems.length]);
 
   useEffect(() => {
-    if (method === 'razorpay' && (!razorpayEnabled || onlinePaymentDisabled)) {
-      setMethod('cod');
+    if (method === 'razorpay' && !razorpayAvailableForThisOrder) {
+      setMethod(codEnabled ? 'cod' : '');
+      return;
     }
-  }, [method, onlinePaymentDisabled, razorpayEnabled]);
+
+    if (method === 'cod' && !codEnabled) {
+      setMethod(razorpayAvailableForThisOrder ? 'razorpay' : '');
+    }
+  }, [codEnabled, method, razorpayAvailableForThisOrder]);
+
+  useEffect(() => {
+    if (method) {
+      return;
+    }
+
+    if (codEnabled && !razorpayAvailableForThisOrder) {
+      setMethod('cod');
+      return;
+    }
+
+    if (!codEnabled && razorpayAvailableForThisOrder) {
+      setMethod('razorpay');
+    }
+  }, [codEnabled, method, razorpayAvailableForThisOrder]);
 
   useEffect(() => {
     if (currentStep > 0 && !canAccessPaymentStep) {
@@ -473,7 +496,14 @@ const PlaceOrder = () => {
 
   const continueFromPayment = () => {
     if (!method) {
-      toast.error('Choose a payment method to continue');
+      if (noPaymentMethodsAvailable) {
+        toast.error('No payment methods are available for this order right now');
+        return;
+      }
+
+      toast.error(
+        codEnabled ? 'Choose a payment method to continue' : 'Cash on Delivery is unavailable. Select Razorpay to continue'
+      );
       return;
     }
 
@@ -759,6 +789,11 @@ const PlaceOrder = () => {
       return;
     }
 
+    if (method === 'cod' && !codEnabled) {
+      toast.error('Cash on Delivery is currently unavailable');
+      return;
+    }
+
     setIsPlacingOrder(true);
 
     try {
@@ -814,7 +849,11 @@ const PlaceOrder = () => {
       ? 'You will complete payment securely in Razorpay checkout.'
       : method === 'cod'
         ? 'Pay in cash when your order is delivered.'
-        : 'Select one method to continue.';
+        : noPaymentMethodsAvailable
+          ? 'No payment methods are available for this order right now.'
+          : codEnabled
+            ? 'Select one method to continue.'
+            : 'Cash on Delivery is disabled. Select Razorpay to continue.';
   const visibleReviewItems = checkoutItems.slice(0, 3);
 
   const productMap = useMemo(() => {
@@ -1001,23 +1040,30 @@ const PlaceOrder = () => {
               <p className='mt-1 text-sm text-slate-500'>Choose a payment method.</p>
 
               <div className='mt-4 space-y-2.5'>
-                <button
-                  type='button'
-                  onClick={() => setMethod('cod')}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left ${
-                    method === 'cod' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-                  }`}
-                >
-                  <div className='flex items-center justify-between gap-3'>
-                    <div>
-                      <p className='text-sm font-medium text-slate-900'>Cash on Delivery</p>
-                      <p className='mt-0.5 text-xs text-slate-500'>Pay when your order arrives</p>
+                {codEnabled ? (
+                  <button
+                    type='button'
+                    onClick={() => setMethod('cod')}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                      method === 'cod' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                    }`}
+                  >
+                    <div className='flex items-center justify-between gap-3'>
+                      <div>
+                        <p className='text-sm font-medium text-slate-900'>Cash on Delivery</p>
+                        <p className='mt-0.5 text-xs text-slate-500'>Pay when your order arrives</p>
+                      </div>
+                      <span className={`h-3 w-3 rounded-full ${method === 'cod' ? 'bg-slate-900' : 'bg-slate-300'}`}></span>
                     </div>
-                    <span className={`h-3 w-3 rounded-full ${method === 'cod' ? 'bg-slate-900' : 'bg-slate-300'}`}></span>
+                  </button>
+                ) : (
+                  <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-left'>
+                    <p className='text-sm font-medium text-slate-800'>Cash on Delivery unavailable</p>
+                    <p className='mt-0.5 text-xs text-slate-500'>This payment method has been temporarily turned off.</p>
                   </div>
-                </button>
+                )}
 
-                {razorpayEnabled && !onlinePaymentDisabled ? (
+                {razorpayAvailableForThisOrder ? (
                   <button
                     type='button'
                     onClick={() => setMethod('razorpay')}
@@ -1038,12 +1084,26 @@ const PlaceOrder = () => {
                 ) : null}
               </div>
 
+              {!codEnabled ? (
+                <p className='mt-3 text-xs text-slate-500'>Cash on Delivery is currently disabled for this storefront.</p>
+              ) : null}
+
               {!razorpayEnabled ? (
-                <p className='mt-3 text-xs text-slate-500'>Online payment is currently unavailable. Cash on Delivery is enabled.</p>
+                <p className='mt-2 text-xs text-slate-500'>
+                  Online payment is currently unavailable{codEnabled ? '. Cash on Delivery is still enabled.' : '.'}
+                </p>
               ) : null}
 
               {onlinePaymentDisabled ? (
-                <p className='mt-2 text-xs text-slate-500'>Zero-total orders can only be placed with Cash on Delivery.</p>
+                <p className='mt-2 text-xs text-slate-500'>
+                  {codEnabled
+                    ? 'Zero-total orders can only be placed with Cash on Delivery.'
+                    : 'Zero-total orders cannot be placed right now because Cash on Delivery is disabled.'}
+                </p>
+              ) : null}
+
+              {noPaymentMethodsAvailable ? (
+                <p className='mt-2 text-xs font-medium text-rose-600'>No payment methods are available for this order right now.</p>
               ) : null}
             </section>
           ) : null}

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { BACKEND_URL } from '../config/api';
 import { createAdminOrderRealtimeClient } from '../services/realtimeClient';
+import { usePermission } from '../hooks/usePermission';
 import {
   PageHeader,
   MetricGrid,
@@ -31,6 +32,16 @@ const formatSyncTime = (value) => {
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+  });
+};
+
+const formatSettingsAuditTime = (value) => {
+  if (!value) return 'Not updated yet';
+  return new Date(value).toLocaleString('en-IN', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
   });
 };
 
@@ -67,11 +78,16 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
   const [metrics, setMetrics] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [paymentSettings, setPaymentSettings] = useState(null);
+  const [isLoadingPaymentSettings, setIsLoadingPaymentSettings] = useState(false);
+  const [isUpdatingPaymentSettings, setIsUpdatingPaymentSettings] = useState(false);
   const [lastMetricsSyncAt, setLastMetricsSyncAt] = useState('');
   const [liveUpdatesStatus, setLiveUpdatesStatus] = useState({ status: 'idle', message: '' });
   const hasMetricsRef = useRef(false);
   const scheduledRefreshTimerRef = useRef(null);
   const processedEventIdsRef = useRef(new Set());
+  const canViewPaymentSettings = usePermission(['settings.view', 'settings.update'], 'any');
+  const canUpdatePaymentSettings = usePermission('settings.update');
 
   /* ── data fetching ──────────────────────────────────── */
 
@@ -113,16 +129,101 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
     }, delayMs);
   }, [fetchDashboard]);
 
+  const fetchPaymentSettings = useCallback(async ({ silent = false, showToastOnError = true } = {}) => {
+    if (!token || !canViewPaymentSettings) {
+      setPaymentSettings(null);
+      return null;
+    }
+
+    if (!silent) {
+      setIsLoadingPaymentSettings(true);
+    }
+
+    try {
+      const response = await axios.get(BACKEND_URL + '/api/system/payments', {
+        headers: { token }
+      });
+
+      if (!response.data.success) {
+        if (showToastOnError) toast.error(response.data.message || 'Failed to fetch payment settings');
+        return null;
+      }
+
+      setPaymentSettings(response.data.settings || null);
+      return response.data.settings || null;
+    } catch (error) {
+      if (showToastOnError) toast.error(error?.response?.data?.message || error.message || 'Failed to fetch payment settings');
+      return null;
+    } finally {
+      if (!silent) {
+        setIsLoadingPaymentSettings(false);
+      }
+    }
+  }, [canViewPaymentSettings, token]);
+
   const handleManualRefresh = useCallback(async () => {
     await Promise.all([
       Promise.resolve(onRefreshServerStatus?.()),
       fetchDashboard({ silent: false, showToastOnError: true }),
+      canViewPaymentSettings ? fetchPaymentSettings({ silent: false, showToastOnError: true }) : Promise.resolve(null),
     ]);
-  }, [fetchDashboard, onRefreshServerStatus]);
+  }, [canViewPaymentSettings, fetchDashboard, fetchPaymentSettings, onRefreshServerStatus]);
+
+  const handleToggleCod = useCallback(async () => {
+    if (!canUpdatePaymentSettings || isUpdatingPaymentSettings) {
+      return;
+    }
+
+    const currentCodEnabled = paymentSettings?.codEnabled ?? serverBootstrap?.payments?.codEnabled !== false;
+    const nextCodEnabled = !Boolean(currentCodEnabled);
+
+    setIsUpdatingPaymentSettings(true);
+
+    try {
+      const response = await axios.patch(
+        BACKEND_URL + '/api/system/payments',
+        { codEnabled: nextCodEnabled },
+        { headers: { token } }
+      );
+
+      if (!response.data.success) {
+        toast.error(response.data.message || 'Failed to update payment settings');
+        return;
+      }
+
+      setPaymentSettings(response.data.settings || null);
+      await Promise.resolve(onRefreshServerStatus?.());
+      toast.success(
+        nextCodEnabled
+          ? 'Cash on Delivery is now available in checkout'
+          : 'Cash on Delivery has been disabled for checkout'
+      );
+    } catch (error) {
+      toast.error(error?.response?.data?.message || error.message || 'Failed to update payment settings');
+    } finally {
+      setIsUpdatingPaymentSettings(false);
+    }
+  }, [
+    canUpdatePaymentSettings,
+    isUpdatingPaymentSettings,
+    onRefreshServerStatus,
+    paymentSettings?.codEnabled,
+    serverBootstrap?.payments?.codEnabled,
+    token
+  ]);
 
   useEffect(() => {
     void fetchDashboard();
   }, [fetchDashboard]);
+
+  useEffect(() => {
+    if (!canViewPaymentSettings) {
+      setPaymentSettings(null);
+      return;
+    }
+
+    void fetchPaymentSettings({ silent: true, showToastOnError: false });
+  }, [canViewPaymentSettings, fetchPaymentSettings]);
 
   /* realtime */
   useEffect(() => {
@@ -210,6 +311,9 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
 
   const revenueMax = metrics ? Math.max(...metrics.revenueSeries.map((i) => i.revenue), 1) : 1;
   const statusMax = metrics ? Math.max(...metrics.statusBreakdown.map((i) => i.count), 1) : 1;
+  const codEnabled = paymentSettings?.codEnabled ?? serverBootstrap?.payments?.codEnabled !== false;
+  const paymentSettingsSourceLabel =
+    paymentSettings?.source === 'database' ? 'Runtime override' : 'Env default';
 
   const catalogHighlights = useMemo(() => {
     if (!metrics) return [];
@@ -272,6 +376,9 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
               <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Razorpay {serverBootstrap?.payments?.razorpayEnabled ? 'on' : 'off'}
               </StatusBadge>
+              <StatusBadge tone={codEnabled ? 'success' : 'warning'} size="sm" withDot={false}>
+                COD {codEnabled ? 'on' : 'off'}
+              </StatusBadge>
               <StatusBadge tone="neutral" size="sm" withDot={false}>
                 Media {serverBootstrap?.features?.reviewMediaEnabled ? 'on' : 'off'}
               </StatusBadge>
@@ -312,6 +419,62 @@ const Dashboard = ({ token, serverStatus, serverBootstrap, onRefreshServerStatus
       </div>
 
       {/* summary cards — each links to its drill-down page */}
+      {canViewPaymentSettings ? (
+        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl">
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-base font-semibold text-slate-900">Checkout payment controls</p>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+                    codEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  COD {codEnabled ? 'enabled' : 'disabled'}
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-slate-600">
+                Turning COD off hides it from checkout and blocks new COD orders at the API. Existing COD orders stay unchanged.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span className="rounded-full bg-slate-100 px-3 py-1">Source: {paymentSettingsSourceLabel}</span>
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  Updated: {formatSettingsAuditTime(paymentSettings?.updatedAt)}
+                </span>
+                {paymentSettings?.updatedBy?.email ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1">By: {paymentSettings.updatedBy.email}</span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleToggleCod}
+                disabled={!canUpdatePaymentSettings || isUpdatingPaymentSettings}
+                className={`rounded-xl px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 ${
+                  codEnabled ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-700 hover:bg-emerald-600'
+                }`}
+              >
+                {isUpdatingPaymentSettings
+                  ? 'Saving...'
+                  : codEnabled
+                    ? 'Disable COD'
+                    : 'Enable COD'}
+              </button>
+              <button
+                type="button"
+                onClick={() => fetchPaymentSettings({ silent: false, showToastOnError: true })}
+                disabled={isLoadingPaymentSettings || isUpdatingPaymentSettings}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {isLoadingPaymentSettings ? 'Refreshing...' : 'Refresh payment settings'}
+              </button>
+            </div>
+          </div>
+        </article>
+      ) : null}
+
       <MetricGrid>
         <Link to="/orders" className="contents">
           <MetricCard

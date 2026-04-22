@@ -247,6 +247,12 @@ const adminUserIdParamSchema = z.object({
     id: objectIdSchema
 });
 
+const paymentSettingsUpdateSchema = z
+    .object({
+        codEnabled: z.boolean()
+    })
+    .strict();
+
 const cartAddSchema = z.object({
     itemId: objectIdSchema,
     size: z.string().trim().min(1).max(10)
@@ -646,6 +652,7 @@ export {
     adminUserPermissionsSchema,
     adminUserStatusSchema,
     adminUserIdParamSchema,
+    paymentSettingsUpdateSchema,
     adminCustomerDetailSchema,
     adminCustomerNotesSchema,
     cartAddSchema,

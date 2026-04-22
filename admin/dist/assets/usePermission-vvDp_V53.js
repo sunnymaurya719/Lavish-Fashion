@@ -1,0 +1,1 @@
+import{u as s}from"./index-B3spo13Y.js";const r=(r,n="all")=>{const{hasPermission:a,hasAnyPermission:i,hasAllPermissions:o}=s();return!r||(Array.isArray(r)?0===r.length||("any"===n?i(r):o(r)):a(r))};export{r as u};

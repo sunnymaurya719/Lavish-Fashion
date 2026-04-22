@@ -65,6 +65,7 @@ describe('checkout and order lifecycle e2e api tests', () => {
     let couponModel;
     let orderModel;
     let paymentAttemptModel;
+    let paymentSettingsModel;
     let productModel;
     let userModel;
 
@@ -88,6 +89,7 @@ describe('checkout and order lifecycle e2e api tests', () => {
         const productModule = await import('../models/productModel.js');
         const orderModule = await import('../models/orderModel.js');
         const paymentAttemptModule = await import('../models/paymentAttemptModel.js');
+        const paymentSettingsModule = await import('../models/paymentSettingsModel.js');
         const userModule = await import('../models/userModel.js');
 
         app = appModule.default();
@@ -95,6 +97,7 @@ describe('checkout and order lifecycle e2e api tests', () => {
         productModel = productModule.default;
         orderModel = orderModule.default;
         paymentAttemptModel = paymentAttemptModule.default;
+        paymentSettingsModel = paymentSettingsModule.default;
         userModel = userModule.default;
     }, 1200000);
 
@@ -113,6 +116,7 @@ describe('checkout and order lifecycle e2e api tests', () => {
         await productModel.deleteMany({});
         await orderModel.deleteMany({});
         await paymentAttemptModel.deleteMany({});
+        await paymentSettingsModel.deleteMany({});
         await userModel.deleteMany({});
     });
 
@@ -129,15 +133,100 @@ describe('checkout and order lifecycle e2e api tests', () => {
                 }),
                 payments: expect.objectContaining({
                     razorpayEnabled: true,
-                    razorpayKeyId: process.env.RAZORPAY_KEY_ID
+                    razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+                    codEnabled: true
                 }),
                 features: expect.objectContaining({
+                    codEnabled: true,
                     dashboardEnabled: true,
                     loyaltyEnabled: true,
                     reviewMediaEnabled: false
                 })
             })
         );
+    });
+
+    it('lets admins disable COD, reflects it in bootstrap, and blocks new COD orders until re-enabled', async () => {
+        const adminLoginResponse = await request(app)
+            .post('/api/user/admin')
+            .send({
+                email: process.env.ADMIN_EMAIL,
+                password: process.env.ADMIN_PASSWORD
+            });
+
+        expect(adminLoginResponse.status).toBe(200);
+        const adminToken = adminLoginResponse.body.token;
+
+        const disableResponse = await request(app)
+            .patch('/api/system/payments')
+            .set('token', adminToken)
+            .send({ codEnabled: false });
+
+        expect(disableResponse.status).toBe(200);
+        expect(disableResponse.body.success).toBe(true);
+        expect(disableResponse.body.settings.codEnabled).toBe(false);
+        expect(disableResponse.body.settings.source).toBe('database');
+
+        const disabledBootstrapResponse = await request(app).get('/api/system/bootstrap');
+        expect(disabledBootstrapResponse.status).toBe(200);
+        expect(disabledBootstrapResponse.body.bootstrap.features.codEnabled).toBe(false);
+        expect(disabledBootstrapResponse.body.bootstrap.payments.codEnabled).toBe(false);
+
+        const product = await productModel.create({
+            name: 'Toggle COD Tee',
+            description: 'A product used to verify COD runtime payment settings',
+            price: 299,
+            image: ['https://example.com/image-toggle-cod.jpg'],
+            category: 'Men',
+            subCategory: 'Topwear',
+            sizes: ['M'],
+            stock: 5,
+            lowStockThreshold: 2,
+            date: Date.now()
+        });
+
+        const registerResponse = await request(app)
+            .post('/api/user/register')
+            .send({ name: 'Toggle COD User', email: 'togglecod@example.com', password: 'SecurePass123' });
+
+        expect(registerResponse.status).toBe(201);
+        const token = registerResponse.body.token;
+
+        const blockedOrderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `cod_disabled_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                address,
+                checkoutSource: 'cart'
+            });
+
+        expect(blockedOrderResponse.status).toBe(503);
+        expect(blockedOrderResponse.body.success).toBe(false);
+        expect(blockedOrderResponse.body.message).toContain('Cash on Delivery is currently unavailable');
+        expect(await orderModel.countDocuments({})).toBe(0);
+
+        const enableResponse = await request(app)
+            .patch('/api/system/payments')
+            .set('token', adminToken)
+            .send({ codEnabled: true });
+
+        expect(enableResponse.status).toBe(200);
+        expect(enableResponse.body.settings.codEnabled).toBe(true);
+
+        const enabledOrderResponse = await request(app)
+            .post('/api/order/place')
+            .set('token', token)
+            .set('idempotency-key', `cod_enabled_again_${Date.now()}`)
+            .send({
+                items: [{ _id: String(product._id), quantity: 1, size: 'M' }],
+                address,
+                checkoutSource: 'cart'
+            });
+
+        expect(enabledOrderResponse.status).toBe(201);
+        expect(enabledOrderResponse.body.success).toBe(true);
     });
 
     it('completes razorpay checkout lifecycle with webhook as source of truth', async () => {
